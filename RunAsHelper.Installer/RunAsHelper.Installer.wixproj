@@ -7,4 +7,9 @@
   <ItemGroup>
     <PackageReference Include="WixToolset.UI.wixext" Version="4.0.5" />
   </ItemGroup>
+  <!-- Build order: ensure both binaries exist before packaging -->
+  <ItemGroup>
+    <ProjectReference Include="..\RunAsHelper\RunAsHelper.csproj" />
+    <ProjectReference Include="..\RunAsHelper.Service\RunAsHelper.Service.csproj" />
+  </ItemGroup>
 </Project>
