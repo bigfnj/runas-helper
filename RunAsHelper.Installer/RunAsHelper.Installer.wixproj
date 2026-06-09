@@ -8,7 +8,9 @@
   </ItemGroup>
   <!-- Build order: ensure both binaries exist before packaging -->
   <ItemGroup>
-    <ProjectReference Include="..\RunAsHelper\RunAsHelper.csproj" />
-    <ProjectReference Include="..\RunAsHelper.Service\RunAsHelper.Service.csproj" />
+    <ProjectReference Include="..\RunAsHelper\RunAsHelper.csproj"
+                      AdditionalProperties="Platform=AnyCPU" />
+    <ProjectReference Include="..\RunAsHelper.Service\RunAsHelper.Service.csproj"
+                      AdditionalProperties="Platform=AnyCPU" />
   </ItemGroup>
 </Project>
