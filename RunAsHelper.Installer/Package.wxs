@@ -12,8 +12,10 @@
   Uninstall:         msiexec /x RunAsHelper-Setup.msi /passive
 -->
 
-<?define ServiceExe = "..\RunAsHelper.Service\bin\$(var.Configuration)\net10.0-windows\RunAsHelper.Service.exe" ?>
-<?define ClientExe  = "..\RunAsHelper\bin\$(var.Configuration)\net10.0-windows\RunAsHelper.exe" ?>
+<?define ServiceDir = "..\RunAsHelper.Service\bin\$(var.Configuration)\net10.0-windows\" ?>
+<?define ClientDir  = "..\RunAsHelper\bin\$(var.Configuration)\net10.0-windows\" ?>
+<?define ServiceExe = "$(var.ServiceDir)RunAsHelper.Service.exe" ?>
+<?define ClientExe  = "$(var.ClientDir)RunAsHelper.exe" ?>
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
@@ -34,6 +36,9 @@
           <File Id="ServiceExe"
                 Source="$(var.ServiceExe)"
                 KeyPath="yes" />
+          <File Id="ServiceDll"            Source="$(var.ServiceDir)RunAsHelper.Service.dll" />
+          <File Id="ServiceRuntimeConfig"  Source="$(var.ServiceDir)RunAsHelper.Service.runtimeconfig.json" />
+          <File Id="ServiceDepsJson"       Source="$(var.ServiceDir)RunAsHelper.Service.deps.json" />
           <ServiceInstall Id="RunASHelperInstall"
                           Type="ownProcess"
                           Name="RunASHelper"
@@ -55,6 +60,9 @@
           <File Id="ClientExe"
                 Source="$(var.ClientExe)"
                 KeyPath="yes" />
+          <File Id="ClientDll"            Source="$(var.ClientDir)RunAsHelper.dll" />
+          <File Id="ClientRuntimeConfig"  Source="$(var.ClientDir)RunAsHelper.runtimeconfig.json" />
+          <File Id="ClientDepsJson"       Source="$(var.ClientDir)RunAsHelper.deps.json" />
         </Component>
 
       </Directory>
