@@ -1,12 +1,21 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
     <OutputName>RunAsHelper-Setup</OutputName>
+    <!--
+      ICE03 fires because the deferred scheduled-task CustomAction stores a
+      ~400-char PowerShell command in the CustomAction.Target column (declared
+      max 255). Windows Installer reads the full string at runtime and does not
+      truncate it, so the task is created correctly; the warning is cosmetic.
+    -->
+    <SuppressIces>ICE03</SuppressIces>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.Util.wixext" Version="4.0.5" />
     <PackageReference Include="WixToolset.UI.wixext"   Version="4.0.5" />
   </ItemGroup>
-  <!-- Build order: ensure C# projects are built before publish runs -->
+  <!-- ProjectReferences establish solution build order only. The published
+       single-file EXEs the installer actually packages come from the
+       PublishApps target below, not from these reference outputs. -->
   <ItemGroup>
     <ProjectReference Include="..\RunAsHelper\RunAsHelper.csproj"
                       AdditionalProperties="Platform=AnyCPU" />
@@ -15,19 +24,20 @@
   </ItemGroup>
 
   <!--
-    Self-contained single-file publish for both projects.
-    Runs before WiX compilation so the published EXEs are ready.
-    Output lands in publish\service\ and publish\client\ (git-ignored).
+    Self-contained single-file publish of both apps into this installer
+    project's own publish\service\ and publish\client\ folders (git-ignored).
+
+    Hooked BeforeTargets="CoreCompile" — that is the target that invokes the
+    WiX linker and resolves the File @Source paths. The previous hook,
+    BeforeTargets="Build", ran AFTER CoreCompile had already tried (and failed)
+    to find the EXEs, which is why the installer never built from a clean tree.
+
+    The relative Source paths in Package.wxs (publish\service\…, publish\client\…)
+    resolve against the installer project directory, a default WiX bind path.
     No .NET runtime is required on the target machine.
   -->
-  <!--
-    Publish output goes into each project's own bin\(config)\net10.0-windows\publish\*
-    directory so WiX's automatic ProjectReference bindpaths can resolve the
-    "publish\service\RunAsHelper.Service.exe" and "publish\client\RunAsHelper.exe"
-    source paths declared in Package.wxs.
-  -->
-  <Target Name="PublishApps" BeforeTargets="Build">
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\bin\$(Configuration)\net10.0-windows\publish\service\&quot;" />
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\bin\$(Configuration)\net10.0-windows\publish\client\&quot;" />
+  <Target Name="PublishApps" BeforeTargets="CoreCompile">
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)publish\service\&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)publish\client\&quot;" />
   </Target>
 </Project>

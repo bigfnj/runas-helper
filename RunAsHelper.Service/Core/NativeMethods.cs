@@ -304,6 +304,10 @@ internal static partial class NativeMethods
 
     [LibraryImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool RevertToSelf();
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool QueryServiceStatusEx(
         IntPtr  hService,
         uint    InfoLevel,

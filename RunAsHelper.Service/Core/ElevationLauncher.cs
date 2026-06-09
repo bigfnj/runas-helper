@@ -41,8 +41,23 @@ internal sealed class ElevationLauncher
             _initialized = true;
         }
 
-        if (_hElevatedToken == IntPtr.Zero)
-            StartAndAcquireToken();
+        try
+        {
+            if (_hElevatedToken == IntPtr.Zero)
+                StartAndAcquireToken();
+        }
+        finally
+        {
+            // The token is now duplicated into _hElevatedToken (a process-owned
+            // handle), so the thread no longer needs to wear the winlogon /
+            // TrustedInstaller impersonation mask. Drop it before this thread
+            // returns to the pool — otherwise pooled threads silently keep
+            // running under an impersonated identity. The cached token still
+            // works for later launches: CreateProcessWithTokenW relies on the
+            // service's SeImpersonatePrivilege, not on active impersonation.
+            if (!NativeMethods.RevertToSelf())
+                Log($"Warning: RevertToSelf failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+        }
     }
 
     public bool LaunchElevated(string commandLine,
@@ -289,11 +304,16 @@ internal sealed class ElevationLauncher
             }
 
             Log("NtImpersonateThread STATUS_SUCCESS. Opening thread token...");
+            // Open into a local first: a volatile field cannot be passed as an
+            // 'out' argument without losing its volatile semantics (CS0420).
             if (NativeMethods.OpenThreadToken(
                     NativeMethods.GetCurrentThread(),
                     NativeMethods.TOKEN_ALL_ACCESS,
-                    false, out _hElevatedToken))
+                    false, out IntPtr hToken))
+            {
+                _hElevatedToken = hToken;
                 Log("Token acquired and cached.");
+            }
             else
                 Log($"OpenThreadToken failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
         }

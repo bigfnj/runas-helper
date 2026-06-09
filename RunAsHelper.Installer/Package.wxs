@@ -22,6 +22,11 @@
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of RunAS Helper is already installed." />
 
+    <!-- Embed the payload cabinet inside the MSI so RunAsHelper-Setup.msi is a
+         single self-contained file. Without this, WiX v4 emits an external
+         cab1.cab next to the MSI and install fails if it is shipped alone. -->
+    <MediaTemplate EmbedCab="yes" />
+
     <!-- ── Install directory ─────────────────────────────────────────── -->
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="RunAsHelper">

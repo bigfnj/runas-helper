@@ -97,22 +97,26 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
 
                     void LogHandler(string msg) => logChannel.Writer.TryWrite(msg);
                     launcher.LogMessage += LogHandler;
-
-                    var launchTask = Task.Run(() =>
+                    try
                     {
-                        bool ok = launcher.LaunchElevated(request.CommandLine, request.Priority);
-                        logChannel.Writer.Complete();
-                        return ok;
-                    }, ct);
+                        var launchTask = Task.Run(() =>
+                        {
+                            bool ok = launcher.LaunchElevated(request.CommandLine, request.Priority);
+                            logChannel.Writer.Complete();
+                            return ok;
+                        }, ct);
 
-                    await foreach (string msg in logChannel.Reader.ReadAllAsync(ct))
-                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("log", msg), ct);
+                        await foreach (string msg in logChannel.Reader.ReadAllAsync(ct))
+                            await PipeProtocol.WriteAsync(pipe, new PipeMessage("log", msg), ct);
 
-                    launcher.LogMessage -= LogHandler;
-                    bool result = await launchTask;
+                        bool result = await launchTask;
 
-                    await PipeProtocol.WriteAsync(pipe,
-                        new PipeMessage("result", result ? "Success" : "Failed"), ct);
+                        await PipeProtocol.WriteAsync(pipe,
+                            new PipeMessage("result", result ? "Success" : "Failed"), ct);
+                    }
+                    // Always unsubscribe, even if the client disconnects mid-launch;
+                    // otherwise stale handlers accumulate on the shared launcher.
+                    finally { launcher.LogMessage -= LogHandler; }
                 }
                 finally { _gate.Release(); }
             }
