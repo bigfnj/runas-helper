@@ -136,23 +136,6 @@
       <Custom Action="DeleteRunASHelperTask"  Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
     </InstallExecuteSequence>
 
-    <!-- ── Support files: all non-EXE/non-PDB output from each project ── -->
-    <!--
-      Globs the entire build output so every NuGet DLL (e.g.
-      Microsoft.Extensions.Hosting.Abstractions.dll) is installed alongside
-      the apphost. The EXE is excluded because it already has a KeyPath
-      component above; PDBs are excluded to keep the installer lean.
-    -->
-    <ComponentGroup Id="ServiceSupportFiles" Directory="INSTALLFOLDER">
-      <Files Include="$(var.ServiceDir)*"
-             Exclude="$(var.ServiceDir)RunAsHelper.Service.exe;$(var.ServiceDir)*.pdb" />
-    </ComponentGroup>
-
-    <ComponentGroup Id="ClientSupportFiles" Directory="INSTALLFOLDER">
-      <Files Include="$(var.ClientDir)*"
-             Exclude="$(var.ClientDir)RunAsHelper.exe;$(var.ClientDir)*.pdb" />
-    </ComponentGroup>
-
     <!-- ── Feature ───────────────────────────────────────────────────── -->
     <Feature Id="Complete" Level="1">
       <ComponentRef Id="ServiceComponent" />
@@ -164,4 +147,25 @@
     </Feature>
 
   </Package>
+
+  <!--
+    Support files: all non-EXE/non-PDB output from each project.
+    Globs the full build output so every NuGet DLL is installed alongside
+    the apphost. The EXE is excluded (already a KeyPath component above).
+    ComponentGroup must be in a Fragment, not inside Package.
+  -->
+  <Fragment>
+    <ComponentGroup Id="ServiceSupportFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.ServiceDir)*"
+             Exclude="$(var.ServiceDir)RunAsHelper.Service.exe;$(var.ServiceDir)*.pdb" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="ClientSupportFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.ClientDir)*"
+             Exclude="$(var.ClientDir)RunAsHelper.exe;$(var.ClientDir)*.pdb" />
+    </ComponentGroup>
+  </Fragment>
+
 </Wix>
