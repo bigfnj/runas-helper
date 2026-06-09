@@ -6,11 +6,22 @@
     <PackageReference Include="WixToolset.Util.wixext" Version="4.0.5" />
     <PackageReference Include="WixToolset.UI.wixext"   Version="4.0.5" />
   </ItemGroup>
-  <!-- Build order: ensure both binaries exist before packaging -->
+  <!-- Build order: ensure C# projects are built before publish runs -->
   <ItemGroup>
     <ProjectReference Include="..\RunAsHelper\RunAsHelper.csproj"
                       AdditionalProperties="Platform=AnyCPU" />
     <ProjectReference Include="..\RunAsHelper.Service\RunAsHelper.Service.csproj"
                       AdditionalProperties="Platform=AnyCPU" />
   </ItemGroup>
+
+  <!--
+    Self-contained single-file publish for both projects.
+    Runs before WiX compilation so the published EXEs are ready.
+    Output lands in publish\service\ and publish\client\ (git-ignored).
+    No .NET runtime is required on the target machine.
+  -->
+  <Target Name="PublishApps" BeforeTargets="Build">
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)publish\service\&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)publish\client\&quot;" />
+  </Target>
 </Project>
