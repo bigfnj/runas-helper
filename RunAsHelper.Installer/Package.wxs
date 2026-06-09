@@ -12,8 +12,8 @@
   Uninstall:         msiexec /x RunAsHelper-Setup.msi /passive
 -->
 
-<?define ServiceExe = "..\RunAsHelper.Service\bin\x64\$(var.Configuration)\net10.0-windows\RunAsHelper.Service.exe" ?>
-<?define ClientExe  = "..\RunAsHelper\bin\x64\$(var.Configuration)\net10.0-windows\RunAsHelper.exe" ?>
+<?define ServiceExe = "..\RunAsHelper.Service\bin\$(var.Configuration)\net10.0-windows\RunAsHelper.Service.exe" ?>
+<?define ClientExe  = "..\RunAsHelper\bin\$(var.Configuration)\net10.0-windows\RunAsHelper.exe" ?>
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
