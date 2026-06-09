@@ -31,14 +31,11 @@
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="RunAsHelper">
 
-        <!-- Windows service binary -->
+        <!-- Windows service binary (apphost + ServiceInstall KeyPath) -->
         <Component Id="ServiceComponent" Guid="F6071829-DAEB-2345-F012-607182930415">
           <File Id="ServiceExe"
                 Source="$(var.ServiceExe)"
                 KeyPath="yes" />
-          <File Id="ServiceDll"            Source="$(var.ServiceDir)RunAsHelper.Service.dll" />
-          <File Id="ServiceRuntimeConfig"  Source="$(var.ServiceDir)RunAsHelper.Service.runtimeconfig.json" />
-          <File Id="ServiceDepsJson"       Source="$(var.ServiceDir)RunAsHelper.Service.deps.json" />
           <ServiceInstall Id="RunASHelperInstall"
                           Type="ownProcess"
                           Name="RunASHelper"
@@ -55,14 +52,11 @@
                           Wait="yes" />
         </Component>
 
-        <!-- Tray client binary -->
+        <!-- Tray client binary (apphost KeyPath) -->
         <Component Id="ClientComponent" Guid="07182930-EBF6-3456-0123-718293041526">
           <File Id="ClientExe"
                 Source="$(var.ClientExe)"
                 KeyPath="yes" />
-          <File Id="ClientDll"            Source="$(var.ClientDir)RunAsHelper.dll" />
-          <File Id="ClientRuntimeConfig"  Source="$(var.ClientDir)RunAsHelper.runtimeconfig.json" />
-          <File Id="ClientDepsJson"       Source="$(var.ClientDir)RunAsHelper.deps.json" />
         </Component>
 
       </Directory>
@@ -142,10 +136,29 @@
       <Custom Action="DeleteRunASHelperTask"  Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
     </InstallExecuteSequence>
 
+    <!-- ── Support files: all non-EXE/non-PDB output from each project ── -->
+    <!--
+      Globs the entire build output so every NuGet DLL (e.g.
+      Microsoft.Extensions.Hosting.Abstractions.dll) is installed alongside
+      the apphost. The EXE is excluded because it already has a KeyPath
+      component above; PDBs are excluded to keep the installer lean.
+    -->
+    <ComponentGroup Id="ServiceSupportFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.ServiceDir)*"
+             Exclude="$(var.ServiceDir)RunAsHelper.Service.exe;$(var.ServiceDir)*.pdb" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="ClientSupportFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.ClientDir)*"
+             Exclude="$(var.ClientDir)RunAsHelper.exe;$(var.ClientDir)*.pdb" />
+    </ComponentGroup>
+
     <!-- ── Feature ───────────────────────────────────────────────────── -->
     <Feature Id="Complete" Level="1">
       <ComponentRef Id="ServiceComponent" />
+      <ComponentGroupRef Id="ServiceSupportFiles" />
       <ComponentRef Id="ClientComponent" />
+      <ComponentGroupRef Id="ClientSupportFiles" />
       <ComponentRef Id="StartMenuComponent" />
       <ComponentRef Id="StartupComponent" />
     </Feature>
