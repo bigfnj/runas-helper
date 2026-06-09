@@ -1,8 +1,6 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
     <OutputName>RunAsHelper-Setup</OutputName>
-    <!-- Expose $(Configuration) and $(Platform) as WiX preprocessor variables. -->
-    <DefineConstants>Configuration=$(Configuration);Platform=$(Platform)</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.Util.wixext" Version="4.0.5" />
