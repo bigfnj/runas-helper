@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Build: Build the solution in VS (Release|x64). The installer project runs
-  "dotnet publish --self-contained -r win-x64 -p:PublishSingleFile=true"
-  for both apps before the WiX compiler runs, so no external .NET runtime
-  is required on target machines.
+  Build: Build the solution in VS (Release|x64). The installer project
+  publishes both apps as self-contained single-file win-x64 binaries
+  before the WiX compiler runs, so no external .NET runtime is required
+  on target machines.
 
   Install silently:  msiexec /i RunAsHelper-Setup.msi /passive
   Uninstall:         msiexec /x RunAsHelper-Setup.msi /passive
