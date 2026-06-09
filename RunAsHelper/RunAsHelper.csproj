@@ -22,6 +22,7 @@
 
 
   <ItemGroup>
-    <ProjectReference Include="..\RunAsHelper.Shared\RunAsHelper.Shared.csproj" />
+    <Compile Include="..\RunAsHelper.Shared\Protocol\PipeMessages.cs" Link="Protocol\PipeMessages.cs" />
+    <Compile Include="..\RunAsHelper.Shared\Protocol\PipeProtocol.cs" Link="Protocol\PipeProtocol.cs" />
   </ItemGroup>
 </Project>
