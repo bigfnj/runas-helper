@@ -17,19 +17,22 @@ namespace RunAsHelper
         {
             components = new System.ComponentModel.Container();
 
-            lblPriority   = new Label();
-            comboPriority = new ComboBox();
-            lblPath       = new Label();
-            comboPath     = new ComboBox();
-            btnBrowse     = new Button();
-            btnRun        = new Button();
-            txtLog        = new TextBox();
-            lblNotAdmin   = new Label();
-            notifyIcon    = new NotifyIcon(components);
-            trayMenu      = new ContextMenuStrip(components);
-            menuShow      = new ToolStripMenuItem();
-            menuSep       = new ToolStripSeparator();
-            menuExit      = new ToolStripMenuItem();
+            lblPriority    = new Label();
+            comboPriority  = new ComboBox();
+            lblPath        = new Label();
+            comboPath      = new ComboBox();
+            btnSave        = new Button();
+            btnBrowse      = new Button();
+            btnRun         = new Button();
+            txtLog         = new TextBox();
+            lblNotAdmin    = new Label();
+            notifyIcon     = new NotifyIcon(components);
+            trayMenu       = new ContextMenuStrip(components);
+            menuSavedApps  = new ToolStripMenuItem();
+            menuSavedSep   = new ToolStripSeparator();
+            menuShow       = new ToolStripMenuItem();
+            menuSep        = new ToolStripSeparator();
+            menuExit       = new ToolStripMenuItem();
 
             SuspendLayout();
 
@@ -54,10 +57,17 @@ namespace RunAsHelper
             lblPath.Location = new System.Drawing.Point(10, 47);
             lblPath.Text     = "Path:";
 
-            // comboPath
+            // comboPath — narrowed to make room for the Save (★) button
             comboPath.Location = new System.Drawing.Point(10, 65);
-            comboPath.Size     = new System.Drawing.Size(478, 23);
+            comboPath.Size     = new System.Drawing.Size(438, 23);
             comboPath.Anchor   = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+
+            // btnSave — saves current path as a named shortcut
+            btnSave.Location  = new System.Drawing.Point(452, 65);
+            btnSave.Size      = new System.Drawing.Size(38, 23);
+            btnSave.Anchor    = AnchorStyles.Top | AnchorStyles.Right;
+            btnSave.Text      = "★";
+            btnSave.FlatStyle = FlatStyle.System;
 
             // btnBrowse
             btnBrowse.Location = new System.Drawing.Point(494, 65);
@@ -91,23 +101,29 @@ namespace RunAsHelper
             lblNotAdmin.Visible   = false;
 
             // trayMenu
-            trayMenu.Items.AddRange(new ToolStripItem[] { menuShow, menuSep, menuExit });
+            menuSavedApps.Text    = "Saved Applications";
+            menuSavedApps.Enabled = false;
 
             menuShow.Text = "Show Window";
             menuShow.Font = new System.Drawing.Font(menuShow.Font, System.Drawing.FontStyle.Bold);
 
             menuExit.Text = "Exit";
 
+            trayMenu.Items.AddRange(new ToolStripItem[]
+            {
+                menuSavedApps, menuSavedSep, menuShow, menuSep, menuExit
+            });
+
             // notifyIcon
-            notifyIcon.Text        = "RunAS Helper";
+            notifyIcon.Text             = "RunAS Helper";
             notifyIcon.ContextMenuStrip = trayMenu;
-            notifyIcon.Visible     = true;
+            notifyIcon.Visible          = true;
 
             // Form
-            ClientSize     = new System.Drawing.Size(542, 392);
-            MinimumSize    = new System.Drawing.Size(440, 340);
-            Text           = "RunAS Helper";
-            StartPosition  = FormStartPosition.CenterScreen;
+            ClientSize          = new System.Drawing.Size(542, 392);
+            MinimumSize         = new System.Drawing.Size(440, 340);
+            Text                = "RunAS Helper";
+            StartPosition       = FormStartPosition.CenterScreen;
             AutoScaleDimensions = new System.Drawing.SizeF(7f, 15f);
             AutoScaleMode       = AutoScaleMode.Font;
 
@@ -115,6 +131,7 @@ namespace RunAsHelper
             Controls.Add(comboPriority);
             Controls.Add(lblPath);
             Controls.Add(comboPath);
+            Controls.Add(btnSave);
             Controls.Add(btnBrowse);
             Controls.Add(btnRun);
             Controls.Add(txtLog);
@@ -125,18 +142,21 @@ namespace RunAsHelper
         }
 
         // Controls
-        private Label            lblPriority;
-        private ComboBox         comboPriority;
-        private Label            lblPath;
-        private ComboBox         comboPath;
-        private Button           btnBrowse;
-        private Button           btnRun;
-        private TextBox          txtLog;
-        private Label            lblNotAdmin;
-        private NotifyIcon       notifyIcon;
-        private ContextMenuStrip trayMenu;
-        private ToolStripMenuItem menuShow;
+        private Label              lblPriority;
+        private ComboBox           comboPriority;
+        private Label              lblPath;
+        private ComboBox           comboPath;
+        private Button             btnSave;
+        private Button             btnBrowse;
+        private Button             btnRun;
+        private TextBox            txtLog;
+        private Label              lblNotAdmin;
+        private NotifyIcon         notifyIcon;
+        private ContextMenuStrip   trayMenu;
+        private ToolStripMenuItem  menuSavedApps;
+        private ToolStripSeparator menuSavedSep;
+        private ToolStripMenuItem  menuShow;
         private ToolStripSeparator menuSep;
-        private ToolStripMenuItem menuExit;
+        private ToolStripMenuItem  menuExit;
     }
 }

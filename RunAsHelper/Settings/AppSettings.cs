@@ -6,6 +6,8 @@ using System.Text.Json.Serialization;
 
 namespace RunAsHelper.Settings
 {
+    internal sealed record SavedApplication(string Name, string CommandLine, uint Priority);
+
     internal sealed class AppSettings
     {
         private static readonly string FilePath = Path.Combine(
@@ -14,23 +16,13 @@ namespace RunAsHelper.Settings
 
         // ── Persisted settings ───────────────────────────────────────────────
 
-        /// <summary>Most-recently-used paths, newest first.</summary>
         public List<string> MruList { get; set; } = [];
-
-        /// <summary>Index into the priority ComboBox (0=Idle … 5=Realtime).</summary>
-        public int PriorityIndex { get; set; } = 2; // Normal
-
-        /// <summary>Start with the main window hidden (tray-only).</summary>
+        public int PriorityIndex { get; set; } = 2;
         public bool StartMinimized { get; set; } = false;
-
-        /// <summary>Closing/minimizing the window sends it to the tray rather than exiting.</summary>
         public bool MinimizeToTray { get; set; } = true;
-
-        /// <summary>Show balloon notifications when minimizing to tray.</summary>
         public bool ShowTrayNotifications { get; set; } = true;
-
-        /// <summary>Maximum number of MRU entries to keep.</summary>
         public int MaxMruEntries { get; set; } = 20;
+        public List<SavedApplication> SavedApplications { get; set; } = [];
 
         // ── Persistence ──────────────────────────────────────────────────────
 
@@ -62,11 +54,6 @@ namespace RunAsHelper.Settings
 
         // ── MRU helpers ──────────────────────────────────────────────────────
 
-        /// <summary>
-        /// Adds <paramref name="entry"/> to the front of the MRU list,
-        /// deduplicating and trimming to <see cref="MaxMruEntries"/>.
-        /// Saves immediately.
-        /// </summary>
         public void AddMru(string entry)
         {
             if (string.IsNullOrWhiteSpace(entry)) return;
@@ -76,9 +63,39 @@ namespace RunAsHelper.Settings
                 MruList.RemoveRange(MaxMruEntries, MruList.Count - MaxMruEntries);
             Save();
         }
+
+        // ── Saved application helpers ─────────────────────────────────────────
+
+        public void SaveApp(SavedApplication app)
+        {
+            int idx = SavedApplications.FindIndex(a =>
+                string.Equals(a.Name, app.Name, StringComparison.OrdinalIgnoreCase));
+            if (idx >= 0)
+                SavedApplications[idx] = app;
+            else
+                SavedApplications.Add(app);
+            Save();
+        }
+
+        public void RemoveSavedApp(string name)
+        {
+            SavedApplications.RemoveAll(a =>
+                string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase));
+            Save();
+        }
+
+        public void MoveSavedApp(int fromIndex, int toIndex)
+        {
+            if (fromIndex < 0 || fromIndex >= SavedApplications.Count) return;
+            toIndex = Math.Clamp(toIndex, 0, SavedApplications.Count - 1);
+            if (fromIndex == toIndex) return;
+            var item = SavedApplications[fromIndex];
+            SavedApplications.RemoveAt(fromIndex);
+            SavedApplications.Insert(toIndex, item);
+            Save();
+        }
     }
 
-    // Compile-time JSON serialization — no reflection at runtime.
     [JsonSerializable(typeof(AppSettings))]
     [JsonSourceGenerationOptions(WriteIndented = true)]
     internal sealed partial class AppSettingsJsonContext : JsonSerializerContext { }
