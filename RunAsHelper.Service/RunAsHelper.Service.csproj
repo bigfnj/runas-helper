@@ -4,11 +4,11 @@
     <Nullable>enable</Nullable>
     <PlatformTarget>x64</PlatformTarget>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <AssemblyName>RunAsTI.Service</AssemblyName>
-    <RootNamespace>RunAsTI.Service</RootNamespace>
+    <AssemblyName>RunAsHelper.Service</AssemblyName>
+    <RootNamespace>RunAsHelper.Service</RootNamespace>
     <ProjectGuid>{C3D4E5F6-A7B8-9012-CDEF-3D4E5F607182}</ProjectGuid>
-    <AssemblyVersion>2.3.2.0</AssemblyVersion>
-    <FileVersion>2.3.2.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
     <!-- Framework-dependent; the installer assumes .NET 10 x64 Runtime is present. -->
   </PropertyGroup>
 
@@ -18,6 +18,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\RunAsTI.Shared\RunAsTI.Shared.csproj" />
+    <ProjectReference Include="..\RunAsHelper.Shared\RunAsHelper.Shared.csproj" />
   </ItemGroup>
 </Project>

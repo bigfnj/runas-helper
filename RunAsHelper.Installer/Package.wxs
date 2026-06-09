@@ -2,31 +2,31 @@
 <!--
   Build prerequisites:
     1. Build the solution in the desired configuration first:
-         dotnet build ..\RunAsTI.sln -c Release /p:Platform=x64
+         dotnet build ..\RunAsHelper.sln -c Release /p:Platform=x64
     2. Then build the installer:
          dotnet build -c Release /p:Platform=x64
     Or build everything at once from the solution (VS or dotnet build on the .sln).
 
   Runtime prerequisite: .NET 10 x64 Desktop Runtime must be installed on the target machine.
-  Install silently:  msiexec /i RunAsTI-Setup.msi /passive
-  Uninstall:         msiexec /x RunAsTI-Setup.msi /passive
+  Install silently:  msiexec /i RunAsHelper-Setup.msi /passive
+  Uninstall:         msiexec /x RunAsHelper-Setup.msi /passive
 -->
 
-<?define ServiceExe = "..\RunAsTI.Service\bin\x64\$(var.Configuration)\net10.0-windows\RunAsTI.Service.exe" ?>
-<?define ClientExe  = "..\RunAsTI\bin\x64\$(var.Configuration)\net10.0-windows\RunAsTI64.exe" ?>
+<?define ServiceExe = "..\RunAsHelper.Service\bin\x64\$(var.Configuration)\net10.0-windows\RunAsHelper.Service.exe" ?>
+<?define ClientExe  = "..\RunAsHelper\bin\x64\$(var.Configuration)\net10.0-windows\RunAsHelper.exe" ?>
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="Run As TrustedInstaller"
-           Manufacturer="fafalone"
-           Version="2.3.2.0"
+  <Package Name="RunAS Helper"
+           Manufacturer="bigfnj"
+           Version="1.0.0.0"
            UpgradeCode="E5F60718-C9DA-1234-EF01-5F6071829304"
            Scope="perMachine">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Run As TrustedInstaller is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of RunAS Helper is already installed." />
 
     <!-- ── Install directory ─────────────────────────────────────────── -->
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="RunAsTI">
+      <Directory Id="INSTALLFOLDER" Name="RunAsHelper">
 
         <!-- Windows service binary -->
         <Component Id="ServiceComponent" Guid="F6071829-DAEB-2345-F012-607182930415">
@@ -61,15 +61,15 @@
 
     <!-- ── Start Menu shortcut ──────────────────────────────────────── -->
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="RunAsTIMenuFolder" Name="Run As TrustedInstaller">
+      <Directory Id="RunAsHelperMenuFolder" Name="RunAS Helper">
         <Component Id="StartMenuComponent" Guid="28394150-7081-6789-3456-940516370748">
           <Shortcut Id="StartMenuShortcut"
-                    Name="Run As TrustedInstaller"
-                    Target="[INSTALLFOLDER]RunAsTI64.exe"
+                    Name="RunAS Helper"
+                    Target="[INSTALLFOLDER]RunAsHelper.exe"
                     WorkingDirectory="INSTALLFOLDER" />
-          <RemoveFolder Id="RunAsTIMenuFolderRemove" On="uninstall" />
+          <RemoveFolder Id="RunAsHelperMenuFolderRemove" On="uninstall" />
           <RegistryValue Root="HKCU"
-                         Key="Software\RunAsTI"
+                         Key="Software\RunAsHelper"
                          Name="StartMenuInstalled"
                          Type="integer"
                          Value="1"
@@ -84,9 +84,9 @@
                Directory="INSTALLFOLDER">
       <RegistryValue Root="HKCU"
                      Key="Software\Microsoft\Windows\CurrentVersion\Run"
-                     Name="RunAsTI"
+                     Name="RunAsHelper"
                      Type="string"
-                     Value="[INSTALLFOLDER]RunAsTI64.exe"
+                     Value="[INSTALLFOLDER]RunAsHelper.exe"
                      KeyPath="yes" />
     </Component>
 

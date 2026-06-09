@@ -1,12 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using RunAsTI.Service.Worker;
+using RunAsHelper.Service.Worker;
 
 var host = Host.CreateDefaultBuilder(args)
     .UseWindowsService(options => options.ServiceName = "RunASHelper")
     .ConfigureServices(services =>
     {
-        services.AddHostedService<TrustedInstallerService>();
+        services.AddHostedService<RunAsHelperService>();
     })
     .Build();
 

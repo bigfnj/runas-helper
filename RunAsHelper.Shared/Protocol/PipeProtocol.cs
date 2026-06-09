@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace RunAsTI.Shared.Protocol;
+namespace RunAsHelper.Shared.Protocol;
 
 /// <summary>
 /// Wire format: 4-byte LE length prefix followed by UTF-8 JSON body.

@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace RunAsTI.Shared.Protocol;
+namespace RunAsHelper.Shared.Protocol;
 
 /// <summary>Sent by the tray client to the service to request a process launch.</summary>
 public sealed record LaunchRequest(string CommandLine, uint Priority);

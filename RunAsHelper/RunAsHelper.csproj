@@ -7,21 +7,21 @@
     <ApplicationIcon>..\power.ico</ApplicationIcon>
     <Nullable>enable</Nullable>
     <PlatformTarget>x64</PlatformTarget>
-    <AssemblyName>RunAsTI64</AssemblyName>
-    <RootNamespace>RunAsTI</RootNamespace>
+    <AssemblyName>RunAsHelper</AssemblyName>
+    <RootNamespace>RunAsHelper</RootNamespace>
     <ProjectGuid>{A3F9C841-B78E-4E3C-9A5D-1B2C3D4E5F60}</ProjectGuid>
-    <AssemblyVersion>2.3.2.0</AssemblyVersion>
-    <FileVersion>2.3.2.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- TrustedInstallerLauncher moved to RunAsTI.Service; this file is kept for history. -->
-    <Compile Remove="Core\TrustedInstallerLauncher.cs" />
+    <!-- ElevationLauncher moved to RunAsHelper.Service; this file is kept for reference. -->
+    <Compile Remove="Core\ElevationLauncher.cs" />
   </ItemGroup>
 
 
   <ItemGroup>
-    <ProjectReference Include="..\RunAsTI.Shared\RunAsTI.Shared.csproj" />
+    <ProjectReference Include="..\RunAsHelper.Shared\RunAsHelper.Shared.csproj" />
   </ItemGroup>
 </Project>

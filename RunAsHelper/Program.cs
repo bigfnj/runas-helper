@@ -1,15 +1,15 @@
 using System;
 using System.Windows.Forms;
-using RunAsTI.Core;
+using RunAsHelper.Core;
 
-namespace RunAsTI
+namespace RunAsHelper
 {
     internal static class Program
     {
         [STAThread]
         static void Main(string[] args)
         {
-            // CLI mode: RunAsTI64.exe [/p:n] <path with optional args>
+            // CLI mode: RunAsHelper.exe [/p:n] <path with optional args>
             if (args.Length > 0)
             {
                 RunCli(string.Join(" ", args));
@@ -43,7 +43,7 @@ namespace RunAsTI
 
             if (string.IsNullOrWhiteSpace(commandLine))
             {
-                Console.Error.WriteLine("Usage: RunAsTI64.exe [/p:n] <path> [args]");
+                Console.Error.WriteLine("Usage: RunAsHelper.exe [/p:n] <path> [args]");
                 Console.Error.WriteLine("  /p:1 Normal  /p:2 Idle  /p:3 High");
                 Console.Error.WriteLine("  /p:4 Realtime  /p:5 BelowNormal  /p:6 AboveNormal");
                 Environment.Exit(1);
@@ -52,7 +52,7 @@ namespace RunAsTI
 
             var client = new PipeClient();
             client.LogMessage += msg => Console.WriteLine(msg);
-            bool ok = client.LaunchAsTIAsync(commandLine, priority)
+            bool ok = client.LaunchElevatedAsync(commandLine, priority)
                             .GetAwaiter().GetResult();
             Environment.Exit(ok ? 0 : 1);
         }
