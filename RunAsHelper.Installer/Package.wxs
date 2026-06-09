@@ -79,13 +79,12 @@
       </Directory>
     </StandardDirectory>
 
-    <!-- ── Logon autostart via Scheduled Task ────────────────────────── -->
-    <!-- KeyPath is a registry marker only; the actual task is           -->
-    <!-- created/deleted by the custom actions in InstallExecuteSequence. -->
+    <!-- ── Logon autostart via machine-wide Scheduled Task ───────────── -->
+    <!-- KeyPath tracks the component; the task itself is managed below. -->
     <Component Id="StartupComponent"
                Guid="B8C9D0E1-F2A3-4567-CDEF-0A1B2C3D4E5F"
                Directory="INSTALLFOLDER">
-      <RegistryValue Root="HKCU"
+      <RegistryValue Root="HKLM"
                      Key="Software\RunAsHelper"
                      Name="ScheduledTaskInstalled"
                      Type="integer"
@@ -95,37 +94,40 @@
 
     <!-- ── Scheduled task custom actions ─────────────────────────────── -->
     <!--
-      A type-51 (property-set) CA sets the property whose name matches the
-      deferred CA; CAQuietExec64 reads it as CustomActionData and runs it
-      via cmd.exe.  Impersonate="yes" means the deferred CA runs as the
-      installing user (not SYSTEM), so schtasks creates a per-user logon task.
-      Return="ignore" keeps a schtasks error from rolling back the install.
+      Machine-wide task: triggers at logon of ANY member of BUILTIN\Administrators,
+      runs with the logged-on user's elevated interactive token — no UAC prompt.
+      The CAs run as SYSTEM (Impersonate="no", the default for deferred perMachine CAs)
+      so they can write to the machine task folder (\Microsoft\Windows\Task Scheduler).
+
+      PowerShell is used because schtasks.exe cannot express a group-based principal
+      in a single command line.
+
+      Return="ignore" prevents a PowerShell error from rolling back the install.
     -->
 
     <CustomAction Id="SetCreateScheduledTask"
                   Property="CreateRunASHelperTask"
-                  Value="schtasks.exe /Create /TN &quot;RunAS Helper&quot; /TR &quot;[INSTALLFOLDER]RunAsHelper.exe&quot; /SC ONLOGON /RU &quot;[USERNAME]&quot; /RL HIGHEST /F" />
+                  Value="powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -Command &quot;Register-ScheduledTask -TaskName 'RunAS Helper' -Force -Action (New-ScheduledTaskAction -Execute '[INSTALLFOLDER]RunAsHelper.exe') -Trigger (New-ScheduledTaskTrigger -AtLogOn) -Principal (New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Administrators' -RunLevel Highest) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew)&quot;" />
 
     <CustomAction Id="CreateRunASHelperTask"
                   BinaryRef="Wix4UtilCA_X64"
                   DllEntry="CAQuietExec64"
                   Execute="deferred"
-                  Impersonate="yes"
+                  Impersonate="no"
                   Return="ignore" />
 
     <CustomAction Id="SetDeleteScheduledTask"
                   Property="DeleteRunASHelperTask"
-                  Value="schtasks.exe /Delete /TN &quot;RunAS Helper&quot; /F" />
+                  Value="powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -Command &quot;Unregister-ScheduledTask -TaskName 'RunAS Helper' -Confirm:$false -ErrorAction SilentlyContinue&quot;" />
 
     <CustomAction Id="DeleteRunASHelperTask"
                   BinaryRef="Wix4UtilCA_X64"
                   DllEntry="CAQuietExec64"
                   Execute="deferred"
-                  Impersonate="yes"
+                  Impersonate="no"
                   Return="ignore" />
 
     <InstallExecuteSequence>
-      <!-- Property-set CAs (immediate) must precede their deferred consumers -->
       <Custom Action="SetCreateScheduledTask" After="CostFinalize">NOT Installed OR REINSTALL</Custom>
       <Custom Action="CreateRunASHelperTask"  After="InstallFiles">NOT Installed OR REINSTALL</Custom>
       <Custom Action="SetDeleteScheduledTask" After="CostFinalize">REMOVE="ALL"</Custom>
