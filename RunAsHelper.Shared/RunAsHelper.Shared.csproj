@@ -5,5 +5,7 @@
     <AssemblyName>RunAsHelper.Shared</AssemblyName>
     <RootNamespace>RunAsHelper.Shared</RootNamespace>
     <ProjectGuid>{B2C3D4E5-F6A7-8901-BCDE-2C3D4E5F6071}</ProjectGuid>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
   </PropertyGroup>
 </Project>
