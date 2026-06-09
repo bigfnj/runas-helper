@@ -97,6 +97,7 @@ namespace RunAsHelper.Settings
     }
 
     [JsonSerializable(typeof(AppSettings))]
+    [JsonSerializable(typeof(List<SavedApplication>))]
     [JsonSourceGenerationOptions(WriteIndented = true)]
     internal sealed partial class AppSettingsJsonContext : JsonSerializerContext { }
 }

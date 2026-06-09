@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Windows.Forms;
 using RunAsHelper.Core;
 
@@ -6,6 +7,9 @@ namespace RunAsHelper
 {
     internal static class Program
     {
+        // Unique name — prevents collisions with other apps on the system.
+        private const string MutexName = @"Global\RunAsHelper_{3A8F2C1D-7E4B-4F9A-A2D6-8C5F1B3E9072}";
+
         [STAThread]
         static void Main(string[] args)
         {
@@ -15,6 +19,11 @@ namespace RunAsHelper
                 RunCli(string.Join(" ", args));
                 return;
             }
+
+            // Single-instance guard — second launch exits silently; user sees the
+            // existing tray icon and can click it to show the window.
+            using var mutex = new Mutex(true, MutexName, out bool isFirstInstance);
+            if (!isFirstInstance) return;
 
             ApplicationConfiguration.Initialize();
             Application.Run(new MainForm());

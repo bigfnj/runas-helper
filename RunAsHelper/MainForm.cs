@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using RunAsHelper.Core;
@@ -15,8 +16,12 @@ namespace RunAsHelper
         private readonly AppSettings _settings = AppSettings.Load();
         private bool  _isExiting;
         private Icon? _greyIcon;
+        private bool? _serviceOnline;
 
-        private const int TrayMenuCap = 7;
+        private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 60_000 };
+
+        private const int TrayMenuCap   = 7;
+        private const int RecentMenuCap = 5;
 
         private static readonly uint[] PriorityClasses =
         {
@@ -45,10 +50,16 @@ namespace RunAsHelper
             btnBrowse.Click        += BtnBrowse_Click;
             menuShow.Click         += (_, _) => ShowFromTray();
             menuExit.Click         += MenuExit_Click;
+            menuStartService.Click += MenuStartService_Click;
+            menuSettings.Click     += MenuSettings_Click;
+            menuImport.Click       += MenuImport_Click;
+            menuExport.Click       += MenuExport_Click;
+            menuClearRecent.Click  += MenuClearRecent_Click;
             notifyIcon.Click       += (_, _) => ShowFromTray();
             notifyIcon.DoubleClick += (_, _) => ShowFromTray();
-            trayMenu.Opening       += (_, _) => RebuildSavedAppsMenu();
+            trayMenu.Opening       += (_, _) => { RebuildSavedAppsMenu(); RebuildRecentMenu(); };
             _client.LogMessage     += AppendLog;
+            _statusTimer.Tick      += (_, _) => CheckServiceStatusAsync();
         }
 
         private void SetTrayIcon()
@@ -112,6 +123,7 @@ namespace RunAsHelper
             NativeMethods.SendMessage(btnRun.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
             AppendLog("Checking RunAS Helper service...");
             CheckServiceStatusAsync();
+            _statusTimer.Start();
 
             if (_settings.StartMinimized)
                 BeginInvoke(HideToTray);
@@ -126,6 +138,7 @@ namespace RunAsHelper
                 HideToTray();
                 return;
             }
+            _statusTimer.Stop();
             notifyIcon.Visible = false;
             base.OnFormClosing(e);
         }
@@ -144,25 +157,37 @@ namespace RunAsHelper
             Task.Run(() =>
             {
                 bool available = NativeMethods.WaitNamedPipeW(@"\\.\pipe\RunAsHelper", 500);
-                BeginInvoke(() =>
-                {
-                    if (available)
-                    {
-                        notifyIcon.Icon = this.Icon;
-                        AppendLog("RunAS Helper service is running. Ready.");
-                        notifyIcon.Text = "RunAS Helper  ✓ Ready";
-                    }
-                    else
-                    {
-                        notifyIcon.Icon     = _greyIcon ?? this.Icon;
-                        AppendLog("RunAS Helper service is not running. Install and start the service.");
-                        notifyIcon.Text     = "RunAS Helper  ✗ Service offline";
-                        btnRun.Enabled      = false;
-                        lblNotAdmin.Text    = "RunAS Helper service is not running.";
-                        lblNotAdmin.Visible = true;
-                    }
-                });
+                BeginInvoke(() => ApplyServiceState(available));
             });
+        }
+
+        private void ApplyServiceState(bool available)
+        {
+            if (_serviceOnline == available) return;
+            _serviceOnline = available;
+
+            menuStartService.Visible = !available;
+
+            if (available)
+            {
+                notifyIcon.Icon     = this.Icon;
+                notifyIcon.Text     = "RunAS Helper  ✓ Ready";
+                AppendLog("RunAS Helper service is running. Ready.");
+                if (NativeMethods.IsUserAnAdmin())
+                {
+                    btnRun.Enabled      = true;
+                    lblNotAdmin.Visible = false;
+                }
+            }
+            else
+            {
+                notifyIcon.Icon     = _greyIcon ?? this.Icon;
+                notifyIcon.Text     = "RunAS Helper  ✗ Service offline";
+                AppendLog("RunAS Helper service is not running.");
+                btnRun.Enabled      = false;
+                lblNotAdmin.Text    = "RunAS Helper service is not running.";
+                lblNotAdmin.Visible = true;
+            }
         }
 
         // ── Tray helpers ─────────────────────────────────────────────────────
@@ -186,6 +211,146 @@ namespace RunAsHelper
         {
             _isExiting = true;
             Application.Exit();
+        }
+
+        // ── Tray menu handlers ───────────────────────────────────────────────
+
+        private async void MenuStartService_Click(object? sender, EventArgs e)
+        {
+            menuStartService.Enabled = false;
+            try
+            {
+                using var proc = System.Diagnostics.Process.Start(
+                    new System.Diagnostics.ProcessStartInfo("sc.exe", "start RunASHelper")
+                    {
+                        CreateNoWindow  = true,
+                        UseShellExecute = false,
+                    });
+                await Task.Delay(3000);
+            }
+            catch { }
+            finally
+            {
+                menuStartService.Enabled = true;
+            }
+            CheckServiceStatusAsync();
+        }
+
+        private void MenuSettings_Click(object? sender, EventArgs e)
+        {
+            using var form = new SettingsForm(_settings);
+            form.ShowDialog(this);
+        }
+
+        private void MenuImport_Click(object? sender, EventArgs e)
+        {
+            using var dlg = new OpenFileDialog
+            {
+                Title  = "Import Saved Applications",
+                Filter = "JSON files (*.json)|*.json|All Files (*.*)|*.*",
+            };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+            try
+            {
+                string json     = File.ReadAllText(dlg.FileName);
+                var    imported = JsonSerializer.Deserialize(
+                    json, AppSettingsJsonContext.Default.ListSavedApplication);
+
+                if (imported == null || imported.Count == 0)
+                {
+                    AppendLog("No applications found in the import file.");
+                    return;
+                }
+
+                foreach (var app in imported)
+                    _settings.SaveApp(app);
+
+                _settings.Save();
+                RebuildSavedAppsMenu();
+                AppendLog($"Imported {imported.Count} application(s).");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Import failed: {ex.Message}", "RunAS Helper",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void MenuExport_Click(object? sender, EventArgs e)
+        {
+            if (_settings.SavedApplications.Count == 0)
+            {
+                AppendLog("No saved applications to export.");
+                return;
+            }
+
+            using var dlg = new SaveFileDialog
+            {
+                Title      = "Export Saved Applications",
+                Filter     = "JSON files (*.json)|*.json|All Files (*.*)|*.*",
+                FileName   = "saved-apps.json",
+                DefaultExt = "json",
+            };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+            try
+            {
+                string json = JsonSerializer.Serialize(
+                    _settings.SavedApplications,
+                    AppSettingsJsonContext.Default.ListSavedApplication);
+                File.WriteAllText(dlg.FileName, json);
+                AppendLog($"Exported {_settings.SavedApplications.Count} application(s).");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Export failed: {ex.Message}", "RunAS Helper",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void MenuClearRecent_Click(object? sender, EventArgs e)
+        {
+            _settings.MruList.Clear();
+            _settings.Save();
+            RefreshMruCombo();
+            RebuildRecentMenu();
+            AppendLog("Recent history cleared.");
+        }
+
+        // ── Recent launches menu ─────────────────────────────────────────────
+
+        private void RebuildRecentMenu()
+        {
+            menuRecent.DropDownItems.Clear();
+            var mru = _settings.MruList;
+
+            if (mru.Count == 0)
+            {
+                menuRecent.Enabled = false;
+                return;
+            }
+
+            menuRecent.Enabled = true;
+            int shown = Math.Min(mru.Count, RecentMenuCap);
+            for (int i = 0; i < shown; i++)
+            {
+                string entry = mru[i];
+                string label = entry.Length > 60 ? "..." + entry[^57..] : entry;
+                var item = new ToolStripMenuItem(label) { Tag = entry };
+                item.Click += async (_, _) =>
+                {
+                    if (!NativeMethods.WaitNamedPipeW(@"\\.\pipe\RunAsHelper", 500))
+                    {
+                        if (_settings.ShowTrayNotifications)
+                            notifyIcon.ShowBalloonTip(3000, "RunAS Helper",
+                                "Service is not running.", ToolTipIcon.Warning);
+                        return;
+                    }
+                    await _client.LaunchElevatedAsync(entry, NativeMethods.NORMAL_PRIORITY_CLASS);
+                };
+                menuRecent.DropDownItems.Add(item);
+            }
         }
 
         // ── Saved applications ───────────────────────────────────────────────
