@@ -5,7 +5,8 @@
     <DefineConstants>Configuration=$(Configuration);Platform=$(Platform)</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="WixToolset.UI.wixext" Version="4.0.5" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="4.0.5" />
+    <PackageReference Include="WixToolset.UI.wixext"   Version="4.0.5" />
   </ItemGroup>
   <!-- Build order: ensure both binaries exist before packaging -->
   <ItemGroup>
