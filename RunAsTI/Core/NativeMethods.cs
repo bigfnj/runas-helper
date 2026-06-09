@@ -1,0 +1,41 @@
+using System;
+using System.Runtime.InteropServices;
+
+namespace RunAsTI.Core
+{
+    internal static partial class NativeMethods
+    {
+        // ── Priority classes ──────────────────────────────────────────────────
+        internal const uint IDLE_PRIORITY_CLASS         = 0x00000040;
+        internal const uint BELOW_NORMAL_PRIORITY_CLASS = 0x00004000;
+        internal const uint NORMAL_PRIORITY_CLASS       = 0x00000020;
+        internal const uint ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000;
+        internal const uint HIGH_PRIORITY_CLASS         = 0x00000080;
+        internal const uint REALTIME_PRIORITY_CLASS     = 0x00000100;
+
+        // ── Button shield ─────────────────────────────────────────────────────
+        internal const uint BCM_FIRST     = 0x1600;
+        internal const uint BCM_SETSHIELD = BCM_FIRST + 0x000C;
+
+        // ── P/Invoke ──────────────────────────────────────────────────────────
+
+        // Checks whether a named pipe with the given name exists (non-connecting).
+        // Returns true when the service pipe is present.
+        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool WaitNamedPipeW(string lpNamedPipeName, uint nTimeOut);
+
+        [LibraryImport("shell32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool IsUserAnAdmin();
+
+        [LibraryImport("user32.dll")]
+        internal static partial IntPtr SendMessage(
+            IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        // Releases a GDI HICON produced by Bitmap.GetHicon().
+        [LibraryImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool DestroyIcon(IntPtr hIcon);
+    }
+}

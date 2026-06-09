@@ -1,0 +1,30 @@
+# Build artefacts
+bin/
+obj/
+publish/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# WiX intermediate
+*.wixobj
+*.wixpdb
+*.wixmsi
+
+# NuGet
+packages/
+*.nupkg
+.nuget/
+
+# Rider / JetBrains
+.idea/
+*.DotSettings.user
+
+# macOS / Windows noise
+.DS_Store
+Thumbs.db
+*:Zone.Identifier

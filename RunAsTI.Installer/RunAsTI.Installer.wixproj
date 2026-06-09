@@ -1,0 +1,10 @@
+<Project Sdk="WixToolset.Sdk/4.0.5">
+  <PropertyGroup>
+    <OutputName>RunAsTI-Setup</OutputName>
+    <!-- Expose $(Configuration) and $(Platform) as WiX preprocessor variables. -->
+    <DefineConstants>Configuration=$(Configuration);Platform=$(Platform)</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="4.0.5" />
+  </ItemGroup>
+</Project>
