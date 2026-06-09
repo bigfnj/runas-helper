@@ -13,6 +13,17 @@ namespace RunAsHelper.Core
         internal const uint HIGH_PRIORITY_CLASS         = 0x00000080;
         internal const uint REALTIME_PRIORITY_CLASS     = 0x00000100;
 
+        internal static string PriorityClassName(uint priority) => priority switch
+        {
+            IDLE_PRIORITY_CLASS         => "Idle",
+            BELOW_NORMAL_PRIORITY_CLASS => "Below Normal",
+            NORMAL_PRIORITY_CLASS       => "Normal",
+            ABOVE_NORMAL_PRIORITY_CLASS => "Above Normal",
+            HIGH_PRIORITY_CLASS         => "High",
+            REALTIME_PRIORITY_CLASS     => "Realtime",
+            _                           => "Normal",
+        };
+
         // ── Button shield ─────────────────────────────────────────────────────
         internal const uint BCM_FIRST     = 0x1600;
         internal const uint BCM_SETSHIELD = BCM_FIRST + 0x000C;

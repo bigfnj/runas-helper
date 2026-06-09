@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using RunAsHelper.Core;
@@ -14,6 +15,8 @@ namespace RunAsHelper
         private readonly AppSettings _settings = AppSettings.Load();
         private bool  _isExiting;
         private Icon? _greyIcon;
+
+        private const int TrayMenuCap = 7;
 
         private static readonly uint[] PriorityClasses =
         {
@@ -30,6 +33,7 @@ namespace RunAsHelper
             InitializeComponent();
             WireEvents();
             SetTrayIcon();
+            RebuildSavedAppsMenu();
         }
 
         // ── Setup ────────────────────────────────────────────────────────────
@@ -37,18 +41,19 @@ namespace RunAsHelper
         private void WireEvents()
         {
             btnRun.Click           += BtnRun_Click;
+            btnSave.Click          += BtnSave_Click;
             btnBrowse.Click        += BtnBrowse_Click;
             menuShow.Click         += (_, _) => ShowFromTray();
             menuExit.Click         += MenuExit_Click;
+            notifyIcon.Click       += (_, _) => ShowFromTray();
             notifyIcon.DoubleClick += (_, _) => ShowFromTray();
+            trayMenu.Opening       += (_, _) => RebuildSavedAppsMenu();
             _client.LogMessage     += AppendLog;
         }
 
         private void SetTrayIcon()
         {
             _greyIcon = MakeGreyscaleIcon(this.Icon);
-            // Start grey — CheckServiceStatusAsync will switch to full colour if the
-            // service pipe is reachable.
             notifyIcon.Icon = _greyIcon ?? this.Icon;
         }
 
@@ -56,13 +61,11 @@ namespace RunAsHelper
         {
             try
             {
-                // Extract at the size the OS uses for tray icons so the result is crisp.
                 using var smallIcon = new Icon(source, SystemInformation.SmallIconSize);
                 using var src       = smallIcon.ToBitmap();
                 using var dst       = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppArgb);
                 using var g         = Graphics.FromImage(dst);
 
-                // Luminance-preserving desaturation matrix (Rec. 601 weights).
                 var matrix = new ColorMatrix(new[]
                 {
                     new float[] { 0.299f, 0.299f, 0.299f, 0,  0 },
@@ -98,16 +101,16 @@ namespace RunAsHelper
 
             if (!NativeMethods.IsUserAnAdmin())
             {
-                btnRun.Enabled = comboPriority.Enabled = comboPath.Enabled = btnBrowse.Enabled = false;
-                lblNotAdmin.Text    = "Restart as Administrator to use RunAsHelper.";
+                btnRun.Enabled = comboPriority.Enabled = comboPath.Enabled =
+                    btnBrowse.Enabled = btnSave.Enabled = false;
+                lblNotAdmin.Text    = "Restart as Administrator to use RunAS Helper.";
                 lblNotAdmin.Visible = true;
-                AppendLog("Run as Administrator to connect to the RunAsHelper service.");
+                AppendLog("Run as Administrator to connect to the RunAS Helper service.");
                 return;
             }
 
-            // Add UAC shield glyph to the run button.
             NativeMethods.SendMessage(btnRun.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
-            AppendLog("Checking RunAsHelper service...");
+            AppendLog("Checking RunAS Helper service...");
             CheckServiceStatusAsync();
 
             if (_settings.StartMinimized)
@@ -140,23 +143,22 @@ namespace RunAsHelper
         {
             Task.Run(() =>
             {
-                // WaitNamedPipeW probes the pipe without consuming a connection slot.
                 bool available = NativeMethods.WaitNamedPipeW(@"\\.\pipe\RunAsHelper", 500);
                 BeginInvoke(() =>
                 {
                     if (available)
                     {
-                        notifyIcon.Icon = this.Icon;   // full colour — service is up
-                        AppendLog("RunAsHelper service is running. Ready.");
+                        notifyIcon.Icon = this.Icon;
+                        AppendLog("RunAS Helper service is running. Ready.");
                         notifyIcon.Text = "RunAS Helper  ✓ Ready";
                     }
                     else
                     {
-                        notifyIcon.Icon = _greyIcon ?? this.Icon;  // grey — service is down
-                        AppendLog("RunAsHelper service is not running. Install and start the service.");
-                        notifyIcon.Text = "RunAS Helper  ✗ Service offline";
+                        notifyIcon.Icon     = _greyIcon ?? this.Icon;
+                        AppendLog("RunAS Helper service is not running. Install and start the service.");
+                        notifyIcon.Text     = "RunAS Helper  ✗ Service offline";
                         btnRun.Enabled      = false;
-                        lblNotAdmin.Text    = "RunAsHelper service is not running.";
+                        lblNotAdmin.Text    = "RunAS Helper service is not running.";
                         lblNotAdmin.Visible = true;
                     }
                 });
@@ -186,7 +188,95 @@ namespace RunAsHelper
             Application.Exit();
         }
 
+        // ── Saved applications ───────────────────────────────────────────────
+
+        private void RebuildSavedAppsMenu()
+        {
+            menuSavedApps.DropDownItems.Clear();
+            var apps = _settings.SavedApplications;
+
+            if (apps.Count == 0)
+            {
+                menuSavedApps.Enabled = false;
+                return;
+            }
+
+            menuSavedApps.Enabled = true;
+            int shown = Math.Min(apps.Count, TrayMenuCap);
+            for (int i = 0; i < shown; i++)
+            {
+                var app  = apps[i];
+                var item = new ToolStripMenuItem(app.Name);
+                item.Click += async (_, _) => await LaunchSavedAppAsync(app);
+                menuSavedApps.DropDownItems.Add(item);
+            }
+
+            if (apps.Count > TrayMenuCap)
+            {
+                menuSavedApps.DropDownItems.Add(new ToolStripSeparator());
+                var more = new ToolStripMenuItem("More...");
+                more.Click += (_, _) => OpenSavedAppsManager();
+                menuSavedApps.DropDownItems.Add(more);
+            }
+        }
+
+        private async Task LaunchSavedAppAsync(SavedApplication app)
+        {
+            try
+            {
+                if (!NativeMethods.WaitNamedPipeW(@"\\.\pipe\RunAsHelper", 500))
+                {
+                    notifyIcon.ShowBalloonTip(3000, "RunAS Helper",
+                        "Service is not running.", ToolTipIcon.Warning);
+                    return;
+                }
+
+                bool ok = await _client.LaunchElevatedAsync(app.CommandLine, app.Priority);
+
+                if (_settings.ShowTrayNotifications)
+                    notifyIcon.ShowBalloonTip(2000, "RunAS Helper",
+                        ok ? $"{app.Name} launched." : $"Failed to launch {app.Name}.",
+                        ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Launch error: {ex.Message}");
+            }
+        }
+
+        private void OpenSavedAppsManager()
+        {
+            using var form = new SavedAppsForm(_settings, _client);
+            form.ShowDialog(this);
+            RebuildSavedAppsMenu();
+        }
+
         // ── Button handlers ──────────────────────────────────────────────────
+
+        private void BtnSave_Click(object? sender, EventArgs e)
+        {
+            string path = comboPath.Text.Trim();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                AppendLog("Enter a path to save.");
+                return;
+            }
+
+            string defaultName = Path.GetFileNameWithoutExtension(path.Trim('"', ' '));
+            if (string.IsNullOrWhiteSpace(defaultName))
+                defaultName = path;
+
+            using var prompt = new NamePromptForm(defaultName);
+            if (prompt.ShowDialog(this) != DialogResult.OK) return;
+
+            string name = prompt.EnteredName.Trim();
+            if (string.IsNullOrWhiteSpace(name)) return;
+
+            uint priority = PriorityClasses[comboPriority.SelectedIndex];
+            _settings.SaveApp(new SavedApplication(name, path, priority));
+            AppendLog($"Saved \"{name}\".");
+            RebuildSavedAppsMenu();
+        }
 
         private async void BtnRun_Click(object? sender, EventArgs e)
         {
