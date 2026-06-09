@@ -17,6 +17,17 @@ namespace RunAsHelper
         {
             components = new System.ComponentModel.Container();
 
+            // ── Menu strip ───────────────────────────────────────────────────
+            menuStrip         = new MenuStrip();
+            menuTools         = new ToolStripMenuItem();
+            menuSettings      = new ToolStripMenuItem();
+            menuToolsSep1     = new ToolStripSeparator();
+            menuImport        = new ToolStripMenuItem();
+            menuExport        = new ToolStripMenuItem();
+            menuToolsSep2     = new ToolStripSeparator();
+            menuClearRecent   = new ToolStripMenuItem();
+
+            // ── Form controls ────────────────────────────────────────────────
             lblPriority    = new Label();
             comboPriority  = new ComboBox();
             lblPath        = new Label();
@@ -26,24 +37,45 @@ namespace RunAsHelper
             btnRun         = new Button();
             txtLog         = new TextBox();
             lblNotAdmin    = new Label();
-            notifyIcon     = new NotifyIcon(components);
-            trayMenu       = new ContextMenuStrip(components);
-            menuSavedApps  = new ToolStripMenuItem();
-            menuSavedSep   = new ToolStripSeparator();
-            menuShow       = new ToolStripMenuItem();
-            menuSep        = new ToolStripSeparator();
-            menuExit       = new ToolStripMenuItem();
+
+            // ── Tray ─────────────────────────────────────────────────────────
+            notifyIcon        = new NotifyIcon(components);
+            trayMenu          = new ContextMenuStrip(components);
+            menuSavedApps     = new ToolStripMenuItem();
+            menuSavedSep      = new ToolStripSeparator();
+            menuRecent        = new ToolStripMenuItem();
+            menuLaunchSep     = new ToolStripSeparator();
+            menuStartService  = new ToolStripMenuItem();
+            menuShow          = new ToolStripMenuItem();
+            menuSep           = new ToolStripSeparator();
+            menuExit          = new ToolStripMenuItem();
 
             SuspendLayout();
 
-            // lblPriority
+            // ── Tools menu ───────────────────────────────────────────────────
+            menuSettings.Text    = "Settings...";
+            menuImport.Text      = "Import Saved Apps...";
+            menuExport.Text      = "Export Saved Apps...";
+            menuClearRecent.Text = "Clear Recent History";
+
+            menuTools.Text = "Tools";
+            menuTools.DropDownItems.AddRange(new ToolStripItem[]
+            {
+                menuSettings, menuToolsSep1,
+                menuImport, menuExport,
+                menuToolsSep2, menuClearRecent,
+            });
+
+            menuStrip.Items.Add(menuTools);
+            menuStrip.Dock = DockStyle.Top;
+
+            // ── Priority ─────────────────────────────────────────────────────
             lblPriority.AutoSize = true;
-            lblPriority.Location = new System.Drawing.Point(10, 14);
+            lblPriority.Location = new System.Drawing.Point(10, 38);
             lblPriority.Text     = "Priority:";
 
-            // comboPriority
             comboPriority.DropDownStyle = ComboBoxStyle.DropDownList;
-            comboPriority.Location      = new System.Drawing.Point(68, 10);
+            comboPriority.Location      = new System.Drawing.Point(68, 34);
             comboPriority.Size          = new System.Drawing.Size(175, 23);
             comboPriority.Anchor        = AnchorStyles.Top | AnchorStyles.Left;
             comboPriority.Items.AddRange(new object[]
@@ -52,57 +84,60 @@ namespace RunAsHelper
             });
             comboPriority.SelectedIndex = 2;
 
-            // lblPath
+            // ── Path row ─────────────────────────────────────────────────────
             lblPath.AutoSize = true;
-            lblPath.Location = new System.Drawing.Point(10, 47);
+            lblPath.Location = new System.Drawing.Point(10, 71);
             lblPath.Text     = "Path:";
 
-            // comboPath — narrowed to make room for the Save (★) button
-            comboPath.Location = new System.Drawing.Point(10, 65);
+            comboPath.Location = new System.Drawing.Point(10, 89);
             comboPath.Size     = new System.Drawing.Size(438, 23);
             comboPath.Anchor   = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
-            // btnSave — saves current path as a named shortcut
-            btnSave.Location  = new System.Drawing.Point(452, 65);
+            btnSave.Location  = new System.Drawing.Point(452, 89);
             btnSave.Size      = new System.Drawing.Size(38, 23);
             btnSave.Anchor    = AnchorStyles.Top | AnchorStyles.Right;
             btnSave.Text      = "★";
             btnSave.FlatStyle = FlatStyle.System;
 
-            // btnBrowse
-            btnBrowse.Location = new System.Drawing.Point(494, 65);
+            btnBrowse.Location = new System.Drawing.Point(494, 89);
             btnBrowse.Size     = new System.Drawing.Size(38, 23);
             btnBrowse.Anchor   = AnchorStyles.Top | AnchorStyles.Right;
             btnBrowse.Text     = "...";
 
-            // btnRun
-            btnRun.Location  = new System.Drawing.Point(10, 102);
+            // ── Run button ───────────────────────────────────────────────────
+            btnRun.Location  = new System.Drawing.Point(10, 126);
             btnRun.Size      = new System.Drawing.Size(522, 32);
             btnRun.Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             btnRun.Text      = "Launch Elevated";
-            btnRun.FlatStyle = FlatStyle.System; // required for UAC shield
+            btnRun.FlatStyle = FlatStyle.System;
 
-            // txtLog
-            txtLog.Location    = new System.Drawing.Point(10, 148);
-            txtLog.Size        = new System.Drawing.Size(522, 210);
-            txtLog.Anchor      = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            txtLog.Multiline   = true;
-            txtLog.ReadOnly    = true;
-            txtLog.ScrollBars  = ScrollBars.Vertical;
-            txtLog.BackColor   = System.Drawing.SystemColors.Window;
-            txtLog.Font        = new System.Drawing.Font("Consolas", 8.5f);
+            // ── Log ──────────────────────────────────────────────────────────
+            txtLog.Location   = new System.Drawing.Point(10, 172);
+            txtLog.Size       = new System.Drawing.Size(522, 210);
+            txtLog.Anchor     = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            txtLog.Multiline  = true;
+            txtLog.ReadOnly   = true;
+            txtLog.ScrollBars = ScrollBars.Vertical;
+            txtLog.BackColor  = System.Drawing.SystemColors.Window;
+            txtLog.Font       = new System.Drawing.Font("Consolas", 8.5f);
 
-            // lblNotAdmin
-            lblNotAdmin.Location  = new System.Drawing.Point(10, 366);
+            // ── Status label ─────────────────────────────────────────────────
+            lblNotAdmin.Location  = new System.Drawing.Point(10, 390);
             lblNotAdmin.Size      = new System.Drawing.Size(522, 20);
             lblNotAdmin.Anchor    = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             lblNotAdmin.ForeColor = System.Drawing.Color.Firebrick;
             lblNotAdmin.Text      = "⚠  Please exit and restart with \"Run As Administrator\"";
             lblNotAdmin.Visible   = false;
 
-            // trayMenu
+            // ── Tray menu ────────────────────────────────────────────────────
             menuSavedApps.Text    = "Saved Applications";
             menuSavedApps.Enabled = false;
+
+            menuRecent.Text    = "Recent";
+            menuRecent.Enabled = false;
+
+            menuStartService.Text    = "Start Service";
+            menuStartService.Visible = false;
 
             menuShow.Text = "Show Window";
             menuShow.Font = new System.Drawing.Font(menuShow.Font, System.Drawing.FontStyle.Bold);
@@ -111,22 +146,25 @@ namespace RunAsHelper
 
             trayMenu.Items.AddRange(new ToolStripItem[]
             {
-                menuSavedApps, menuSavedSep, menuShow, menuSep, menuExit
+                menuSavedApps, menuSavedSep, menuRecent,
+                menuLaunchSep, menuStartService,
+                menuShow, menuSep, menuExit,
             });
 
-            // notifyIcon
             notifyIcon.Text             = "RunAS Helper";
             notifyIcon.ContextMenuStrip = trayMenu;
             notifyIcon.Visible          = true;
 
-            // Form
-            ClientSize          = new System.Drawing.Size(542, 392);
-            MinimumSize         = new System.Drawing.Size(440, 340);
+            // ── Form ─────────────────────────────────────────────────────────
+            ClientSize          = new System.Drawing.Size(542, 416);
+            MinimumSize         = new System.Drawing.Size(440, 364);
             Text                = "RunAS Helper";
             StartPosition       = FormStartPosition.CenterScreen;
             AutoScaleDimensions = new System.Drawing.SizeF(7f, 15f);
             AutoScaleMode       = AutoScaleMode.Font;
+            MainMenuStrip       = menuStrip;
 
+            Controls.Add(menuStrip);
             Controls.Add(lblPriority);
             Controls.Add(comboPriority);
             Controls.Add(lblPath);
@@ -141,7 +179,17 @@ namespace RunAsHelper
             PerformLayout();
         }
 
-        // Controls
+        // ── Menu strip ───────────────────────────────────────────────────────
+        private MenuStrip            menuStrip;
+        private ToolStripMenuItem    menuTools;
+        private ToolStripMenuItem    menuSettings;
+        private ToolStripSeparator   menuToolsSep1;
+        private ToolStripMenuItem    menuImport;
+        private ToolStripMenuItem    menuExport;
+        private ToolStripSeparator   menuToolsSep2;
+        private ToolStripMenuItem    menuClearRecent;
+
+        // ── Form controls ────────────────────────────────────────────────────
         private Label              lblPriority;
         private ComboBox           comboPriority;
         private Label              lblPath;
@@ -151,10 +199,15 @@ namespace RunAsHelper
         private Button             btnRun;
         private TextBox            txtLog;
         private Label              lblNotAdmin;
+
+        // ── Tray ─────────────────────────────────────────────────────────────
         private NotifyIcon         notifyIcon;
         private ContextMenuStrip   trayMenu;
         private ToolStripMenuItem  menuSavedApps;
         private ToolStripSeparator menuSavedSep;
+        private ToolStripMenuItem  menuRecent;
+        private ToolStripSeparator menuLaunchSep;
+        private ToolStripMenuItem  menuStartService;
         private ToolStripMenuItem  menuShow;
         private ToolStripSeparator menuSep;
         private ToolStripMenuItem  menuExit;
