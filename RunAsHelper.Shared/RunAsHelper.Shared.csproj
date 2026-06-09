@@ -2,8 +2,8 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
-    <AssemblyName>RunAsTI.Shared</AssemblyName>
-    <RootNamespace>RunAsTI.Shared</RootNamespace>
+    <AssemblyName>RunAsHelper.Shared</AssemblyName>
+    <RootNamespace>RunAsHelper.Shared</RootNamespace>
     <ProjectGuid>{B2C3D4E5-F6A7-8901-BCDE-2C3D4E5F6071}</ProjectGuid>
   </PropertyGroup>
 </Project>

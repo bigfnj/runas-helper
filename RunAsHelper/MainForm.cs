@@ -3,10 +3,10 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using RunAsTI.Core;
-using RunAsTI.Settings;
+using RunAsHelper.Core;
+using RunAsHelper.Settings;
 
-namespace RunAsTI
+namespace RunAsHelper
 {
     internal partial class MainForm : Form
     {
@@ -99,15 +99,15 @@ namespace RunAsTI
             if (!NativeMethods.IsUserAnAdmin())
             {
                 btnRun.Enabled = comboPriority.Enabled = comboPath.Enabled = btnBrowse.Enabled = false;
-                lblNotAdmin.Text    = "Restart as Administrator to use RunAsTI.";
+                lblNotAdmin.Text    = "Restart as Administrator to use RunAsHelper.";
                 lblNotAdmin.Visible = true;
-                AppendLog("Run as Administrator to connect to the RunAsTI service.");
+                AppendLog("Run as Administrator to connect to the RunAsHelper service.");
                 return;
             }
 
             // Add UAC shield glyph to the run button.
             NativeMethods.SendMessage(btnRun.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
-            AppendLog("Checking RunAsTI service...");
+            AppendLog("Checking RunAsHelper service...");
             CheckServiceStatusAsync();
 
             if (_settings.StartMinimized)
@@ -147,16 +147,16 @@ namespace RunAsTI
                     if (available)
                     {
                         notifyIcon.Icon = this.Icon;   // full colour — service is up
-                        AppendLog("RunAsTI service is running. Ready.");
-                        notifyIcon.Text = "Run As TrustedInstaller  ✓ Ready";
+                        AppendLog("RunAsHelper service is running. Ready.");
+                        notifyIcon.Text = "RunAS Helper  ✓ Ready";
                     }
                     else
                     {
                         notifyIcon.Icon = _greyIcon ?? this.Icon;  // grey — service is down
-                        AppendLog("RunAsTI service is not running. Install and start the service.");
-                        notifyIcon.Text = "Run As TrustedInstaller  ✗ Service offline";
+                        AppendLog("RunAsHelper service is not running. Install and start the service.");
+                        notifyIcon.Text = "RunAS Helper  ✗ Service offline";
                         btnRun.Enabled      = false;
-                        lblNotAdmin.Text    = "RunAsTI service is not running.";
+                        lblNotAdmin.Text    = "RunAsHelper service is not running.";
                         lblNotAdmin.Visible = true;
                     }
                 });
@@ -169,7 +169,7 @@ namespace RunAsTI
         {
             Hide();
             if (_settings.ShowTrayNotifications)
-                notifyIcon.ShowBalloonTip(2000, "Run As TrustedInstaller",
+                notifyIcon.ShowBalloonTip(2000, "RunAS Helper",
                     "Still running in the system tray.", ToolTipIcon.Info);
         }
 
@@ -201,7 +201,7 @@ namespace RunAsTI
             try
             {
                 uint priority = PriorityClasses[comboPriority.SelectedIndex];
-                bool ok = await _client.LaunchAsTIAsync(path, priority);
+                bool ok = await _client.LaunchElevatedAsync(path, priority);
 
                 _settings.PriorityIndex = comboPriority.SelectedIndex;
                 _settings.AddMru(path);
@@ -219,7 +219,7 @@ namespace RunAsTI
         {
             using var dlg = new OpenFileDialog
             {
-                Title  = "Select program to run as TrustedInstaller",
+                Title  = "Select program to run elevated",
                 Filter = "Programs (*.exe;*.com;*.bat)|*.exe;*.com;*.bat|All Files (*.*)|*.*",
             };
 

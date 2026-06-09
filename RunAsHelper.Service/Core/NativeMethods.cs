@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace RunAsTI.Service.Core;
+namespace RunAsHelper.Service.Core;
 
 internal static partial class NativeMethods
 {

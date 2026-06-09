@@ -1,6 +1,6 @@
 using System.Windows.Forms;
 
-namespace RunAsTI
+namespace RunAsHelper
 {
     partial class MainForm
     {
@@ -69,7 +69,7 @@ namespace RunAsTI
             btnRun.Location  = new System.Drawing.Point(10, 102);
             btnRun.Size      = new System.Drawing.Size(522, 32);
             btnRun.Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            btnRun.Text      = "Run As TrustedInstaller";
+            btnRun.Text      = "Launch Elevated";
             btnRun.FlatStyle = FlatStyle.System; // required for UAC shield
 
             // txtLog
@@ -99,14 +99,14 @@ namespace RunAsTI
             menuExit.Text = "Exit";
 
             // notifyIcon
-            notifyIcon.Text        = "Run As TrustedInstaller";
+            notifyIcon.Text        = "RunAS Helper";
             notifyIcon.ContextMenuStrip = trayMenu;
             notifyIcon.Visible     = true;
 
             // Form
             ClientSize     = new System.Drawing.Size(542, 392);
             MinimumSize    = new System.Drawing.Size(440, 340);
-            Text           = "Run As TrustedInstaller";
+            Text           = "RunAS Helper";
             StartPosition  = FormStartPosition.CenterScreen;
             AutoScaleDimensions = new System.Drawing.SizeF(7f, 15f);
             AutoScaleMode       = AutoScaleMode.Font;

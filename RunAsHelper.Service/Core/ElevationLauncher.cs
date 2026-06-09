@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace RunAsTI.Service.Core;
+namespace RunAsHelper.Service.Core;
 
 /// <summary>
 /// Acquires a TrustedInstaller token and launches processes under it.
@@ -12,10 +12,10 @@ namespace RunAsTI.Service.Core;
 ///     session so the process appears on the interactive desktop.
 ///   — SeTcbPrivilege is enabled to allow the session-ID change.
 /// </summary>
-internal sealed class TrustedInstallerLauncher
+internal sealed class ElevationLauncher
 {
     private volatile bool   _initialized;
-    private volatile IntPtr _hTiToken = IntPtr.Zero;
+    private volatile IntPtr _hElevatedToken = IntPtr.Zero;
     private          IntPtr _hNtDll   = IntPtr.Zero;
 
     public event Action<string>? LogMessage;
@@ -24,7 +24,7 @@ internal sealed class TrustedInstallerLauncher
 
     // ── Public API ───────────────────────────────────────────────────────
 
-    public bool IsReady => _hTiToken != IntPtr.Zero;
+    public bool IsReady => _hElevatedToken != IntPtr.Zero;
 
     /// <summary>
     /// Runs the privilege chain and caches the TrustedInstaller token.
@@ -41,22 +41,22 @@ internal sealed class TrustedInstallerLauncher
             _initialized = true;
         }
 
-        if (_hTiToken == IntPtr.Zero)
+        if (_hElevatedToken == IntPtr.Zero)
             StartAndAcquireToken();
     }
 
-    public bool LaunchAsTI(string commandLine,
+    public bool LaunchElevated(string commandLine,
         uint priorityClass = NativeMethods.NORMAL_PRIORITY_CLASS)
     {
         Initialize();
 
-        if (_hTiToken == IntPtr.Zero)
+        if (_hElevatedToken == IntPtr.Zero)
         {
-            Log("Token hijack failed :(");
+            Log("Failed to acquire elevated token");
             return false;
         }
 
-        Log("Duplicating stolen TI token...");
+        Log("Duplicating elevated token...");
         IntPtr hDup;
         unsafe
         {
@@ -66,12 +66,12 @@ internal sealed class TrustedInstallerLauncher
             };
             // TokenPrimary is required by CreateProcessWithTokenW.
             if (!NativeMethods.DuplicateTokenEx(
-                    _hTiToken, NativeMethods.MAXIMUM_ALLOWED, &satr,
+                    _hElevatedToken, NativeMethods.MAXIMUM_ALLOWED, &satr,
                     NativeMethods.SecurityImpersonationLevel.SecurityImpersonation,
                     NativeMethods.TokenType.TokenPrimary,
                     out hDup))
             {
-                Log($"LaunchAsTI::Failed to duplicate TI token, " +
+                Log($"LaunchElevated::Failed to duplicate elevated token, " +
                     $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 return false;
             }
@@ -89,10 +89,10 @@ internal sealed class TrustedInstallerLauncher
 
     public void ReleaseToken()
     {
-        if (_hTiToken != IntPtr.Zero)
+        if (_hElevatedToken != IntPtr.Zero)
         {
-            NativeMethods.CloseHandle(_hTiToken);
-            _hTiToken = IntPtr.Zero;
+            NativeMethods.CloseHandle(_hElevatedToken);
+            _hElevatedToken = IntPtr.Zero;
         }
     }
 
@@ -191,7 +191,7 @@ internal sealed class TrustedInstallerLauncher
         finally { NativeMethods.CloseHandle(hWinLogon); }
     }
 
-    // ── TI service token acquisition ─────────────────────────────────────
+    // ── Elevated token acquisition ─────────────────────────────────────
 
     private void StartAndAcquireToken()
     {
@@ -261,14 +261,14 @@ internal sealed class TrustedInstallerLauncher
     private unsafe void AcquireTokenFromProcess(uint pid)
     {
         uint tid = GetFirstThreadId(pid);
-        Log($"TI thread id={tid}");
-        if (tid == 0) { Log("Failed to get TI thread id."); return; }
+        Log($"Elevated thread id={tid}");
+        if (tid == 0) { Log("Failed to get elevated thread id."); return; }
 
         IntPtr hThread = NativeMethods.OpenThread(
             NativeMethods.THREAD_DIRECT_IMPERSONATION, false, tid);
         if (hThread == IntPtr.Zero)
         {
-            Log($"Failed to open TI thread. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            Log($"Failed to open elevated thread. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
             return;
         }
         try
@@ -292,7 +292,7 @@ internal sealed class TrustedInstallerLauncher
             if (NativeMethods.OpenThreadToken(
                     NativeMethods.GetCurrentThread(),
                     NativeMethods.TOKEN_ALL_ACCESS,
-                    false, out _hTiToken))
+                    false, out _hElevatedToken))
                 Log("Token acquired and cached.");
             else
                 Log($"OpenThreadToken failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");

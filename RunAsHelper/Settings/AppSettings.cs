@@ -4,13 +4,13 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace RunAsTI.Settings
+namespace RunAsHelper.Settings
 {
     internal sealed class AppSettings
     {
         private static readonly string FilePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "RunAsTI", "settings.json");
+            "RunAsHelper", "settings.json");
 
         // ── Persisted settings ───────────────────────────────────────────────
 

@@ -7,12 +7,12 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using RunAsTI.Service.Core;
-using RunAsTI.Shared.Protocol;
+using RunAsHelper.Service.Core;
+using RunAsHelper.Shared.Protocol;
 
-namespace RunAsTI.Service.Worker;
+namespace RunAsHelper.Service.Worker;
 
-internal sealed class PipeServer(TrustedInstallerLauncher launcher, ILogger logger)
+internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
 {
     private const string PipeName = "RunAsHelper";
 
@@ -100,7 +100,7 @@ internal sealed class PipeServer(TrustedInstallerLauncher launcher, ILogger logg
 
                     var launchTask = Task.Run(() =>
                     {
-                        bool ok = launcher.LaunchAsTI(request.CommandLine, request.Priority);
+                        bool ok = launcher.LaunchElevated(request.CommandLine, request.Priority);
                         logChannel.Writer.Complete();
                         return ok;
                     }, ct);

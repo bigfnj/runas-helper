@@ -1,18 +1,18 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace RunAsTI.Core
+namespace RunAsHelper.Core
 {
     /// <summary>
-    /// Port of modRunAsTI (twinBASIC v2.3.2).
+    /// Port of modRunAsHelper (twinBASIC v2.3.2).
     /// Launches a process running as NT AUTHORITY\SYSTEM with TrustedInstaller privileges.
     /// Requires the caller to already be elevated (Administrator).
     /// </summary>
-    internal sealed class TrustedInstallerLauncher
+    internal sealed class ElevationLauncher
     {
         // volatile: written on the background init thread, read on the UI thread.
         private volatile bool   _initialized;
-        private volatile IntPtr _hTiToken = IntPtr.Zero;
+        private volatile IntPtr _hElevatedToken = IntPtr.Zero;
         private          IntPtr _hNtDll   = IntPtr.Zero;
 
         /// <summary>Raised for each progress/error message during an operation.</summary>
@@ -26,7 +26,7 @@ namespace RunAsTI.Core
         /// True once the TrustedInstaller token has been acquired and cached.
         /// Safe to read from any thread.
         /// </summary>
-        public bool IsReady => _hTiToken != IntPtr.Zero;
+        public bool IsReady => _hElevatedToken != IntPtr.Zero;
 
         /// <summary>
         /// Run the full init chain (privilege elevation → winlogon impersonation →
@@ -35,7 +35,7 @@ namespace RunAsTI.Core
         ///
         /// Idempotent: safe to call multiple times or from a background thread.
         /// After this returns successfully, <see cref="IsReady"/> is true and every
-        /// subsequent <see cref="LaunchAsTI"/> call bypasses the expensive chain.
+        /// subsequent <see cref="LaunchElevated"/> call bypasses the expensive chain.
         /// </summary>
         public void Initialize()
         {
@@ -52,7 +52,7 @@ namespace RunAsTI.Core
                 _initialized = true;
             }
 
-            if (_hTiToken == IntPtr.Zero)
+            if (_hElevatedToken == IntPtr.Zero)
                 StartAndAcquireToken();
         }
 
@@ -60,12 +60,12 @@ namespace RunAsTI.Core
         /// Launch <paramref name="commandLine"/> as TrustedInstaller.
         /// Calls <see cref="Initialize"/> automatically if the token is not yet warm.
         /// </summary>
-        public bool LaunchAsTI(string commandLine,
+        public bool LaunchElevated(string commandLine,
             uint priorityClass = NativeMethods.NORMAL_PRIORITY_CLASS)
         {
             Initialize();
 
-            if (_hTiToken == IntPtr.Zero)
+            if (_hElevatedToken == IntPtr.Zero)
             {
                 Log("Token hijack failed :(");
                 return false;
@@ -80,12 +80,12 @@ namespace RunAsTI.Core
                     nLength = (uint)sizeof(NativeMethods.SECURITY_ATTRIBUTES)
                 };
                 if (!NativeMethods.DuplicateTokenEx(
-                        _hTiToken, NativeMethods.MAXIMUM_ALLOWED, &satr,
+                        _hElevatedToken, NativeMethods.MAXIMUM_ALLOWED, &satr,
                         NativeMethods.SecurityImpersonationLevel.SecurityImpersonation,
                         NativeMethods.TokenType.TokenImpersonation,
                         out hStolenToken))
                 {
-                    Log($"LaunchAsTI::Failed to duplicate TI token, " +
+                    Log($"LaunchElevated::Failed to duplicate TI token, " +
                         $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                     return false;
                 }
@@ -132,13 +132,13 @@ namespace RunAsTI.Core
             }
         }
 
-        /// <summary>Closes the cached TrustedInstaller token. Next LaunchAsTI call re-initializes.</summary>
+        /// <summary>Closes the cached TrustedInstaller token. Next LaunchElevated call re-initializes.</summary>
         public void ReleaseToken()
         {
-            if (_hTiToken != IntPtr.Zero)
+            if (_hElevatedToken != IntPtr.Zero)
             {
-                NativeMethods.CloseHandle(_hTiToken);
-                _hTiToken = IntPtr.Zero;
+                NativeMethods.CloseHandle(_hElevatedToken);
+                _hElevatedToken = IntPtr.Zero;
             }
         }
 
@@ -329,7 +329,7 @@ namespace RunAsTI.Core
                 if (NativeMethods.OpenThreadToken(
                         NativeMethods.GetCurrentThread(),
                         NativeMethods.TOKEN_ALL_ACCESS,
-                        false, out _hTiToken))
+                        false, out _hElevatedToken))
                 {
                     Log("OpenThreadToken success.");
                 }
@@ -385,7 +385,7 @@ namespace RunAsTI.Core
                 }
 
                 if (!result)
-                    Log($"LaunchAsTI::CreateProcessWithTokenW failed, " +
+                    Log($"LaunchElevated::CreateProcessWithTokenW failed, " +
                         $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 return result;
             }

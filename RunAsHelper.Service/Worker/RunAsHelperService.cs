@@ -3,19 +3,19 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using RunAsTI.Service.Core;
+using RunAsHelper.Service.Core;
 
-namespace RunAsTI.Service.Worker;
+namespace RunAsHelper.Service.Worker;
 
-internal sealed class TrustedInstallerService(ILogger<TrustedInstallerService> logger) : BackgroundService
+internal sealed class RunAsHelperService(ILogger<RunAsHelperService> logger) : BackgroundService
 {
-    private readonly TrustedInstallerLauncher _launcher = new();
+    private readonly ElevationLauncher _launcher = new();
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _launcher.LogMessage += msg => logger.LogInformation("{Message}", msg);
 
-        logger.LogInformation("Acquiring TrustedInstaller token...");
+        logger.LogInformation("Acquiring elevated token...");
         await Task.Run(_launcher.Initialize, stoppingToken);
 
         if (_launcher.IsReady)

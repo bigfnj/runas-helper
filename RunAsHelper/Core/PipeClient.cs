@@ -3,12 +3,12 @@ using System.IO;
 using System.IO.Pipes;
 using System.Threading;
 using System.Threading.Tasks;
-using RunAsTI.Shared.Protocol;
+using RunAsHelper.Shared.Protocol;
 
-namespace RunAsTI.Core;
+namespace RunAsHelper.Core;
 
 /// <summary>
-/// Sends launch requests to the RunAsTI Windows service over a named pipe.
+/// Sends launch requests to the RunAsHelper Windows service over a named pipe.
 /// Thread-safe; multiple concurrent calls are allowed (each opens its own pipe).
 /// </summary>
 internal sealed class PipeClient
@@ -20,10 +20,10 @@ internal sealed class PipeClient
     private void Log(string msg) => LogMessage?.Invoke(msg);
 
     /// <summary>
-    /// Ask the RunAsTI service to launch <paramref name="commandLine"/> as TrustedInstaller.
+    /// Ask the RunAsHelper service to launch <paramref name="commandLine"/> as TrustedInstaller.
     /// Returns true on success, false if the service is unreachable or the launch failed.
     /// </summary>
-    public async Task<bool> LaunchAsTIAsync(
+    public async Task<bool> LaunchElevatedAsync(
         string commandLine,
         uint priority,
         CancellationToken ct = default)
@@ -37,12 +37,12 @@ internal sealed class PipeClient
         }
         catch (TimeoutException)
         {
-            Log("Could not connect to RunAsTI service — connection timed out.");
+            Log("Could not connect to RunAsHelper service — connection timed out.");
             return false;
         }
         catch (Exception ex) when (ex is IOException or OperationCanceledException)
         {
-            Log($"Could not connect to RunAsTI service: {ex.Message}");
+            Log($"Could not connect to RunAsHelper service: {ex.Message}");
             return false;
         }
 
