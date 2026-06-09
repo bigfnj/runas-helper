@@ -15,7 +15,8 @@
 <?define ServiceExe = "..\RunAsHelper.Service\bin\x64\$(var.Configuration)\net10.0-windows\RunAsHelper.Service.exe" ?>
 <?define ClientExe  = "..\RunAsHelper\bin\x64\$(var.Configuration)\net10.0-windows\RunAsHelper.exe" ?>
 
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Package Name="RunAS Helper"
            Manufacturer="bigfnj"
            Version="1.0.0.0"
@@ -78,17 +79,58 @@
       </Directory>
     </StandardDirectory>
 
-    <!-- ── Auto-start tray on user login (current user) ─────────────── -->
+    <!-- ── Logon autostart via Scheduled Task ────────────────────────── -->
+    <!-- KeyPath is a registry marker only; the actual task is           -->
+    <!-- created/deleted by the custom actions in InstallExecuteSequence. -->
     <Component Id="StartupComponent"
-               Guid="18293041-F607-4567-1234-829304152637"
+               Guid="B8C9D0E1-F2A3-4567-CDEF-0A1B2C3D4E5F"
                Directory="INSTALLFOLDER">
       <RegistryValue Root="HKCU"
-                     Key="Software\Microsoft\Windows\CurrentVersion\Run"
-                     Name="RunAsHelper"
-                     Type="string"
-                     Value="[INSTALLFOLDER]RunAsHelper.exe"
+                     Key="Software\RunAsHelper"
+                     Name="ScheduledTaskInstalled"
+                     Type="integer"
+                     Value="1"
                      KeyPath="yes" />
     </Component>
+
+    <!-- ── Scheduled task custom actions ─────────────────────────────── -->
+    <!--
+      A type-51 (property-set) CA sets the property whose name matches the
+      deferred CA; CAQuietExec64 reads it as CustomActionData and runs it
+      via cmd.exe.  Impersonate="yes" means the deferred CA runs as the
+      installing user (not SYSTEM), so schtasks creates a per-user logon task.
+      Return="ignore" keeps a schtasks error from rolling back the install.
+    -->
+
+    <CustomAction Id="SetCreateScheduledTask"
+                  Property="CreateRunASHelperTask"
+                  Value="schtasks.exe /Create /TN &quot;RunAS Helper&quot; /TR &quot;[INSTALLFOLDER]RunAsHelper.exe&quot; /SC ONLOGON /RU &quot;[USERNAME]&quot; /RL HIGHEST /F" />
+
+    <CustomAction Id="CreateRunASHelperTask"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="CAQuietExec64"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="ignore" />
+
+    <CustomAction Id="SetDeleteScheduledTask"
+                  Property="DeleteRunASHelperTask"
+                  Value="schtasks.exe /Delete /TN &quot;RunAS Helper&quot; /F" />
+
+    <CustomAction Id="DeleteRunASHelperTask"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="CAQuietExec64"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- Property-set CAs (immediate) must precede their deferred consumers -->
+      <Custom Action="SetCreateScheduledTask" After="CostFinalize">NOT Installed OR REINSTALL</Custom>
+      <Custom Action="CreateRunASHelperTask"  After="InstallFiles">NOT Installed OR REINSTALL</Custom>
+      <Custom Action="SetDeleteScheduledTask" After="CostFinalize">REMOVE="ALL"</Custom>
+      <Custom Action="DeleteRunASHelperTask"  Before="RemoveFiles">REMOVE="ALL"</Custom>
+    </InstallExecuteSequence>
 
     <!-- ── Feature ───────────────────────────────────────────────────── -->
     <Feature Id="Complete" Level="1">
