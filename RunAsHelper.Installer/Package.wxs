@@ -1,21 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Build prerequisites:
-    1. Build the solution in the desired configuration first:
-         dotnet build ..\RunAsHelper.sln -c Release /p:Platform=x64
-    2. Then build the installer:
-         dotnet build -c Release /p:Platform=x64
-    Or build everything at once from the solution (VS or dotnet build on the .sln).
+  Build: Build the solution in VS (Release|x64). The installer project runs
+  "dotnet publish --self-contained -r win-x64 -p:PublishSingleFile=true"
+  for both apps before the WiX compiler runs, so no external .NET runtime
+  is required on target machines.
 
-  Runtime prerequisite: .NET 10 x64 Desktop Runtime must be installed on the target machine.
   Install silently:  msiexec /i RunAsHelper-Setup.msi /passive
   Uninstall:         msiexec /x RunAsHelper-Setup.msi /passive
 -->
 
-<?define ServiceDir = "..\RunAsHelper.Service\bin\$(var.Configuration)\net10.0-windows\" ?>
-<?define ClientDir  = "..\RunAsHelper\bin\$(var.Configuration)\net10.0-windows\" ?>
-<?define ServiceExe = "$(var.ServiceDir)RunAsHelper.Service.exe" ?>
-<?define ClientExe  = "$(var.ClientDir)RunAsHelper.exe" ?>
+<?define ServiceExe = "publish\service\RunAsHelper.Service.exe" ?>
+<?define ClientExe  = "publish\client\RunAsHelper.exe" ?>
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
@@ -139,33 +134,10 @@
     <!-- ── Feature ───────────────────────────────────────────────────── -->
     <Feature Id="Complete" Level="1">
       <ComponentRef Id="ServiceComponent" />
-      <ComponentGroupRef Id="ServiceSupportFiles" />
       <ComponentRef Id="ClientComponent" />
-      <ComponentGroupRef Id="ClientSupportFiles" />
       <ComponentRef Id="StartMenuComponent" />
       <ComponentRef Id="StartupComponent" />
     </Feature>
 
   </Package>
-
-  <!--
-    Support files: all non-EXE/non-PDB output from each project.
-    Globs the full build output so every NuGet DLL is installed alongside
-    the apphost. The EXE is excluded (already a KeyPath component above).
-    ComponentGroup must be in a Fragment, not inside Package.
-  -->
-  <Fragment>
-    <ComponentGroup Id="ServiceSupportFiles" Directory="INSTALLFOLDER">
-      <Files Include="$(var.ServiceDir)*"
-             Exclude="$(var.ServiceDir)RunAsHelper.Service.exe;$(var.ServiceDir)*.pdb" />
-    </ComponentGroup>
-  </Fragment>
-
-  <Fragment>
-    <ComponentGroup Id="ClientSupportFiles" Directory="INSTALLFOLDER">
-      <Files Include="$(var.ClientDir)*"
-             Exclude="$(var.ClientDir)RunAsHelper.exe;$(var.ClientDir)*.pdb" />
-    </ComponentGroup>
-  </Fragment>
-
 </Wix>

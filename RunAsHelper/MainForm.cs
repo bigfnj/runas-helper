@@ -68,8 +68,9 @@ namespace RunAsHelper
             notifyIcon.Icon = _greyIcon ?? this.Icon;
         }
 
-        private static Icon? MakeGreyscaleIcon(Icon source)
+        private static Icon? MakeGreyscaleIcon(Icon? source)
         {
+            if (source is null) return null;
             try
             {
                 using var smallIcon = new Icon(source, SystemInformation.SmallIconSize);
