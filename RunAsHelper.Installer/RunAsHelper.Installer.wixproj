@@ -20,8 +20,14 @@
     Output lands in publish\service\ and publish\client\ (git-ignored).
     No .NET runtime is required on the target machine.
   -->
+  <!--
+    Publish output goes into each project's own bin\(config)\net10.0-windows\publish\*
+    directory so WiX's automatic ProjectReference bindpaths can resolve the
+    "publish\service\RunAsHelper.Service.exe" and "publish\client\RunAsHelper.exe"
+    source paths declared in Package.wxs.
+  -->
   <Target Name="PublishApps" BeforeTargets="Build">
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)publish\service\&quot;" />
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)publish\client\&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\bin\$(Configuration)\net10.0-windows\publish\service\&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\bin\$(Configuration)\net10.0-windows\publish\client\&quot;" />
   </Target>
 </Project>
