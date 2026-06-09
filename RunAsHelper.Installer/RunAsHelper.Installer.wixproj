@@ -8,6 +8,14 @@
       truncate it, so the task is created correctly; the warning is cosmetic.
     -->
     <SuppressIces>ICE03</SuppressIces>
+
+    <!--
+      MSI ProductVersion. Defaults to 1.0.0.0 for local builds; the release
+      workflow overrides it from the git tag (-p:ProductVersion=1.2.3) so each
+      release ships a higher version and MajorUpgrade detects the upgrade.
+    -->
+    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.0.0</ProductVersion>
+    <DefineConstants>$(DefineConstants);ProductVersion=$(ProductVersion)</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.Util.wixext" Version="4.0.5" />

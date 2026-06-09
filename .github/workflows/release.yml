@@ -1,0 +1,82 @@
+name: Release
+
+# Builds the self-contained MSI on a Windows runner and, when triggered by a
+# version tag (e.g. v1.2.3), publishes it as a GitHub Release asset.
+#
+#   Tag a release:   git tag v1.2.3 && git push origin v1.2.3
+#   Dry run / test:  Actions tab -> Release -> Run workflow (uploads an
+#                    artifact only, does not create a Release).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, numeric, no leading v (e.g. 1.2.3)'
+        required: true
+
+permissions:
+  contents: write   # required for softprops/action-gh-release to create the Release
+
+jobs:
+  build:
+    name: Build & publish MSI
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $v = '${{ github.event.inputs.version }}'
+          } else {
+            $v = '${{ github.ref_name }}' -replace '^v', ''
+          }
+          # Windows Installer ProductVersion must be numeric: major.minor.build[.rev]
+          if ($v -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
+            Write-Error "Version '$v' is not a valid MSI version (expected e.g. 1.2.3)."
+            exit 1
+          }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Building RunAS Helper $v"
+
+      - name: Build MSI
+        # The installer project restores the WiX SDK via NuGet and publishes both
+        # apps self-contained, so no separate WiX install is needed on the runner.
+        run: dotnet build RunAsHelper.sln -c Release -p:ProductVersion=${{ steps.ver.outputs.version }}
+
+      - name: Stage versioned artifact
+        shell: pwsh
+        run: |
+          $src = 'RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi'
+          if (-not (Test-Path $src)) { Write-Error "MSI not found at $src"; exit 1 }
+          $dst = "RunAsHelper-Setup-${{ steps.ver.outputs.version }}.msi"
+          Copy-Item $src $dst
+          "asset=$dst" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: stage
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RunAsHelper-Setup
+          path: ${{ steps.stage.outputs.asset }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.stage.outputs.asset }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
