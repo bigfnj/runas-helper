@@ -128,10 +128,10 @@
                   Return="ignore" />
 
     <InstallExecuteSequence>
-      <Custom Action="SetCreateScheduledTask" After="CostFinalize">NOT Installed OR REINSTALL</Custom>
-      <Custom Action="CreateRunASHelperTask"  After="InstallFiles">NOT Installed OR REINSTALL</Custom>
-      <Custom Action="SetDeleteScheduledTask" After="CostFinalize">REMOVE="ALL"</Custom>
-      <Custom Action="DeleteRunASHelperTask"  Before="RemoveFiles">REMOVE="ALL"</Custom>
+      <Custom Action="SetCreateScheduledTask" After="CostFinalize" Condition="NOT Installed OR REINSTALL" />
+      <Custom Action="CreateRunASHelperTask"  After="InstallFiles" Condition="NOT Installed OR REINSTALL" />
+      <Custom Action="SetDeleteScheduledTask" After="CostFinalize" Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="DeleteRunASHelperTask"  Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
     </InstallExecuteSequence>
 
     <!-- ── Feature ───────────────────────────────────────────────────── -->
