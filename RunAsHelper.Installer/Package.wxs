@@ -59,6 +59,11 @@
                 KeyPath="yes" />
         </Component>
 
+        <!-- Task definition XML — registered as the logon scheduled task below. -->
+        <Component Id="TaskXmlComponent" Guid="C9DA0E1F-2B3C-4D5E-6F70-8192A3B4C5D6">
+          <File Id="TaskXml" Source="task.xml" KeyPath="yes" />
+        </Component>
+
       </Directory>
     </StandardDirectory>
 
@@ -81,46 +86,34 @@
       </Directory>
     </StandardDirectory>
 
-    <!-- ── Logon autostart via machine-wide Scheduled Task ───────────── -->
-    <!-- KeyPath tracks the component; the task itself is managed below. -->
-    <Component Id="StartupComponent"
-               Guid="B8C9D0E1-F2A3-4567-CDEF-0A1B2C3D4E5F"
-               Directory="INSTALLFOLDER">
-      <RegistryValue Root="HKLM"
-                     Key="Software\RunAsHelper"
-                     Name="ScheduledTaskInstalled"
-                     Type="integer"
-                     Value="1"
-                     KeyPath="yes" />
-    </Component>
-
     <!-- ── Scheduled task custom actions ─────────────────────────────── -->
     <!--
       Machine-wide task: triggers at logon of ANY member of BUILTIN\Administrators,
       runs with the logged-on user's elevated interactive token — no UAC prompt.
-      The CAs run as SYSTEM (Impersonate="no", the default for deferred perMachine CAs)
-      so they can write to the machine task folder (\Microsoft\Windows\Task Scheduler).
+      The CAs run as SYSTEM (Impersonate="no") so they can write to the machine
+      task folder (\Microsoft\Windows\Task Scheduler).
 
-      PowerShell is used because schtasks.exe cannot express a group-based principal
-      in a single command line.
-
-      Return="ignore" prevents a PowerShell error from rolling back the install.
+      schtasks.exe is used instead of PowerShell so the command stays well under
+      the MSI CustomAction.Target column's 255-char schema limit, and because
+      schtasks is a system binary not subject to PowerShell execution policy.
+      The group-based principal (BUILTIN\Administrators) is expressed in task.xml,
+      which schtasks imports — it cannot be expressed on the schtasks command line.
     -->
 
-    <CustomAction Id="SetCreateScheduledTask"
-                  Property="CreateRunASHelperTask"
-                  Value="powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -Command &quot;Register-ScheduledTask -TaskName 'RunAS Helper' -Force -Action (New-ScheduledTaskAction -Execute '[INSTALLFOLDER]RunAsHelper.exe') -Trigger (New-ScheduledTaskTrigger -AtLogOn) -Principal (New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Administrators' -RunLevel Highest) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew)&quot;" />
+    <CustomAction Id="SetInstallTask"
+                  Property="InstallRunASHelperTask"
+                  Value="schtasks /create /xml &quot;[INSTALLFOLDER]task.xml&quot; /tn &quot;RunAS Helper&quot; /f" />
 
-    <CustomAction Id="CreateRunASHelperTask"
+    <CustomAction Id="InstallRunASHelperTask"
                   BinaryRef="Wix4UtilCA_X64"
                   DllEntry="CAQuietExec64"
                   Execute="deferred"
                   Impersonate="no"
-                  Return="ignore" />
+                  Return="check" />
 
-    <CustomAction Id="SetDeleteScheduledTask"
+    <CustomAction Id="SetDeleteTask"
                   Property="DeleteRunASHelperTask"
-                  Value="powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -Command &quot;Unregister-ScheduledTask -TaskName 'RunAS Helper' -Confirm:$false -ErrorAction SilentlyContinue&quot;" />
+                  Value="schtasks /delete /tn &quot;RunAS Helper&quot; /f" />
 
     <CustomAction Id="DeleteRunASHelperTask"
                   BinaryRef="Wix4UtilCA_X64"
@@ -130,10 +123,10 @@
                   Return="ignore" />
 
     <InstallExecuteSequence>
-      <Custom Action="SetCreateScheduledTask" After="CostFinalize" Condition="NOT Installed OR REINSTALL" />
-      <Custom Action="CreateRunASHelperTask"  After="InstallFiles" Condition="NOT Installed OR REINSTALL" />
-      <Custom Action="SetDeleteScheduledTask" After="CostFinalize" Condition="REMOVE=&quot;ALL&quot;" />
-      <Custom Action="DeleteRunASHelperTask"  Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="SetInstallTask"        After="CostFinalize" Condition="NOT Installed OR REINSTALL" />
+      <Custom Action="InstallRunASHelperTask" After="InstallFiles" Condition="NOT Installed OR REINSTALL" />
+      <Custom Action="SetDeleteTask"         After="CostFinalize" Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="DeleteRunASHelperTask" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
     </InstallExecuteSequence>
 
     <!-- ── Feature ───────────────────────────────────────────────────── -->
@@ -141,7 +134,7 @@
       <ComponentRef Id="ServiceComponent" />
       <ComponentRef Id="ClientComponent" />
       <ComponentRef Id="StartMenuComponent" />
-      <ComponentRef Id="StartupComponent" />
+      <ComponentRef Id="TaskXmlComponent" />
     </Feature>
 
   </Package>
