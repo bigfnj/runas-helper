@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Machine-wide scheduled task definition for RunAS Helper.
+  Installed to [INSTALLFOLDER] by the MSI; registered at install time via:
+    schtasks /create /xml "[INSTALLFOLDER]task.xml" /tn "RunAS Helper" /f
+
+  Triggers at logon of any member of BUILTIN\Administrators (group principal),
+  launches the tray app elevated (RunLevel Highest) — no UAC prompt required.
+
+  %ProgramFiles% is expanded by Task Scheduler at run time, so this file is
+  static regardless of install directory.
+-->
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Starts the RunAS Helper tray application at logon for Administrators.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <GroupId>BUILTIN\Administrators</GroupId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>"%ProgramFiles%\RunAsHelper\RunAsHelper.exe"</Command>
+    </Exec>
+  </Actions>
+</Task>
