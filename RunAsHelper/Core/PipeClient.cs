@@ -23,10 +23,21 @@ internal sealed class PipeClient
     /// Ask the RunAsHelper service to launch <paramref name="commandLine"/> as TrustedInstaller.
     /// Returns true on success, false if the service is unreachable or the launch failed.
     /// </summary>
-    public async Task<bool> LaunchElevatedAsync(
+    public Task<bool> LaunchElevatedAsync(
         string commandLine,
         uint priority,
         CancellationToken ct = default)
+        => SendAsync(new LaunchRequest(commandLine, priority), ct);
+
+    /// <summary>
+    /// Ask the service to acquire and release a TrustedInstaller token without
+    /// launching anything — used by post-install validation. Streams the service's
+    /// log lines (including the resolved account) via <see cref="LogMessage"/>.
+    /// </summary>
+    public Task<bool> ValidateTokenAsync(CancellationToken ct = default)
+        => SendAsync(new LaunchRequest(string.Empty, NativeMethods.NORMAL_PRIORITY_CLASS, "validate"), ct);
+
+    private async Task<bool> SendAsync(LaunchRequest request, CancellationToken ct)
     {
         using var pipe = new NamedPipeClientStream(
             ".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
@@ -48,7 +59,7 @@ internal sealed class PipeClient
 
         try
         {
-            await PipeProtocol.WriteAsync(pipe, new LaunchRequest(commandLine, priority), ct);
+            await PipeProtocol.WriteAsync(pipe, request, ct);
 
             while (true)
             {

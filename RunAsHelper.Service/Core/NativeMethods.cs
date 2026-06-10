@@ -89,10 +89,12 @@ internal static partial class NativeMethods
         Paused          = 7,
     }
 
-    // Used to set the session ID on a token so the launched process appears
-    // on the correct interactive desktop (Session 0 → active console session).
+    // Used to query/set token properties. TokenUser identifies the account the
+    // token represents (used by post-install validation); TokenSessionId remaps
+    // a launched process to the interactive desktop (Session 0 → console session).
     internal enum TOKEN_INFORMATION_CLASS
     {
+        TokenUser      = 1,
         TokenSessionId = 12,
     }
 
@@ -389,4 +391,33 @@ internal static partial class NativeMethods
         IntPtr                       hThread,
         IntPtr                       hThreadToImpersonate,
         SECURITY_QUALITY_OF_SERVICE* SecurityQualityOfService);
+
+    // ── Token identity (post-install validation) ─────────────────────────
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool GetTokenInformation(
+        IntPtr                  TokenHandle,
+        TOKEN_INFORMATION_CLASS TokenInformationClass,
+        void*                   TokenInformation,
+        uint                    TokenInformationLength,
+        out uint                ReturnLength);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool ConvertSidToStringSidW(IntPtr Sid, out IntPtr StringSid);
+
+    [LibraryImport("advapi32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool LookupAccountSidW(
+        string?  lpSystemName,
+        IntPtr   Sid,
+        char*    Name,
+        ref uint cchName,
+        char*    ReferencedDomainName,
+        ref uint cchReferencedDomainName,
+        out int  peUse);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    internal static partial IntPtr LocalFree(IntPtr hMem);
 }

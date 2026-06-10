@@ -13,7 +13,8 @@
 <?define ClientExe  = "publish\client\RunAsHelper.exe" ?>
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="RunAS Helper"
            Manufacturer="Serenity Industries"
            Version="$(var.ProductVersion)"
@@ -21,6 +22,11 @@
            Scope="perMachine">
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of RunAS Helper is already installed." />
+
+    <!-- Apps &amp; Features entry: show the product icon instead of a blank tile. -->
+    <Icon Id="RunAsHelper.ico" SourceFile="..\power.ico" />
+    <Property Id="ARPPRODUCTICON" Value="RunAsHelper.ico" />
+    <Property Id="ARPNOREPAIR" Value="1" />
 
     <!-- Embed the payload cabinet inside the MSI so RunAsHelper-Setup.msi is a
          single self-contained file. Without this, WiX v4 emits an external
@@ -64,6 +70,18 @@
           <File Id="TaskXml" Source="task.xml" KeyPath="yes" />
         </Component>
 
+        <!-- Marker that tells the tray app to run its post-install validation
+             popup the first time it starts after this install. The tray reads
+             it, validates, then records the version under HKCU so it shows once. -->
+        <Component Id="ValidationFlagComponent" Guid="1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809">
+          <RegistryValue Root="HKLM"
+                         Key="Software\RunAsHelper"
+                         Name="PendingValidation"
+                         Type="string"
+                         Value="[ProductVersion]"
+                         KeyPath="yes" />
+        </Component>
+
       </Directory>
     </StandardDirectory>
 
@@ -102,22 +120,22 @@
 
     <CustomAction Id="SetInstallTask"
                   Property="InstallRunASHelperTask"
-                  Value="schtasks /create /xml &quot;[INSTALLFOLDER]task.xml&quot; /tn &quot;RunAS Helper&quot; /f" />
+                  Value="&quot;schtasks.exe&quot; /create /xml &quot;[INSTALLFOLDER]task.xml&quot; /tn &quot;RunAS Helper&quot; /f" />
 
     <CustomAction Id="InstallRunASHelperTask"
                   BinaryRef="Wix4UtilCA_X64"
-                  DllEntry="CAQuietExec64"
+                  DllEntry="WixQuietExec64"
                   Execute="deferred"
                   Impersonate="no"
                   Return="check" />
 
     <CustomAction Id="SetDeleteTask"
                   Property="DeleteRunASHelperTask"
-                  Value="schtasks /delete /tn &quot;RunAS Helper&quot; /f" />
+                  Value="&quot;schtasks.exe&quot; /delete /tn &quot;RunAS Helper&quot; /f" />
 
     <CustomAction Id="DeleteRunASHelperTask"
                   BinaryRef="Wix4UtilCA_X64"
-                  DllEntry="CAQuietExec64"
+                  DllEntry="WixQuietExec64"
                   Execute="deferred"
                   Impersonate="no"
                   Return="ignore" />
@@ -135,7 +153,48 @@
       <ComponentRef Id="ClientComponent" />
       <ComponentRef Id="StartMenuComponent" />
       <ComponentRef Id="TaskXmlComponent" />
+      <ComponentRef Id="ValidationFlagComponent" />
     </Feature>
+
+    <!-- ── User interface ────────────────────────────────────────────────
+      Without an authored UI the MSI runs with only the bare "basic" progress
+      window when double-clicked: no Welcome, no Progress dialog (so the
+      "Starting services…" step is invisible), and no Finish dialog. WixUI_Minimal
+      gives a Welcome+License page, a real Progress dialog, and an Exit dialog.
+      The WixToolset.UI.wixext package reference (in the .wixproj) supplies it.
+    -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+
+    <!-- Exit-dialog "Launch RunAS Helper" checkbox. UNCHECKED by default: the MSI
+         UI sequence is NOT elevated, so WixShellExec would start the tray with the
+         invoking user's *filtered* (non-elevated) token. That non-elevated instance
+         also holds the single-instance mutex, which would then block the elevated
+         instance the logon scheduled task starts. Leaving this off lets the
+         scheduled task open the tray cleanly (elevated, no UAC prompt) at the next
+         sign-in, which is also when the post-install validation runs all-green.
+         Power users can still tick it to launch immediately (non-elevated). -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch RunAS Helper now (non-elevated; sign out/in for full elevation)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="0" />
+
+    <!-- WixShellExec runs as the (impersonated) installing user, so the tray app
+         appears on that user's desktop. Reuses the same util CA binary already
+         used for the scheduled-task action below. -->
+    <Property Id="WixShellExecTarget" Value="[#ClientExe]" />
+    <CustomAction Id="LaunchApplication"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixShellExec"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="check" />
+
+    <UI>
+      <Publish Dialog="ExitDialog"
+               Control="Finish"
+               Event="DoAction"
+               Value="LaunchApplication"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+    </UI>
 
   </Package>
 </Wix>

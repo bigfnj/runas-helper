@@ -111,6 +111,96 @@ internal sealed class ElevationLauncher
         }
     }
 
+    /// <summary>
+    /// Acquires the TrustedInstaller token (without launching anything), confirms
+    /// it really belongs to NT SERVICE\TrustedInstaller, and ensures the worker
+    /// thread is reverted to its own identity afterwards. Used by the tray app's
+    /// post-install validation to prove the elevation chain works end to end.
+    /// </summary>
+    public unsafe bool ValidateToken(out string account)
+    {
+        account = string.Empty;
+        Initialize();
+
+        if (_hElevatedToken == IntPtr.Zero)
+        {
+            Log("Validation: TrustedInstaller token could not be acquired.");
+            return false;
+        }
+
+        Log("Validating cached TrustedInstaller token...");
+
+        // First call sizes the buffer (returns false + ERROR_INSUFFICIENT_BUFFER).
+        NativeMethods.GetTokenInformation(
+            _hElevatedToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenUser,
+            null, 0, out uint len);
+        if (len == 0)
+        {
+            Log($"Validation: GetTokenInformation(size) failed. " +
+                $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            return false;
+        }
+
+        byte* buf = stackalloc byte[(int)len];
+        if (!NativeMethods.GetTokenInformation(
+                _hElevatedToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenUser,
+                buf, len, out _))
+        {
+            Log($"Validation: GetTokenInformation failed. " +
+                $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            return false;
+        }
+
+        // TOKEN_USER begins with a SID_AND_ATTRIBUTES whose first field is the SID pointer.
+        IntPtr pSid = *(IntPtr*)buf;
+
+        string sidString = "(unknown)";
+        if (NativeMethods.ConvertSidToStringSidW(pSid, out IntPtr pStr) && pStr != IntPtr.Zero)
+        {
+            sidString = Marshal.PtrToStringUni(pStr) ?? sidString;
+            NativeMethods.LocalFree(pStr);
+        }
+
+        account = LookupSid(pSid);
+        Log($"Token user: {account} (SID {sidString})");
+
+        bool isTrustedInstaller =
+            string.Equals(sidString, TrustedInstallerSid, StringComparison.OrdinalIgnoreCase)
+            || account.EndsWith("TrustedInstaller", StringComparison.OrdinalIgnoreCase);
+
+        if (isTrustedInstaller)
+            Log("Validation OK: token belongs to NT SERVICE\\TrustedInstaller.");
+        else
+            Log($"Validation FAILED: token is not TrustedInstaller (resolved {account}).");
+
+        // Belt and braces: make sure no impersonation mask remains on this thread
+        // before it returns to the pool. (Initialize already reverts; repeat here
+        // so a future refactor of Initialize cannot silently leak impersonation.)
+        if (!NativeMethods.RevertToSelf())
+            Log($"Warning: RevertToSelf after validation failed. " +
+                $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+
+        return isTrustedInstaller;
+    }
+
+    // Well-known SID of NT SERVICE\TrustedInstaller.
+    private const string TrustedInstallerSid =
+        "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
+    private unsafe string LookupSid(IntPtr pSid)
+    {
+        char* name = stackalloc char[256];
+        char* dom  = stackalloc char[256];
+        uint  cchName = 256, cchDom = 256;
+        if (NativeMethods.LookupAccountSidW(null, pSid, name, ref cchName, dom, ref cchDom, out _))
+        {
+            string d = new string(dom);
+            string n = new string(name);
+            return string.IsNullOrEmpty(d) ? n : $"{d}\\{n}";
+        }
+        return "(unresolved account)";
+    }
+
     // ── Privilege adjustment ─────────────────────────────────────────────
 
     private void AdjustPrivileges()

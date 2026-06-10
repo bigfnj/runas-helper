@@ -40,7 +40,7 @@ namespace RunAsHelper.Core
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool IsUserAnAdmin();
 
-        [LibraryImport("user32.dll")]
+        [LibraryImport("user32.dll", EntryPoint = "SendMessageW")]
         internal static partial IntPtr SendMessage(
             IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
@@ -48,5 +48,27 @@ namespace RunAsHelper.Core
         [LibraryImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool DestroyIcon(IntPtr hIcon);
+
+        // ── Installer lookup (post-install validation recovery) ───────────────
+
+        // Finds an installed ProductCode from the stable UpgradeCode so the
+        // validation dialog's Repair/Uninstall actions can target this install.
+        [LibraryImport("msi.dll", StringMarshalling = StringMarshalling.Utf16)]
+        internal static unsafe partial uint MsiEnumRelatedProductsW(
+            string lpUpgradeCode, uint dwReserved, uint iProductIndex, char* lpProductBuf);
+
+        /// <summary>
+        /// Returns the ProductCode GUID of the installed product registered under
+        /// <paramref name="upgradeCode"/>, or null if it is not installed.
+        /// </summary>
+        internal static unsafe string? FindInstalledProductCode(string upgradeCode)
+        {
+            const uint ErrorSuccess = 0;
+            // A ProductCode GUID is always 38 characters plus a null terminator.
+            char* buf = stackalloc char[40];
+            return MsiEnumRelatedProductsW(upgradeCode, 0, 0, buf) == ErrorSuccess
+                ? new string(buf)
+                : null;
+        }
     }
 }

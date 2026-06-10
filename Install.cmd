@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set MSI=%~dp0RunAsHelper.Installer\bin\Release\RunAsHelper-Setup.msi
+set MSI=%~dp0RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi
 set LOG=%TEMP%\RunAsHelper-Setup.log
 
 if not exist "%MSI%" (
