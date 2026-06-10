@@ -22,6 +22,8 @@ namespace RunAsHelper
             menuTools         = new ToolStripMenuItem();
             menuSettings      = new ToolStripMenuItem();
             menuToolsSep1     = new ToolStripSeparator();
+            menuValidate      = new ToolStripMenuItem();
+            menuToolsSepV     = new ToolStripSeparator();
             menuImport        = new ToolStripMenuItem();
             menuExport        = new ToolStripMenuItem();
             menuToolsSep2     = new ToolStripSeparator();
@@ -54,6 +56,7 @@ namespace RunAsHelper
 
             // ── Tools menu ───────────────────────────────────────────────────
             menuSettings.Text    = "Settings...";
+            menuValidate.Text    = "Validate Installation...";
             menuImport.Text      = "Import Saved Apps...";
             menuExport.Text      = "Export Saved Apps...";
             menuClearRecent.Text = "Clear Recent History";
@@ -62,6 +65,7 @@ namespace RunAsHelper
             menuTools.DropDownItems.AddRange(new ToolStripItem[]
             {
                 menuSettings, menuToolsSep1,
+                menuValidate, menuToolsSepV,
                 menuImport, menuExport,
                 menuToolsSep2, menuClearRecent,
             });
@@ -184,6 +188,8 @@ namespace RunAsHelper
         private ToolStripMenuItem    menuTools;
         private ToolStripMenuItem    menuSettings;
         private ToolStripSeparator   menuToolsSep1;
+        private ToolStripMenuItem    menuValidate;
+        private ToolStripSeparator   menuToolsSepV;
         private ToolStripMenuItem    menuImport;
         private ToolStripMenuItem    menuExport;
         private ToolStripSeparator   menuToolsSep2;

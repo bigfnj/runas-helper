@@ -5,6 +5,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Win32;
 using RunAsHelper.Core;
 using RunAsHelper.Settings;
 
@@ -52,6 +53,7 @@ namespace RunAsHelper
             menuExit.Click         += MenuExit_Click;
             menuStartService.Click += MenuStartService_Click;
             menuSettings.Click     += MenuSettings_Click;
+            menuValidate.Click     += MenuValidate_Click;
             menuImport.Click       += MenuImport_Click;
             menuExport.Click       += MenuExport_Click;
             menuClearRecent.Click  += MenuClearRecent_Click;
@@ -110,6 +112,11 @@ namespace RunAsHelper
 
             comboPriority.SelectedIndex = Math.Clamp(_settings.PriorityIndex, 0, comboPriority.Items.Count - 1);
             RefreshMruCombo();
+
+            // First launch after an install: run the validation popup. Queued here
+            // (before the non-admin early-return) so its "Restart as administrator"
+            // recovery is reachable even when the tray was started unelevated.
+            BeginInvoke(TryShowPendingValidation);
 
             if (!NativeMethods.IsUserAnAdmin())
             {
@@ -242,7 +249,44 @@ namespace RunAsHelper
             using var form = new SettingsForm(_settings);
             form.ShowDialog(this);
         }
+        private void MenuValidate_Click(object? sender, EventArgs e)
+        {
+            using var form = new ValidationForm(standalone: false);
+            form.ShowDialog(this);
+        }
 
+        // Shows the validation dialog once after a fresh install. The MSI writes
+        // HKLM\Software\RunAsHelper\PendingValidation = <version>; once validated
+        // we record that version in HKCU so the popup does not reappear every launch.
+        private void TryShowPendingValidation()
+        {
+            try
+            {
+                using var hklm = Registry.LocalMachine.OpenSubKey(@"Software\RunAsHelper");
+                if (hklm?.GetValue("PendingValidation") is not string pending || pending.Length == 0)
+                    return;
+
+                using (var hkcu = Registry.CurrentUser.OpenSubKey(@"Software\RunAsHelper"))
+                {
+                    if (hkcu?.GetValue("ValidatedVersion") is string done &&
+                        string.Equals(done, pending, StringComparison.OrdinalIgnoreCase))
+                        return;
+                }
+
+                using var form = new ValidationForm(standalone: false);
+                form.ShowDialog(this);
+
+                if (form.AllPassed)
+                {
+                    using var key = Registry.CurrentUser.CreateSubKey(@"Software\RunAsHelper");
+                    key?.SetValue("ValidatedVersion", pending);
+                }
+            }
+            catch
+            {
+                // Registry access is best-effort; never block startup on it.
+            }
+        }
         private void MenuImport_Click(object? sender, EventArgs e)
         {
             using var dlg = new OpenFileDialog

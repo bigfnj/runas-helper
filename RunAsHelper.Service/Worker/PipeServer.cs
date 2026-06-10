@@ -86,8 +86,8 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                 var request = await PipeProtocol.ReadLaunchRequestAsync(pipe, ct);
                 if (request is null) return;
 
-                logger.LogInformation("Launch request: '{CommandLine}' priority=0x{Priority:X}",
-                    request.CommandLine, request.Priority);
+                logger.LogInformation("{Verb} request: '{CommandLine}' priority=0x{Priority:X}",
+                    request.Verb, request.CommandLine, request.Priority);
 
                 await _gate.WaitAsync(ct);
                 try
@@ -101,7 +101,9 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     {
                         var launchTask = Task.Run(() =>
                         {
-                            bool ok = launcher.LaunchElevated(request.CommandLine, request.Priority);
+                            bool ok = request.Verb == "validate"
+                                ? launcher.ValidateToken(out _)
+                                : launcher.LaunchElevated(request.CommandLine, request.Priority);
                             logChannel.Writer.Complete();
                             return ok;
                         }, ct);

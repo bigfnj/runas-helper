@@ -8,11 +8,23 @@ namespace RunAsHelper
     internal static class Program
     {
         // Unique name — prevents collisions with other apps on the system.
-        private const string MutexName = @"Global\RunAsHelper_{3A8F2C1D-7E4B-4F9A-A2D6-8C5F1B3E9072}";
+        private const string MutexName = AppInstance.MutexName;
 
         [STAThread]
         static void Main(string[] args)
         {
+            // Post-install / on-demand validation: open the validation dialog
+            // standalone (used by the "Restart as administrator" recovery path,
+            // which relaunches this exe elevated).
+            if (args.Length == 1 &&
+                (args[0].Equals("--revalidate", StringComparison.OrdinalIgnoreCase) ||
+                 args[0].Equals("/validate", StringComparison.OrdinalIgnoreCase)))
+            {
+                ApplicationConfiguration.Initialize();
+                Application.Run(new ValidationForm(standalone: true));
+                return;
+            }
+
             // CLI mode: RunAsHelper.exe [/p:n] <path with optional args>
             if (args.Length > 0)
             {
