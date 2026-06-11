@@ -25,4 +25,10 @@
     <Compile Include="..\RunAsHelper.Shared\Protocol\PipeMessages.cs" Link="Protocol\PipeMessages.cs" />
     <Compile Include="..\RunAsHelper.Shared\Protocol\PipeProtocol.cs" Link="Protocol\PipeProtocol.cs" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embed the app icon so the form/tray icons can load it at runtime.
+         ApplicationIcon only sets the EXE's Win32 icon, not Form.Icon. -->
+    <EmbeddedResource Include="..\power.ico" Link="power.ico" LogicalName="power.ico" />
+  </ItemGroup>
 </Project>

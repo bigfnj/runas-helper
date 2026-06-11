@@ -37,9 +37,24 @@ namespace RunAsHelper
         public MainForm()
         {
             InitializeComponent();
+            // Set the window icon to power.ico before SetTrayIcon(), which derives
+            // the tray icons (grey + colour) from this.Icon. Without this the form
+            // falls back to the default WinForms icon.
+            if (LoadAppIcon() is { } appIcon) Icon = appIcon;
             WireEvents();
             SetTrayIcon();
             RebuildSavedAppsMenu();
+        }
+
+        // Loads power.ico (embedded as a manifest resource) for the window/tray icon.
+        private static Icon? LoadAppIcon()
+        {
+            try
+            {
+                using var stream = typeof(MainForm).Assembly.GetManifestResourceStream("power.ico");
+                return stream is null ? null : new Icon(stream);
+            }
+            catch { return null; }
         }
 
         // ── Setup ────────────────────────────────────────────────────────────
