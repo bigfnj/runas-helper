@@ -41,6 +41,13 @@ namespace RunAsHelper.Core
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool IsUserAnAdmin();
 
+        // Attach to the launching console so CLI/help output is visible (the app
+        // is a WinExe and has no console of its own).
+        internal const uint ATTACH_PARENT_PROCESS = 0xFFFFFFFF;
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool AttachConsole(uint dwProcessId);
+
         [LibraryImport("user32.dll", EntryPoint = "SendMessageW")]
         internal static partial IntPtr SendMessage(
             IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);

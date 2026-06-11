@@ -31,6 +31,7 @@ internal sealed class ItemEditForm : Form
     private readonly TextBox  _txtParam    = new();
     private readonly TextBox  _txtWorkDir  = new();
     private readonly ComboBox _comboPriority = new();
+    private readonly ComboBox _comboAccount  = new();
 
     private readonly RadioButton _rbNormal    = new() { Text = "Normal" };
     private readonly RadioButton _rbMinimized = new() { Text = "Minimized" };
@@ -52,7 +53,7 @@ internal sealed class ItemEditForm : Form
     private void BuildLayout(bool editing)
     {
         Text            = editing ? "Edit Item" : "Add Application";
-        ClientSize      = new Size(460, 372);
+        ClientSize      = new Size(460, 416);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox     = false;
         MinimizeBox     = false;
@@ -106,6 +107,14 @@ internal sealed class ItemEditForm : Form
         foreach (var rb in new[] { _rbNormal, _rbMinimized, _rbMaximized, _rbHidden })
             rb.AutoSize = true;
 
+        // Run as (account): TrustedInstaller (SYSTEM + TI group) or pure SYSTEM.
+        y += 34;
+        AddLabel("Run as:", left, y + 2);
+        _comboAccount.Location      = new Point(72, y);
+        _comboAccount.Size          = new Size(180, 23);
+        _comboAccount.DropDownStyle  = ComboBoxStyle.DropDownList;
+        _comboAccount.Items.AddRange(new object[] { "TrustedInstaller", "SYSTEM" });
+
         // Buttons
         int btnY = ClientSize.Height - 38;
         var btnCancel = new Button
@@ -135,7 +144,7 @@ internal sealed class ItemEditForm : Form
             _txtName, _txtParam,
             _txtWorkDir, btnBrowseDir,
             _rbNormal, _rbMinimized, _rbMaximized, _rbHidden,
-            _comboPriority,
+            _comboPriority, _comboAccount,
             btnSave, btnSaveRun, btnCancel,
         });
     }
@@ -150,6 +159,9 @@ internal sealed class ItemEditForm : Form
         uint priority = a?.Priority ?? NativeMethods.NORMAL_PRIORITY_CLASS;
         int idx = Array.IndexOf(PriorityClasses, priority);
         _comboPriority.SelectedIndex = idx >= 0 ? idx : 2;   // default Normal
+
+        _comboAccount.SelectedIndex =
+            string.Equals(a?.Account, "system", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
 
         switch (a?.WindowsState ?? WindowsState.Normal)
         {
@@ -230,6 +242,7 @@ internal sealed class ItemEditForm : Form
             Priority         = PriorityClasses[Math.Max(0, _comboPriority.SelectedIndex)],
             WorkingDirectory = _txtWorkDir.Text.Trim(),
             WindowsState     = SelectedState(),
+            Account          = _comboAccount.SelectedIndex == 1 ? "system" : "ti",
         };
         RunAfterSave  = run;
         DialogResult  = DialogResult.OK;

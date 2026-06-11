@@ -16,6 +16,7 @@ namespace RunAsHelper.Settings
         public uint         Priority         { get; init; } = 0x20;          // NORMAL_PRIORITY_CLASS
         public string       WorkingDirectory { get; init; } = string.Empty;
         public WindowsState WindowsState     { get; init; } = WindowsState.Normal;
+        public string       Account          { get; init; } = "ti";          // "ti" | "system"
 
         // Legacy field from pre-1.2 settings.json; migrated to Location/Parameter on load.
         public string? CommandLine { get; init; }

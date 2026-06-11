@@ -15,6 +15,7 @@ namespace RunAsHelper.Service.Core;
 internal sealed class ElevationLauncher
 {
     private volatile bool   _initialized;
+    private volatile bool   _privilegesAdjusted;
     private volatile IntPtr _hElevatedToken = IntPtr.Zero;
     private          IntPtr _hNtDll   = IntPtr.Zero;
 
@@ -32,10 +33,9 @@ internal sealed class ElevationLauncher
     /// </summary>
     public void Initialize()
     {
+        EnsurePrivileges();
         if (!_initialized)
         {
-            Log("Enabling privileges...");
-            AdjustPrivileges();
             Log("Impersonating system...");
             if (!ImpersonateSystem()) { Log("Failed to impersonate system."); return; }
             _initialized = true;
@@ -65,45 +65,85 @@ internal sealed class ElevationLauncher
     public bool LaunchElevated(string commandLine,
         uint priorityClass = NativeMethods.NORMAL_PRIORITY_CLASS,
         string? workingDirectory = null,
-        int showWindow = NativeMethods.SW_SHOWNORMAL)
+        int showWindow = NativeMethods.SW_SHOWNORMAL,
+        string account = "ti")
     {
-        Initialize();
+        bool asSystem = string.Equals(account, "system", StringComparison.OrdinalIgnoreCase);
 
-        if (_hElevatedToken == IntPtr.Zero)
+        // Pick the source token: the LocalSystem (service) token for account=system
+        // — a pure SYSTEM token with no TrustedInstaller group — or the stolen
+        // TrustedInstaller token (SYSTEM + TI group) otherwise.
+        IntPtr source;
+        bool   closeSource = false;
+        if (asSystem)
         {
-            Log("Failed to acquire elevated token");
-            return false;
-        }
-
-        Log("Duplicating elevated token...");
-        IntPtr hDup;
-        unsafe
-        {
-            var satr = new NativeMethods.SECURITY_ATTRIBUTES
+            EnsurePrivileges();
+            if (!NativeMethods.OpenProcessToken(
+                    NativeMethods.GetCurrentProcess(),
+                    NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_QUERY, out source))
             {
-                nLength = (uint)sizeof(NativeMethods.SECURITY_ATTRIBUTES)
-            };
-            // TokenPrimary is required by CreateProcessWithTokenW.
-            if (!NativeMethods.DuplicateTokenEx(
-                    _hElevatedToken, NativeMethods.MAXIMUM_ALLOWED, &satr,
-                    NativeMethods.SecurityImpersonationLevel.SecurityImpersonation,
-                    NativeMethods.TokenType.TokenPrimary,
-                    out hDup))
-            {
-                Log($"LaunchElevated::Failed to duplicate elevated token, " +
-                    $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                Log($"Failed to open LocalSystem token. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 return false;
             }
+            closeSource = true;
+            Log("Account=system — launching with the LocalSystem token (no TrustedInstaller group).");
+        }
+        else
+        {
+            Initialize();
+            if (_hElevatedToken == IntPtr.Zero)
+            {
+                Log("Failed to acquire elevated token");
+                return false;
+            }
+            source = _hElevatedToken;
+            Log("Account=trustedinstaller — launching with the TrustedInstaller token.");
         }
 
         try
         {
-            return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow);
+            Log("Duplicating token...");
+            IntPtr hDup;
+            unsafe
+            {
+                var satr = new NativeMethods.SECURITY_ATTRIBUTES
+                {
+                    nLength = (uint)sizeof(NativeMethods.SECURITY_ATTRIBUTES)
+                };
+                // TokenPrimary is required by CreateProcessAsUser.
+                if (!NativeMethods.DuplicateTokenEx(
+                        source, NativeMethods.MAXIMUM_ALLOWED, &satr,
+                        NativeMethods.SecurityImpersonationLevel.SecurityImpersonation,
+                        NativeMethods.TokenType.TokenPrimary,
+                        out hDup))
+                {
+                    Log($"LaunchElevated::Failed to duplicate token, " +
+                        $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                    return false;
+                }
+            }
+
+            try
+            {
+                return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow);
+            }
+            finally
+            {
+                NativeMethods.CloseHandle(hDup);
+            }
         }
         finally
         {
-            NativeMethods.CloseHandle(hDup);
+            if (closeSource) NativeMethods.CloseHandle(source);
         }
+    }
+
+    private void EnsurePrivileges()
+    {
+        if (_privilegesAdjusted) return;
+        Log("Enabling privileges...");
+        AdjustPrivileges();
+        _privilegesAdjusted = true;
     }
 
     public void ReleaseToken()

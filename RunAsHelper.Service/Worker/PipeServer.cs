@@ -105,7 +105,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                                 ? launcher.ValidateToken(out _)
                                 : launcher.LaunchElevated(
                                     request.CommandLine, request.Priority,
-                                    request.WorkingDirectory, request.ShowWindow);
+                                    request.WorkingDirectory, request.ShowWindow, request.Account);
                             logChannel.Writer.Complete();
                             return ok;
                         }, ct);

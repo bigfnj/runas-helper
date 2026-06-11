@@ -42,6 +42,19 @@ internal sealed class PipeClient
         => SendAsync(new LaunchRequest(commandLine, priority, "launch", workingDirectory, showWindow), ct);
 
     /// <summary>
+    /// Launch with working directory, window state, and account ("ti" for
+    /// TrustedInstaller or "system" for LocalSystem).
+    /// </summary>
+    public Task<bool> LaunchElevatedAsync(
+        string commandLine,
+        uint priority,
+        string workingDirectory,
+        int showWindow,
+        string account,
+        CancellationToken ct = default)
+        => SendAsync(new LaunchRequest(commandLine, priority, "launch", workingDirectory, showWindow, account), ct);
+
+    /// <summary>
     /// Ask the service to acquire and release a TrustedInstaller token without
     /// launching anything — used by post-install validation. Streams the service's
     /// log lines (including the resolved account) via <see cref="LogMessage"/>.
