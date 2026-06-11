@@ -123,14 +123,6 @@ namespace RunAsHelper
             btnRun.Text      = "Run";
             btnRun.FlatStyle = FlatStyle.System;
 
-            // Activate overlays the quick-run row when NOT elevated (shown in code).
-            btnActivate.Location  = new System.Drawing.Point(124, 26);
-            btnActivate.Size      = new System.Drawing.Size(512, 24);
-            btnActivate.Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            btnActivate.Text      = "Activate — elevate with Avecto";
-            btnActivate.FlatStyle = FlatStyle.System;
-            btnActivate.Visible   = false;
-
             lblSaved.AutoSize = true;
             lblSaved.Location = new System.Drawing.Point(8, 60);
             lblSaved.Font     = new System.Drawing.Font("Segoe UI", 9.5f, System.Drawing.FontStyle.Bold);
@@ -169,7 +161,7 @@ namespace RunAsHelper
 
             panelTop.Controls.AddRange(new Control[]
             {
-                lblQuick, comboPriority, comboPath, btnBrowse, btnRun, btnActivate,
+                lblQuick, comboPriority, comboPath, btnBrowse, btnRun,
                 lblSaved, btnAddApp, btnRunSaved, btnEditApp, btnRemoveApp, btnUpApp, btnDownApp,
             });
 
@@ -186,7 +178,16 @@ namespace RunAsHelper
 
             // ── Bottom panel ──────────────────────────────────────────────────
             panelBottom.Dock   = DockStyle.Bottom;
-            panelBottom.Height  = 96;
+            panelBottom.Height  = 116;
+
+            // Activate bar: a prominent strip at the top of the bottom panel,
+            // shown only when NOT elevated; it disappears once the elevated
+            // instance takes over (invisible Dock=Top controls take no space).
+            btnActivate.Dock      = DockStyle.Top;
+            btnActivate.Height    = 30;
+            btnActivate.Text      = "Activate — elevate with Avecto";
+            btnActivate.FlatStyle = FlatStyle.System;
+            btnActivate.Visible   = false;
 
             txtLog.Dock       = DockStyle.Fill;
             txtLog.Multiline  = true;
@@ -205,6 +206,7 @@ namespace RunAsHelper
 
             panelBottom.Controls.Add(txtLog);
             panelBottom.Controls.Add(lblNotAdmin);
+            panelBottom.Controls.Add(btnActivate);
 
             // ── Tray menu ────────────────────────────────────────────────────
             menuActivate.Text    = "Activate — elevate with Avecto";

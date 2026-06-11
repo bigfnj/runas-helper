@@ -155,7 +155,6 @@ namespace RunAsHelper
                 // tray can't be auto-started elevated by the logon task.
                 btnRun.Enabled = comboPriority.Enabled = comboPath.Enabled =
                     btnBrowse.Enabled = false;
-                btnRun.Visible       = false;
                 btnActivate.Visible  = true;
                 menuActivate.Visible = true;
                 NativeMethods.SendMessage(btnActivate.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
