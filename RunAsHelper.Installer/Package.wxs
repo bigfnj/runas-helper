@@ -169,12 +169,12 @@
 
     <!-- Exit-dialog "Launch RunAS Helper" checkbox. CHECKED by default: it starts
          the tray (non-elevated, in the installing user's session) right after
-         install. That first run also registers the login auto-start (HKCU Run →
-         "exe" --tray), so it comes up on its own at every later sign-in. The old
-         reason to leave it off (a non-elevated tray blocking the elevated logon
-         scheduled-task instance via the single-instance mutex) no longer applies:
-         the app now elevates on demand via the Activate flow rather than relying
-         on the logon task. Click the tray's Activate bar to elevate. -->
+         install. That first run also registers the login auto-start (an HKCU Run
+         entry that opens the tray icon only), so it comes up on its own at every
+         later sign-in. The old reason to leave it off (a non-elevated tray
+         blocking the elevated logon scheduled-task instance via the single-instance
+         mutex) no longer applies: the app now elevates on demand via the Activate
+         flow rather than relying on the logon task. -->
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch RunAS Helper now" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
 
