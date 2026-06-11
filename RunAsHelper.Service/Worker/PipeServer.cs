@@ -103,7 +103,9 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                         {
                             bool ok = request.Verb == "validate"
                                 ? launcher.ValidateToken(out _)
-                                : launcher.LaunchElevated(request.CommandLine, request.Priority);
+                                : launcher.LaunchElevated(
+                                    request.CommandLine, request.Priority,
+                                    request.WorkingDirectory, request.ShowWindow);
                             logChannel.Writer.Complete();
                             return ok;
                         }, ct);

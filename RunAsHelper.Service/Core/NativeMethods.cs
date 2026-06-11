@@ -50,6 +50,14 @@ internal static partial class NativeMethods
     // PE optional-header subsystem value for console (character-mode) apps.
     internal const ushort IMAGE_SUBSYSTEM_WINDOWS_CUI = 3;
 
+    // STARTUPINFO.dwFlags: honor wShowWindow. Plus the SW_* show-window states
+    // the client maps a saved app's "Windows State" onto.
+    internal const uint   STARTF_USESHOWWINDOW = 0x00000001;
+    internal const ushort SW_HIDE              = 0;
+    internal const ushort SW_SHOWNORMAL        = 1;
+    internal const ushort SW_SHOWMAXIMIZED     = 3;
+    internal const ushort SW_SHOWMINNOACTIVE   = 7;
+
     // ── Priority classes ─────────────────────────────────────────────────
     internal const uint NORMAL_PRIORITY_CLASS       = 0x00000020;
 
