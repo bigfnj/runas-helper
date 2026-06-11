@@ -175,14 +175,25 @@ internal sealed class ElevationLauncher
         account = LookupSid(pSid);
         Log($"Token user: {account} (SID {sidString})");
 
-        bool isTrustedInstaller =
+        bool userIsTI =
             string.Equals(sidString, TrustedInstallerSid, StringComparison.OrdinalIgnoreCase)
             || account.EndsWith("TrustedInstaller", StringComparison.OrdinalIgnoreCase);
 
-        if (isTrustedInstaller)
-            Log("Validation OK: token belongs to NT SERVICE\\TrustedInstaller.");
+        // The Windows Modules Installer (TrustedInstaller) service runs as
+        // LocalSystem, so a token stolen from it has user = SYSTEM with the
+        // TrustedInstaller SID carried as a GROUP. That group is what grants
+        // TrustedInstaller-level access, so it is the real success criterion.
+        bool groupHasTI = TokenHasGroup(_hElevatedToken, TrustedInstallerSid);
+        Log($"TrustedInstaller group present in token: {groupHasTI}");
+
+        bool isTrustedInstaller = userIsTI || groupHasTI;
+
+        if (userIsTI)
+            Log("Validation OK: token user is NT SERVICE\\TrustedInstaller.");
+        else if (groupHasTI)
+            Log("Validation OK: token runs as SYSTEM and carries the NT SERVICE\\TrustedInstaller group (TrustedInstaller-level access).");
         else
-            Log($"Validation FAILED: token is not TrustedInstaller (resolved {account}).");
+            Log($"Validation FAILED: token has neither the TrustedInstaller user nor group (resolved {account}).");
 
         // Belt and braces: make sure no impersonation mask remains on this thread
         // before it returns to the pool. (Initialize already reverts; repeat here
@@ -210,6 +221,37 @@ internal sealed class ElevationLauncher
             return string.IsNullOrEmpty(d) ? n : $"{d}\\{n}";
         }
         return "(unresolved account)";
+    }
+
+    // True if the token carries the given SID (string form) as a group. Used to
+    // detect TrustedInstaller-level access on a SYSTEM-user token.
+    private unsafe bool TokenHasGroup(IntPtr hToken, string sidString)
+    {
+        NativeMethods.GetTokenInformation(
+            hToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenGroups, null, 0, out uint len);
+        if (len == 0) return false;
+
+        byte* buf = stackalloc byte[(int)len];
+        if (!NativeMethods.GetTokenInformation(
+                hToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenGroups, buf, len, out _))
+            return false;
+
+        // TOKEN_GROUPS = DWORD GroupCount; SID_AND_ATTRIBUTES Groups[]. The array
+        // is pointer-aligned, so it starts at IntPtr.Size (x64) after the count.
+        uint count = *(uint*)buf;
+        var groups = (NativeMethods.SID_AND_ATTRIBUTES*)(buf + IntPtr.Size);
+
+        for (uint i = 0; i < count; i++)
+        {
+            if (NativeMethods.ConvertSidToStringSidW(groups[i].Sid, out IntPtr pStr) && pStr != IntPtr.Zero)
+            {
+                string s = Marshal.PtrToStringUni(pStr) ?? string.Empty;
+                NativeMethods.LocalFree(pStr);
+                if (string.Equals(s, sidString, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        return false;
     }
 
     // Logs the full privilege set carried by the stolen token, each marked

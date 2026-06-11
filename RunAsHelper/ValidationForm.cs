@@ -312,8 +312,11 @@ namespace RunAsHelper
                 // generic "could not acquire" message.
                 _lastServiceLog = message.Trim();
 
-            // Capture the resolved account line for the token row detail.
+            // Capture the resolved account line, then prefer the final
+            // "Validation OK" explanation as the token row's success detail.
             if (message.StartsWith("Token user:", StringComparison.OrdinalIgnoreCase))
+                _tokenDetail = message;
+            if (message.StartsWith("Validation OK", StringComparison.OrdinalIgnoreCase))
                 _tokenDetail = message;
 
             // Mirror every streamed line into the Details pane, verbatim.
