@@ -1,6 +1,10 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
     <OutputName>RunAsHelper-Setup</OutputName>
+    <!-- Build a 64-bit package: the apps are win-x64, so the MSI should be x64 too.
+         This makes ProgramFiles6432Folder resolve to C:\Program Files (not the
+         (x86) folder) and keeps registry components on the 64-bit view. -->
+    <InstallerPlatform>x64</InstallerPlatform>
     <!--
       ICE03 fires because the deferred scheduled-task CustomAction stores a
       ~400-char PowerShell command in the CustomAction.Target column (declared
