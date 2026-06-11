@@ -44,6 +44,7 @@ namespace RunAsHelper
             WireEvents();
             SetTrayIcon();
             RebuildSavedAppsMenu();
+            RefreshAppsList();
         }
 
         // Loads power.ico (embedded as a manifest resource) for the window/tray icon.
@@ -62,8 +63,17 @@ namespace RunAsHelper
         private void WireEvents()
         {
             btnRun.Click           += BtnRun_Click;
-            btnSave.Click          += BtnSave_Click;
             btnBrowse.Click        += BtnBrowse_Click;
+            btnAddApp.Click        += (_, _) => AddApplication();
+            btnRunSaved.Click      += async (_, _) => await RunSelectedAppAsync();
+            btnEditApp.Click       += (_, _) => EditSelectedApp();
+            btnRemoveApp.Click     += (_, _) => RemoveSelectedApp();
+            btnUpApp.Click         += (_, _) => MoveSelectedApp(-1);
+            btnDownApp.Click       += (_, _) => MoveSelectedApp(+1);
+            lvApps.SelectedIndexChanged += (_, _) => UpdateAppButtonStates();
+            lvApps.DoubleClick     += async (_, _) => await RunSelectedAppAsync();
+            lvApps.KeyDown         += LvApps_KeyDown;
+            lvApps.Resize          += (_, _) => StretchAppColumns();
             menuShow.Click         += (_, _) => ShowFromTray();
             menuExit.Click         += MenuExit_Click;
             menuStartService.Click += MenuStartService_Click;
@@ -144,7 +154,7 @@ namespace RunAsHelper
                 // standard-user/Avecto machine this is the supported way up — the
                 // tray can't be auto-started elevated by the logon task.
                 btnRun.Enabled = comboPriority.Enabled = comboPath.Enabled =
-                    btnBrowse.Enabled = btnSave.Enabled = false;
+                    btnBrowse.Enabled = false;
                 btnRun.Visible       = false;
                 btnActivate.Visible  = true;
                 menuActivate.Visible = true;
@@ -389,9 +399,19 @@ namespace RunAsHelper
                 }
 
                 foreach (var app in imported)
-                    _settings.SaveApp(app);
+                {
+                    var a = app;
+                    // Migrate legacy exports that used a single CommandLine field.
+                    if (string.IsNullOrEmpty(a.Location) && !string.IsNullOrEmpty(a.CommandLine))
+                    {
+                        var (loc, param) = SavedApplication.SplitCommandLine(a.CommandLine!);
+                        a = a with { Location = loc, Parameter = param, CommandLine = null };
+                    }
+                    _settings.SaveApp(a);
+                }
 
                 _settings.Save();
+                RefreshAppsList();
                 RebuildSavedAppsMenu();
                 AppendLog($"Imported {imported.Count} application(s).");
             }
@@ -505,7 +525,7 @@ namespace RunAsHelper
             {
                 menuSavedApps.DropDownItems.Add(new ToolStripSeparator());
                 var more = new ToolStripMenuItem("More...");
-                more.Click += (_, _) => OpenSavedAppsManager();
+                more.Click += (_, _) => ShowFromTray();
                 menuSavedApps.DropDownItems.Add(more);
             }
         }
@@ -535,39 +555,142 @@ namespace RunAsHelper
             }
         }
 
-        private void OpenSavedAppsManager()
-        {
-            using var form = new SavedAppsForm(_settings, _client);
-            form.ShowDialog(this);
-            RebuildSavedAppsMenu();
-        }
+        // ── Saved-apps list (main surface) ───────────────────────────────────
 
-        // ── Button handlers ──────────────────────────────────────────────────
-
-        private void BtnSave_Click(object? sender, EventArgs e)
+        private void RefreshAppsList()
         {
-            string path = comboPath.Text.Trim();
-            if (string.IsNullOrWhiteSpace(path))
+            int sel = SelectedAppIndex();
+            lvApps.BeginUpdate();
+            lvApps.Items.Clear();
+            foreach (var app in _settings.SavedApplications)
             {
-                AppendLog("Enter a path to save.");
-                return;
+                var item = new ListViewItem(app.Name) { Tag = app };
+                item.SubItems.Add(app.Location);
+                item.SubItems.Add(app.Parameter);
+                lvApps.Items.Add(item);
             }
+            lvApps.EndUpdate();
 
-            string defaultName = Path.GetFileNameWithoutExtension(path.Trim('"', ' '));
-            if (string.IsNullOrWhiteSpace(defaultName))
-                defaultName = path;
+            if (sel >= 0 && sel < lvApps.Items.Count)
+            {
+                lvApps.Items[sel].Selected = true;
+                lvApps.Items[sel].EnsureVisible();
+            }
+            StretchAppColumns();
+            UpdateAppButtonStates();
+        }
 
-            using var prompt = new NamePromptForm(defaultName);
-            if (prompt.ShowDialog(this) != DialogResult.OK) return;
+        // Stretch the "File Location" column to fill the list's free width.
+        private void StretchAppColumns()
+        {
+            if (lvApps.Columns.Count < 3) return;
+            int fixedW = lvApps.Columns[0].Width + lvApps.Columns[2].Width;
+            int avail  = lvApps.ClientSize.Width - fixedW - 4;
+            lvApps.Columns[1].Width = Math.Max(160, avail);
+        }
 
-            string name = prompt.EnteredName.Trim();
-            if (string.IsNullOrWhiteSpace(name)) return;
+        private void UpdateAppButtonStates()
+        {
+            bool has = lvApps.SelectedItems.Count > 0;
+            int  idx = has ? lvApps.SelectedItems[0].Index : -1;
+            btnRunSaved.Enabled  = has;
+            btnEditApp.Enabled   = has;
+            btnRemoveApp.Enabled = has;
+            btnUpApp.Enabled     = has && idx > 0;
+            btnDownApp.Enabled   = has && idx < lvApps.Items.Count - 1;
+        }
 
-            uint priority = PriorityClasses[comboPriority.SelectedIndex];
-            _settings.SaveApp(new SavedApplication { Name = name, Location = path, Priority = priority });
-            AppendLog($"Saved \"{name}\".");
+        private SavedApplication? SelectedApp()
+            => lvApps.SelectedItems.Count > 0 ? (SavedApplication)lvApps.SelectedItems[0].Tag! : null;
+
+        private int SelectedAppIndex()
+            => lvApps.SelectedItems.Count > 0 ? lvApps.SelectedItems[0].Index : -1;
+
+        private void SelectAppByName(string name)
+        {
+            foreach (ListViewItem it in lvApps.Items)
+                if (string.Equals(((SavedApplication)it.Tag!).Name, name, StringComparison.OrdinalIgnoreCase))
+                { it.Selected = true; it.EnsureVisible(); break; }
+        }
+
+        private void AddApplication()
+        {
+            using var dlg = new ItemEditForm(null);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+            _settings.SaveApp(dlg.Result);
+            RefreshAppsList();
+            RebuildSavedAppsMenu();
+            SelectAppByName(dlg.Result.Name);
+            AppendLog($"Saved \"{dlg.Result.Name}\".");
+            if (dlg.RunAfterSave) _ = LaunchSavedAppAsync(dlg.Result);
+        }
+
+        private void EditSelectedApp()
+        {
+            var app = SelectedApp();
+            if (app is null) return;
+            string originalName = app.Name;
+
+            using var dlg = new ItemEditForm(app);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+            // SaveApp matches by name; if renamed, drop the old entry first.
+            if (!string.Equals(originalName, dlg.Result.Name, StringComparison.OrdinalIgnoreCase))
+                _settings.RemoveSavedApp(originalName);
+            _settings.SaveApp(dlg.Result);
+            RefreshAppsList();
+            RebuildSavedAppsMenu();
+            SelectAppByName(dlg.Result.Name);
+            if (dlg.RunAfterSave) _ = LaunchSavedAppAsync(dlg.Result);
+        }
+
+        private void RemoveSelectedApp()
+        {
+            var app = SelectedApp();
+            if (app is null) return;
+            if (MessageBox.Show(this, $"Remove \"{app.Name}\"?", "RunAS Helper",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+
+            _settings.RemoveSavedApp(app.Name);
+            RefreshAppsList();
             RebuildSavedAppsMenu();
         }
+
+        private void MoveSelectedApp(int delta)
+        {
+            int idx = SelectedAppIndex();
+            if (idx < 0) return;
+            int newIdx = idx + delta;
+            if (newIdx < 0 || newIdx >= _settings.SavedApplications.Count) return;
+
+            _settings.MoveSavedApp(idx, newIdx);
+            RefreshAppsList();
+            RebuildSavedAppsMenu();
+            if (newIdx < lvApps.Items.Count)
+            {
+                lvApps.Items[newIdx].Selected = true;
+                lvApps.Items[newIdx].EnsureVisible();
+            }
+        }
+
+        private async Task RunSelectedAppAsync()
+        {
+            var app = SelectedApp();
+            if (app is not null) await LaunchSavedAppAsync(app);
+        }
+
+        private void LvApps_KeyDown(object? sender, KeyEventArgs e)
+        {
+            switch (e.KeyCode)
+            {
+                case Keys.Delete: RemoveSelectedApp(); break;
+                case Keys.F2:     EditSelectedApp();   break;
+                case Keys.Enter:  e.SuppressKeyPress = true; _ = RunSelectedAppAsync(); break;
+            }
+        }
+
+        // ── Quick run (one-off) ──────────────────────────────────────────────
 
         private async void BtnRun_Click(object? sender, EventArgs e)
         {
