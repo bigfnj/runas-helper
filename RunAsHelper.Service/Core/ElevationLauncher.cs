@@ -540,11 +540,24 @@ internal sealed class ElevationLauncher
 
         var (app, args) = ParseCommandLine(commandLine);
 
+        // Non-executable targets can't be launched by CreateProcess directly, so
+        // run them via their host (e.g. an .msc snap-in via mmc.exe). The host is
+        // resolved from PATH by passing a null lpApplicationName below.
+        string consoleProbe = string.IsNullOrEmpty(args) ? commandLine : app;
+        string? host = HostExe(app);
+        if (host is not null)
+        {
+            commandLine  = BuildHostCommand(host, app, args);
+            args         = string.Empty;   // take the PATH-resolved (null app) branch
+            consoleProbe = host;           // console state follows the host
+            Log($"Non-executable target — launching via {host}: {commandLine}");
+        }
+
         // Console-subsystem programs (cmd, powershell) launched from a service
         // get no usable window unless we allocate a fresh console. GUI apps
-        // (regedit, notepad) must NOT get one, or an empty console flashes up.
+        // (regedit, notepad, mmc) must NOT get one, or an empty console flashes up.
         uint creationFlags = NativeMethods.CREATE_UNICODE_ENVIRONMENT | priorityClass;
-        if (IsConsoleSubsystem(string.IsNullOrEmpty(args) ? commandLine : app))
+        if (IsConsoleSubsystem(consoleProbe))
         {
             creationFlags |= NativeMethods.CREATE_NEW_CONSOLE;
             Log("Console application detected — allocating an interactive console window.");
@@ -649,6 +662,34 @@ internal sealed class ElevationLauncher
         }
         finally { NativeMethods.CloseHandle(hSnap); }
         return result;
+    }
+
+    // The host executable for a non-executable target, or null if the target is
+    // itself runnable (.exe/.com). Lets saved .msc/.cpl/.bat/.ps1 entries launch.
+    private static string? HostExe(string app)
+    {
+        string ext = System.IO.Path.GetExtension(app.Trim().Trim('"')).ToLowerInvariant();
+        return ext switch
+        {
+            ".msc"           => "mmc.exe",
+            ".cpl"           => "control.exe",
+            ".bat" or ".cmd" => "cmd.exe",
+            ".ps1"           => "powershell.exe",
+            _                => null,
+        };
+    }
+
+    private static string BuildHostCommand(string host, string app, string args)
+    {
+        string quoted = $"\"{app.Trim().Trim('"')}\"";
+        string head = host switch
+        {
+            "cmd.exe"        => $"cmd.exe /c {quoted}",
+            "powershell.exe" => $"powershell.exe -ExecutionPolicy Bypass -File {quoted}",
+            "control.exe"    => $"control.exe {quoted}",
+            _                => $"mmc.exe {quoted}",
+        };
+        return string.IsNullOrEmpty(args) ? head : $"{head} {args}";
     }
 
     private static (string app, string args) ParseCommandLine(string commandLine)

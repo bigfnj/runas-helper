@@ -202,16 +202,30 @@ internal sealed class ItemEditForm : Form
             return;
         }
 
+        // Resolve now so we don't save an entry that will fail to launch: accept a
+        // full path or a name on the PATH (e.g. notepad.exe, lusrmgr.msc); error
+        // otherwise. Store the resolved full path for a reliable launch.
+        string? resolved = NativeMethods.ResolvePath(location);
+        if (resolved is null)
+        {
+            MessageBox.Show(this,
+                $"Couldn't find \"{location}\".\n\n" +
+                "Enter a full path, or a program/file name that's on the system PATH " +
+                "(for example: notepad.exe, lusrmgr.msc).",
+                "RunAS Helper", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         string name = _txtName.Text.Trim();
         if (string.IsNullOrWhiteSpace(name))
-            name = Path.GetFileNameWithoutExtension(location.Trim('"'));
+            name = Path.GetFileNameWithoutExtension(resolved);
         if (string.IsNullOrWhiteSpace(name))
-            name = location;
+            name = resolved;
 
         Result = new SavedApplication
         {
             Name             = name,
-            Location         = location.Trim('"'),
+            Location         = resolved,
             Parameter        = _txtParam.Text.Trim(),
             Priority         = PriorityClasses[Math.Max(0, _comboPriority.SelectedIndex)],
             WorkingDirectory = _txtWorkDir.Text.Trim(),
