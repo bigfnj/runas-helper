@@ -12,6 +12,7 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox      _chkMinimizeToTray    = new();
     private readonly CheckBox      _chkShowNotifications = new();
     private readonly CheckBox      _chkEnableLogging     = new();
+    private readonly CheckBox      _chkAllowCli          = new();
     private readonly NumericUpDown _nudMaxMru            = new();
 
     public SettingsForm(AppSettings settings)
@@ -24,7 +25,7 @@ internal sealed class SettingsForm : Form
     private void BuildLayout()
     {
         Text            = "Settings";
-        ClientSize      = new Size(330, 238);
+        ClientSize      = new Size(360, 280);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox     = false;
         MinimizeBox     = false;
@@ -51,6 +52,11 @@ internal sealed class SettingsForm : Form
         _chkEnableLogging.Text     = "Enable activity logging";
         _chkEnableLogging.Location = new Point(16, y);
         _chkEnableLogging.AutoSize = true;
+        y += rowH;
+
+        _chkAllowCli.Text     = "Allow command line (resets to off each launch)";
+        _chkAllowCli.Location = new Point(16, y);
+        _chkAllowCli.AutoSize = true;
         y += rowH + 8;
 
         var lblMaxMru = new Label
@@ -89,7 +95,7 @@ internal sealed class SettingsForm : Form
         Controls.AddRange(new Control[]
         {
             _chkStartMinimized, _chkMinimizeToTray, _chkShowNotifications,
-            _chkEnableLogging,
+            _chkEnableLogging, _chkAllowCli,
             lblMaxMru, _nudMaxMru,
             btnOk, btnCancel,
         });
@@ -101,6 +107,7 @@ internal sealed class SettingsForm : Form
         _chkMinimizeToTray.Checked    = _settings.MinimizeToTray;
         _chkShowNotifications.Checked = _settings.ShowTrayNotifications;
         _chkEnableLogging.Checked     = _settings.EnableLogging;
+        _chkAllowCli.Checked          = _settings.AllowCommandLine;
         _nudMaxMru.Value              = Math.Clamp(_settings.MaxMruEntries, 1, 50);
     }
 
@@ -110,6 +117,7 @@ internal sealed class SettingsForm : Form
         _settings.MinimizeToTray        = _chkMinimizeToTray.Checked;
         _settings.ShowTrayNotifications = _chkShowNotifications.Checked;
         _settings.EnableLogging         = _chkEnableLogging.Checked;
+        _settings.AllowCommandLine      = _chkAllowCli.Checked;
         _settings.MaxMruEntries         = (int)_nudMaxMru.Value;
         _settings.Save();
     }

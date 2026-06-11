@@ -73,6 +73,12 @@ namespace RunAsHelper.Settings
         public bool ShowTrayNotifications { get; set; } = true;
         public bool EnableLogging { get; set; } = true;
         public int MaxMruEntries { get; set; } = 20;
+
+        // Security: whether the CLI may drive the service. Session-only — never
+        // persisted, so it resets to OFF on every launch. The tray pushes this
+        // to the service; the service is the authoritative gate.
+        [JsonIgnore]
+        public bool AllowCommandLine { get; set; }
         public List<SavedApplication> SavedApplications { get; set; } = [];
 
         // ── Persistence ──────────────────────────────────────────────────────

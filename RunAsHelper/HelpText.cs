@@ -45,6 +45,10 @@ COMMAND LINE
   streams the service log to stdout and exits 0 on success, 1 on failure. It
   requires the RunASHelper service running and an elevated context.
 
+  SECURITY: the command line is DISABLED by default. Enable it per session in
+  RunAS Helper > Settings > ""Allow command line"" (the tray must be running and
+  elevated; it resets to OFF on every tray launch and on exit).
+
 EXAMPLES
   RunAsHelper.exe cmd.exe
   RunAsHelper.exe /p:3 regedit.exe
