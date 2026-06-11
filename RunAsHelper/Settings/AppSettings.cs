@@ -21,6 +21,7 @@ namespace RunAsHelper.Settings
         public bool StartMinimized { get; set; } = false;
         public bool MinimizeToTray { get; set; } = true;
         public bool ShowTrayNotifications { get; set; } = true;
+        public bool EnableLogging { get; set; } = true;
         public int MaxMruEntries { get; set; } = 20;
         public List<SavedApplication> SavedApplications { get; set; } = [];
 

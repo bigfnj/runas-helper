@@ -265,6 +265,15 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll")]
     internal static partial uint WTSGetActiveConsoleSessionId();
 
+    [LibraryImport("kernel32.dll")]
+    internal static partial uint GetCurrentProcessId();
+
+    // Maps a process id to its Terminal Services session — used to log which
+    // session the service itself runs in (expected 0) vs. the launch target.
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool ProcessIdToSessionId(uint dwProcessId, out uint pSessionId);
+
     [LibraryImport("kernel32.dll", SetLastError = true)]
     internal static unsafe partial uint FormatMessageW(
         uint   dwFlags,
