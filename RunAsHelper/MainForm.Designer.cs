@@ -28,6 +28,8 @@ namespace RunAsHelper
             menuExport        = new ToolStripMenuItem();
             menuToolsSep2     = new ToolStripSeparator();
             menuClearRecent   = new ToolStripMenuItem();
+            menuToolsOpenPwsh = new ToolStripMenuItem();
+            menuToolsSepP     = new ToolStripSeparator();
 
             // ── Form controls ────────────────────────────────────────────────
             lblPriority    = new Label();
@@ -46,6 +48,7 @@ namespace RunAsHelper
             menuSavedApps     = new ToolStripMenuItem();
             menuSavedSep      = new ToolStripSeparator();
             menuRecent        = new ToolStripMenuItem();
+            menuOpenPwsh      = new ToolStripMenuItem();
             menuLaunchSep     = new ToolStripSeparator();
             menuStartService  = new ToolStripMenuItem();
             menuShow          = new ToolStripMenuItem();
@@ -60,12 +63,14 @@ namespace RunAsHelper
             menuImport.Text      = "Import Saved Apps...";
             menuExport.Text      = "Export Saved Apps...";
             menuClearRecent.Text = "Clear Recent History";
+            menuToolsOpenPwsh.Text = "Open PowerShell (TrustedInstaller)";
 
             menuTools.Text = "Tools";
             menuTools.DropDownItems.AddRange(new ToolStripItem[]
             {
                 menuSettings, menuToolsSep1,
                 menuValidate, menuToolsSepV,
+                menuToolsOpenPwsh, menuToolsSepP,
                 menuImport, menuExport,
                 menuToolsSep2, menuClearRecent,
             });
@@ -151,7 +156,7 @@ namespace RunAsHelper
             trayMenu.Items.AddRange(new ToolStripItem[]
             {
                 menuSavedApps, menuSavedSep, menuRecent,
-                menuLaunchSep, menuStartService,
+                menuOpenPwsh, menuLaunchSep, menuStartService,
                 menuShow, menuSep, menuExit,
             });
 
@@ -194,6 +199,8 @@ namespace RunAsHelper
         private ToolStripMenuItem    menuExport;
         private ToolStripSeparator   menuToolsSep2;
         private ToolStripMenuItem    menuClearRecent;
+        private ToolStripMenuItem    menuToolsOpenPwsh;
+        private ToolStripSeparator   menuToolsSepP;
 
         // ── Form controls ────────────────────────────────────────────────────
         private Label              lblPriority;
@@ -212,6 +219,7 @@ namespace RunAsHelper
         private ToolStripMenuItem  menuSavedApps;
         private ToolStripSeparator menuSavedSep;
         private ToolStripMenuItem  menuRecent;
+        private ToolStripMenuItem  menuOpenPwsh;
         private ToolStripSeparator menuLaunchSep;
         private ToolStripMenuItem  menuStartService;
         private ToolStripMenuItem  menuShow;

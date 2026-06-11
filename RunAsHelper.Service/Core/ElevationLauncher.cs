@@ -438,6 +438,16 @@ internal sealed class ElevationLauncher
 
         var (app, args) = ParseCommandLine(commandLine);
 
+        // Console-subsystem programs (cmd, powershell) launched from a service
+        // get no usable window unless we allocate a fresh console. GUI apps
+        // (regedit, notepad) must NOT get one, or an empty console flashes up.
+        uint creationFlags = NativeMethods.CREATE_UNICODE_ENVIRONMENT | priorityClass;
+        if (IsConsoleSubsystem(string.IsNullOrEmpty(args) ? commandLine : app))
+        {
+            creationFlags |= NativeMethods.CREATE_NEW_CONSOLE;
+            Log("Console application detected — allocating an interactive console window.");
+        }
+
         fixed (char* pDesktop = "WinSta0\\Default")
         {
             var si = new NativeMethods.STARTUPINFOW
@@ -455,7 +465,7 @@ internal sealed class ElevationLauncher
                 result = NativeMethods.CreateProcessWithTokenW(
                     hToken, NativeMethods.LOGON_WITH_PROFILE,
                     null, commandLine,
-                    NativeMethods.CREATE_UNICODE_ENVIRONMENT | priorityClass,
+                    creationFlags,
                     IntPtr.Zero, null, &si, out _);
             }
             else
@@ -466,7 +476,7 @@ internal sealed class ElevationLauncher
                 result = NativeMethods.CreateProcessWithTokenW(
                     hToken, NativeMethods.LOGON_WITH_PROFILE,
                     app, commandLine,
-                    NativeMethods.CREATE_UNICODE_ENVIRONMENT | priorityClass,
+                    creationFlags,
                     IntPtr.Zero, null, &si, out _);
             }
 
@@ -535,6 +545,53 @@ internal sealed class ElevationLauncher
         }
         int sp = s.IndexOf(' ');
         return sp < 0 ? (s, string.Empty) : (s[..sp], s[(sp + 1)..]);
+    }
+
+    // True if the launch target is a console-subsystem executable, so it needs
+    // its own console window. Resolves bare names (e.g. "powershell.exe") via
+    // the standard search path, then reads the PE optional-header subsystem.
+    // Best-effort: any failure returns false (GUI behaviour, i.e. no new console).
+    private unsafe bool IsConsoleSubsystem(string app)
+    {
+        try
+        {
+            string exe = app.Trim().Trim('"');
+            if (exe.Length == 0) return false;
+            if (exe.Contains('%')) exe = ExpandEnvVars(exe);
+
+            string full = exe;
+            bool hasPath = exe.Contains('\\') || exe.Contains('/');
+            if (!hasPath)
+            {
+                const int n = NativeMethods.MAX_PATH * 2;
+                char* buf = stackalloc char[n];
+                uint len = NativeMethods.SearchPathW(null, exe, ".exe", n, buf, IntPtr.Zero);
+                if (len == 0 || len >= n) return false;
+                full = new string(buf, 0, (int)len);
+            }
+
+            if (!System.IO.File.Exists(full)) return false;
+            return ReadPeSubsystem(full) == NativeMethods.IMAGE_SUBSYSTEM_WINDOWS_CUI;
+        }
+        catch { return false; }
+    }
+
+    private static ushort ReadPeSubsystem(string path)
+    {
+        using var fs = System.IO.File.OpenRead(path);
+        using var br = new System.IO.BinaryReader(fs);
+
+        if (br.ReadUInt16() != 0x5A4D) return 0;          // 'MZ'
+        fs.Position = 0x3C;
+        int peOffset = br.ReadInt32();
+        fs.Position = peOffset;
+        if (br.ReadUInt32() != 0x0000_4550) return 0;      // 'PE\0\0'
+
+        // Subsystem is a WORD at the same offset (68) in the optional header for
+        // both PE32 and PE32+. Optional header starts after the 20-byte COFF
+        // file header that follows the 4-byte PE signature.
+        fs.Position = peOffset + 4 + 20 + 68;
+        return br.ReadUInt16();
     }
 
     private static unsafe string ExpandEnvVars(string input)

@@ -38,6 +38,13 @@ internal static partial class NativeMethods
     // ── Process creation ─────────────────────────────────────────────────
     internal const uint LOGON_WITH_PROFILE        = 0x00000001;
     internal const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+    // Allocate a fresh console for the child. Required for console-subsystem
+    // programs (cmd.exe, powershell.exe) launched from a service — without it
+    // they get no window the user can type into.
+    internal const uint CREATE_NEW_CONSOLE         = 0x00000010;
+
+    // PE optional-header subsystem value for console (character-mode) apps.
+    internal const ushort IMAGE_SUBSYSTEM_WINDOWS_CUI = 3;
 
     // ── Priority classes ─────────────────────────────────────────────────
     internal const uint NORMAL_PRIORITY_CLASS       = 0x00000020;
@@ -268,6 +275,17 @@ internal static partial class NativeMethods
         string lpSrc,
         char*  lpDst,
         uint   nSize);
+
+    // Resolves a bare executable name (e.g. "powershell.exe") to a full path
+    // using the standard search order, so we can inspect its PE subsystem.
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    internal static unsafe partial uint SearchPathW(
+        string? lpPath,
+        string  lpFileName,
+        string? lpExtension,
+        uint    nBufferLength,
+        char*   lpBuffer,
+        IntPtr  lpFilePart);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
