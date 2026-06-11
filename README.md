@@ -51,14 +51,18 @@ The installer is a single self-contained file — **no .NET runtime is required*
 
 - installs the **RunASHelper** Windows service (LocalSystem, auto-start),
 - installs the tray app and a Start Menu shortcut,
-- registers a **scheduled task** that starts the tray app at logon for any member of `BUILTIN\Administrators`, elevated, with no UAC prompt.
+- optionally launches the tray right after install (Finish-dialog checkbox).
+
+The tray runs **non-elevated** and registers its own per-user login auto-start
+(an `HKCU\…\Run` entry that opens just the tray icon). Click the tray's
+**Activate** button to elevate on demand (no standing scheduled task).
 
 ### Uninstall
 
 ```
 msiexec /x RunAsHelper-Setup-<version>.msi /passive
 ```
-…or via *Settings → Apps → RunAS Helper*. This stops and removes the service, the scheduled task, and the shortcut.
+…or via *Settings → Apps → RunAS Helper*. This stops and removes the service and the shortcut. (Remove the per-user login auto-start, if you want it gone, via *Settings → Apps → Startup* or by deleting the `RunAsHelper` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.)
 
 ## Usage
 
