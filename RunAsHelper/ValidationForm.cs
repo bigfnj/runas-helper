@@ -10,16 +10,15 @@ using RunAsHelper.Core;
 namespace RunAsHelper
 {
     /// <summary>
-    /// Post-install validation dialog. Runs four checks — service running,
-    /// scheduled task registered, tray app running, and a TrustedInstaller token
-    /// round-trip — and offers recovery actions (retry, restart elevated, repair,
-    /// uninstall) when something is wrong.
+    /// Post-install validation dialog. Runs three checks — service running,
+    /// tray app running, and a TrustedInstaller token round-trip — and offers
+    /// recovery actions (retry, restart elevated, repair, uninstall) when
+    /// something is wrong.
     /// </summary>
     internal sealed class ValidationForm : Form
     {
         // Keep in sync with RunAsHelper.Installer/Package.wxs <Package UpgradeCode>.
         private const string UpgradeCode      = "{E5F60718-C9DA-1234-EF01-5F6071829304}";
-        private const string ScheduledTaskName = "RunAS Helper";
         private const string PipePath          = @"\\.\pipe\RunAsHelper";
 
         private readonly PipeClient _client = new();
@@ -29,7 +28,6 @@ namespace RunAsHelper
         private bool                _running;
 
         private readonly CheckRow _svcRow   = new("RunAS Helper service is running");
-        private readonly CheckRow _taskRow  = new("Logon scheduled task registered");
         private readonly CheckRow _trayRow  = new("Tray application running");
         private readonly CheckRow _tokenRow = new("TrustedInstaller token acquired & released");
 
@@ -128,7 +126,7 @@ namespace RunAsHelper
             // ── Check rows (fill) ─────────────────────────────────────────────
             var content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 6, 14, 6) };
             int y = 6;
-            foreach (var row in new[] { _svcRow, _taskRow, _trayRow, _tokenRow })
+            foreach (var row in new[] { _svcRow, _trayRow, _tokenRow })
             {
                 row.AddTo(content, y);
                 y += CheckRow.RowHeight;
@@ -169,34 +167,14 @@ namespace RunAsHelper
                     ? "Responding on " + PipePath
                     : "No response from the service pipe");
 
-                // 2) Scheduled task registered. A non-elevated query of this
-                //    SYSTEM-created task fails even when the task exists, because a
-                //    filtered (UAC) admin token cannot read the task's security
-                //    descriptor — so only assert this check when elevated, matching
-                //    the TrustedInstaller token check below.
-                _taskRow.SetRunning();
-                bool task;
-                if (!admin)
-                {
-                    task = false;
-                    _taskRow.SetResult(false, "Requires administrator — use “Restart as administrator”");
-                }
-                else
-                {
-                    task = await Task.Run(CheckScheduledTask);
-                    _taskRow.SetResult(task, task
-                        ? $"Task \"{ScheduledTaskName}\" is registered"
-                        : "Logon scheduled task was not found");
-                }
-
-                // 3) Tray application running (this process holds the instance mutex).
+                // 2) Tray application running (this process holds the instance mutex).
                 _trayRow.SetRunning();
                 bool tray = IsTrayRunning();
                 _trayRow.SetResult(tray, tray
                     ? $"Running (PID {Environment.ProcessId})"
                     : "No running tray instance detected");
 
-                // 4) TrustedInstaller token round-trip via the service.
+                // 3) TrustedInstaller token round-trip via the service.
                 _tokenRow.SetRunning();
                 bool token;
                 if (!admin)
@@ -221,7 +199,7 @@ namespace RunAsHelper
                             : "Could not acquire/validate the TrustedInstaller token"));
                 }
 
-                AllPassed = svc && task && tray && token;
+                AllPassed = svc && tray && token;
                 ShowOutcome(admin);
             }
             finally
@@ -262,28 +240,6 @@ namespace RunAsHelper
             }
             while (DateTime.UtcNow < deadline);
             return false;
-        }
-
-        private static bool CheckScheduledTask()
-        {
-            try
-            {
-                using var proc = Process.Start(new ProcessStartInfo("schtasks.exe",
-                    $"/query /tn \"{ScheduledTaskName}\"")
-                {
-                    CreateNoWindow         = true,
-                    UseShellExecute        = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                });
-                if (proc is null) return false;
-                proc.WaitForExit(8_000);
-                return proc.HasExited && proc.ExitCode == 0;
-            }
-            catch
-            {
-                return false;
-            }
         }
 
         private static bool IsTrayRunning()
