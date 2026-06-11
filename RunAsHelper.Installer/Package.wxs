@@ -21,7 +21,8 @@
            UpgradeCode="E5F60718-C9DA-1234-EF01-5F6071829304"
            Scope="perMachine">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of RunAS Helper is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of RunAS Helper is already installed." />
 
     <!-- Apps &amp; Features entry: show the product icon instead of a blank tile. -->
     <Icon Id="RunAsHelper.ico" SourceFile="..\power.ico" />

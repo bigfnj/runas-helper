@@ -62,6 +62,14 @@ internal sealed class PipeClient
     public Task<bool> ValidateTokenAsync(CancellationToken ct = default)
         => SendAsync(new LaunchRequest(string.Empty, NativeMethods.NORMAL_PRIORITY_CLASS, "validate"), ct);
 
+    /// <summary>Tells the service whether to allow CLI-sourced launches (tray only).</summary>
+    public Task<bool> SetCommandLineAllowedAsync(bool allow, CancellationToken ct = default)
+        => SendAsync(new LaunchRequest(allow ? "on" : "off", NativeMethods.NORMAL_PRIORITY_CLASS, "setcli"), ct);
+
+    /// <summary>Launch from the command line (tagged Source="cli", gated by the service).</summary>
+    public Task<bool> LaunchFromCliAsync(string commandLine, uint priority, string account, CancellationToken ct = default)
+        => SendAsync(new LaunchRequest(commandLine, priority, "launch", "", 1, account, "cli"), ct);
+
     private async Task<bool> SendAsync(LaunchRequest request, CancellationToken ct)
     {
         using var pipe = new NamedPipeClientStream(

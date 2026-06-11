@@ -19,6 +19,11 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     // Serializes launches so log messages route to the correct connection.
     private readonly SemaphoreSlim _gate = new(1, 1);
 
+    // Whether CLI-sourced launches are permitted. Defaults OFF and is controlled
+    // by the (elevated, human-driven) tray via the "setcli" verb; the tray resets
+    // it to off on launch/exit. Tray-sourced launches are never gated by this.
+    private volatile bool _allowCli;
+
     public async Task RunAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -86,8 +91,29 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                 var request = await PipeProtocol.ReadLaunchRequestAsync(pipe, ct);
                 if (request is null) return;
 
-                logger.LogInformation("{Verb} request: '{CommandLine}' priority=0x{Priority:X}",
-                    request.Verb, request.CommandLine, request.Priority);
+                logger.LogInformation("{Verb} request ({Source}): '{CommandLine}' priority=0x{Priority:X}",
+                    request.Verb, request.Source, request.CommandLine, request.Priority);
+
+                // Configuration: the tray toggles whether CLI-sourced launches are allowed.
+                if (request.Verb == "setcli")
+                {
+                    _allowCli = string.Equals(request.CommandLine, "on", StringComparison.OrdinalIgnoreCase);
+                    logger.LogInformation("CLI launches {State}.", _allowCli ? "ENABLED" : "disabled");
+                    await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Success"), ct);
+                    return;
+                }
+
+                // Gate: block command-line-sourced launches unless explicitly allowed.
+                if (request.Verb == "launch" &&
+                    string.Equals(request.Source, "cli", StringComparison.OrdinalIgnoreCase) &&
+                    !_allowCli)
+                {
+                    logger.LogWarning("Blocked CLI launch (command line disabled): {CommandLine}", request.CommandLine);
+                    await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
+                        "Command line is disabled. Enable it in RunAS Helper > Settings > \"Allow command line\"."), ct);
+                    await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
+                    return;
+                }
 
                 await _gate.WaitAsync(ct);
                 try

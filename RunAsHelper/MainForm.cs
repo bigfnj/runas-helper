@@ -185,6 +185,9 @@ namespace RunAsHelper
             }
             _statusTimer.Stop();
             notifyIcon.Visible = false;
+            // Reset the CLI gate to off on exit (best-effort), so the command line
+            // isn't left enabled when no tray session is active.
+            try { _client.SetCommandLineAllowedAsync(false).Wait(800); } catch { }
             base.OnFormClosing(e);
         }
 
@@ -222,6 +225,7 @@ namespace RunAsHelper
                 {
                     btnRun.Enabled      = true;
                     lblNotAdmin.Visible = false;
+                    PushCliAllowed();   // sync the CLI gate (off on startup = reset)
                 }
             }
             else
@@ -284,7 +288,16 @@ namespace RunAsHelper
         private void MenuSettings_Click(object? sender, EventArgs e)
         {
             using var form = new SettingsForm(_settings);
-            form.ShowDialog(this);
+            if (form.ShowDialog(this) == DialogResult.OK)
+                PushCliAllowed();
+        }
+
+        // Push the current "Allow command line" state to the service (the gate).
+        // Best-effort: needs an elevated connection; harmless if it can't connect.
+        private void PushCliAllowed()
+        {
+            if (_serviceOnline != true) return;
+            _ = _client.SetCommandLineAllowedAsync(_settings.AllowCommandLine);
         }
         private void MenuValidate_Click(object? sender, EventArgs e)
         {

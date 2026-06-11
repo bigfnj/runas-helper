@@ -112,7 +112,7 @@ namespace RunAsHelper
 
             var client = new PipeClient();
             client.LogMessage += msg => Console.WriteLine(msg);
-            bool ok = client.LaunchElevatedAsync(commandLine, priority, "", 1 /* SW_SHOWNORMAL */, account)
+            bool ok = client.LaunchFromCliAsync(commandLine, priority, account)
                             .GetAwaiter().GetResult();
             Environment.Exit(ok ? 0 : 1);
         }
