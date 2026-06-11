@@ -33,6 +33,10 @@ internal static partial class NativeMethods
     internal const string SE_IMPERSONATE_NAME = "SeImpersonatePrivilege";
     // Required to call SetTokenInformation(TokenSessionId).
     internal const string SE_TCB_NAME         = "SeTcbPrivilege";
+    // Required by CreateProcessAsUser to assign a primary token to the new
+    // process and charge its quota to the target account.
+    internal const string SE_ASSIGNPRIMARYTOKEN_NAME = "SeAssignPrimaryTokenPrivilege";
+    internal const string SE_INCREASE_QUOTA_NAME     = "SeIncreaseQuotaPrivilege";
     internal const uint SE_PRIVILEGE_ENABLED  = 0x00000002;
 
     // ── Process creation ─────────────────────────────────────────────────
@@ -101,8 +105,9 @@ internal static partial class NativeMethods
     // a launched process to the interactive desktop (Session 0 → console session).
     internal enum TOKEN_INFORMATION_CLASS
     {
-        TokenUser      = 1,
-        TokenSessionId = 12,
+        TokenUser       = 1,
+        TokenPrivileges = 3,
+        TokenSessionId  = 12,
     }
 
     // ── Blittable structs ─────────────────────────────────────────────────
@@ -361,6 +366,16 @@ internal static partial class NativeMethods
         string  lpName,
         LUID*   lpLuid);
 
+    // Resolves a privilege LUID back to its name (e.g. "SeDebugPrivilege") for
+    // the verbose token-privilege dump during validation.
+    [LibraryImport("advapi32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool LookupPrivilegeNameW(
+        string?  lpSystemName,
+        LUID*    lpLuid,
+        char*    lpName,
+        ref uint cchName);
+
     [LibraryImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static unsafe partial bool AdjustTokenPrivileges(
@@ -398,6 +413,25 @@ internal static partial class NativeMethods
         uint                dwLogonFlags,
         string?             lpApplicationName,
         string?             lpCommandLine,
+        uint                dwCreationFlags,
+        IntPtr              lpEnvironment,
+        string?             lpCurrentDirectory,
+        STARTUPINFOW*       lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
+
+    // Unlike CreateProcessWithTokenW (which places the child in the CALLER's
+    // session), CreateProcessAsUser creates the process in the session carried
+    // by the token — so a Session 0 service can launch onto the interactive
+    // desktop. Requires SeAssignPrimaryToken + SeIncreaseQuota on the caller.
+    [LibraryImport("advapi32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool CreateProcessAsUserW(
+        IntPtr              hToken,
+        string?             lpApplicationName,
+        string?             lpCommandLine,
+        IntPtr              lpProcessAttributes,
+        IntPtr              lpThreadAttributes,
+        [MarshalAs(UnmanagedType.Bool)] bool bInheritHandles,
         uint                dwCreationFlags,
         IntPtr              lpEnvironment,
         string?             lpCurrentDirectory,
