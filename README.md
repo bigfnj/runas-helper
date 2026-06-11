@@ -68,34 +68,58 @@ msiexec /x RunAsHelper-Setup-<version>.msi /passive
 
 ### Tray app
 
-Launch **RunAS Helper** from the Start Menu (or it appears automatically at logon). From the window / tray icon you can:
+Launch **RunAS Helper** from the Start Menu, or let it start at login as a tray
+icon (see *Startup* below). The main window is a **saved-applications manager**:
 
-- browse for and launch any executable as TrustedInstaller,
-- set the process priority,
-- keep a list of **saved applications** for one-click launches,
-- see **recent launches** (MRU),
-- check live service status, start the service, and import/export settings.
+- **Saved applications** — a list (Name / File Location / Parameter). **Add
+  Application** stores a launch with its location, arguments, working directory,
+  **window state** (Normal / Minimized / Maximized / Hidden), priority, and
+  **account** (TrustedInstaller or SYSTEM). Double-click or **Run** to launch;
+  **Edit** / **Remove** / **↑ ↓** to manage (Del / F2 / Enter shortcuts).
+- **Quick run (one-off)** — a top row to launch a path once (with priority +
+  account) without saving it.
+- **Tools menu** — Settings, Validate Installation, Open PowerShell
+  (TrustedInstaller), Import/Export saved apps, and **How to Use**.
+
+**Elevation (Activate).** The tray runs **non-elevated** (greyed icon). The
+service's control pipe only admits elevated administrators, so click the
+**Activate** bar to relaunch elevated (via your OS/endpoint elevation prompt);
+the bar disappears once elevated and the icon turns colour when the service is
+reachable.
+
+**Accounts.** *TrustedInstaller* launches with a SYSTEM token carrying the
+`NT SERVICE\TrustedInstaller` group (needed for TI-owned files/keys/services);
+*SYSTEM* launches with a plain LocalSystem token. Because the TrustedInstaller
+service runs as LocalSystem, `whoami` reads `nt authority\system` for both — the
+difference is the TrustedInstaller group membership.
+
+**Startup.** *Settings → Start with Windows* (on by default) registers a per-user
+`HKCU\…\Run` entry that opens the tray icon at login (window stays closed until
+you click it). There is **no scheduled task**.
 
 Settings are stored in `%AppData%\RunAsHelper\settings.json`.
 
 ### Command line
 
 ```
-RunAsHelper.exe [/p:n] <path> [args]
+RunAsHelper.exe [/p:N] [/as:ACCOUNT] <path> [args]
+RunAsHelper.exe -h | --help | /?      :: show full help
 ```
 
-`/p:n` sets the priority class of the launched process:
+`/p:N` sets the priority class; `/as:ACCOUNT` chooses the account:
 
-| Flag   | Priority      |
-|--------|---------------|
-| `/p:1` | Normal (default) |
-| `/p:2` | Idle          |
-| `/p:3` | High          |
-| `/p:4` | Realtime      |
-| `/p:5` | Below Normal  |
-| `/p:6` | Above Normal  |
+| Flag   | Priority         |   | Flag         | Account                      |
+|--------|------------------|---|--------------|------------------------------|
+| `/p:1` | Normal (default) |   | `/as:ti`     | TrustedInstaller (default)   |
+| `/p:2` | Idle             |   | `/as:system` | LocalSystem                  |
+| `/p:3` | High             |
+| `/p:4` | Realtime         |
+| `/p:5` | Below Normal     |
+| `/p:6` | Above Normal     |
 
-Examples:
+Non-executable targets are launched via their host automatically (`.msc`→`mmc`,
+`.cpl`→`control`, `.bat`/`.cmd`→`cmd /c`, `.ps1`→`powershell`), and a bare name
+(e.g. `notepad.exe`, `lusrmgr.msc`) is resolved on the PATH.
 
 ```bat
 :: Open a TrustedInstaller command prompt
@@ -104,11 +128,23 @@ RunAsHelper.exe cmd.exe
 :: Launch regedit at high priority
 RunAsHelper.exe /p:3 regedit.exe
 
+:: Run as plain SYSTEM
+RunAsHelper.exe /as:system cmd.exe
+
 :: Quote paths that contain spaces
 RunAsHelper.exe "C:\Program Files\Some Tool\tool.exe" --flag
 ```
 
-The CLI streams the service's log lines to stdout and exits `0` on success, `1` on failure. It requires the **RunASHelper** service to be installed and running, and must itself be run from an elevated context.
+The CLI streams the service's log lines to stdout and exits `0` on success, `1`
+on failure. It requires the **RunASHelper** service running and an elevated
+context.
+
+> 🔒 **The command line is disabled by default.** As a hardening measure, the
+> service rejects CLI-sourced launches unless you enable them this session via
+> *Settings → "Allow command line"* (off again on every tray launch/exit). The
+> tray's own launches are unaffected. The real boundary is the control pipe's
+> ACL — **only elevated Administrators/SYSTEM can connect at all**; unelevated
+> processes are refused outright.
 
 ## Build from source
 
@@ -151,7 +187,27 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
   The workflow builds `RunAsHelper-Setup-1.2.3.msi` (with `ProductVersion=1.2.3`) and attaches it to a new GitHub Release with auto-generated notes.
 - **Dry run:** *Actions → Release → Run workflow*, supply a version. This builds and uploads a downloadable artifact but does **not** create a Release.
 
-Use increasing versions for successive releases — the MSI's `MajorUpgrade` relies on a higher `ProductVersion` to detect and replace a prior install.
+Use increasing versions for successive releases. `MajorUpgrade` detects and
+replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
+reinstall in place (handy during development).
+
+## Planned features
+
+Not done yet — tracked for future work:
+
+- **Non-executable launch, round 2** — `.reg` files (via `regedit /s`) and
+  arbitrary documents (via shell association), beyond the current host-mapped
+  set (`.msc`/`.cpl`/`.bat`/`.ps1`).
+- **Per-app icons** in the saved-applications list (extract the target's icon).
+- **List quality-of-life** — drag-to-reorder, and a search/filter box for long
+  lists.
+- **Silent-install auto-start** — register the per-user login entry for
+  unattended (`/passive`, `/qn`) deployments, where there's no Finish dialog to
+  trigger the first run.
+- **Signed-client enforcement (optional hardening)** — have the service verify
+  the connecting process is the signed RunAS Helper binary, to also constrain
+  *elevated* callers that talk to the pipe directly (beyond the command-line
+  gate, which already covers our own CLI).
 
 ## License
 
