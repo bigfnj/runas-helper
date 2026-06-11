@@ -33,7 +33,8 @@ namespace RunAsHelper
         private readonly CheckRow _trayRow  = new("Tray application running");
         private readonly CheckRow _tokenRow = new("TrustedInstaller token acquired & released");
 
-        private readonly Label  _summary;
+        private readonly Label   _summary;
+        private readonly TextBox _log;
         private readonly Button _btnRetry;
         private readonly Button _btnElevate;
         private readonly Button _btnRepair;
@@ -54,7 +55,7 @@ namespace RunAsHelper
             MaximizeBox     = false;
             MinimizeBox     = false;
             StartPosition   = FormStartPosition.CenterScreen;
-            ClientSize      = new Size(500, 392);
+            ClientSize      = new Size(520, 560);
             AutoScaleMode   = AutoScaleMode.Font;
             try { Icon = new Icon(SystemIcons.Shield, 32, 32); } catch { /* non-fatal */ }
 
@@ -99,6 +100,31 @@ namespace RunAsHelper
                 ForeColor = Color.DimGray,
             };
 
+            // ── Details / live service log (verbatim service output) ──────────
+            // Shows every line the service streams, so the full TrustedInstaller
+            // token result (account + SID) and any failure reason are visible
+            // without truncation — the per-row detail labels are space-limited.
+            _log = new TextBox
+            {
+                Dock       = DockStyle.Bottom,
+                Height     = 150,
+                Multiline  = true,
+                ReadOnly   = true,
+                ScrollBars = ScrollBars.Vertical,
+                WordWrap   = false,
+                BackColor  = SystemColors.Window,
+                Font       = new Font("Consolas", 8.25f),
+            };
+            var logLabel = new Label
+            {
+                Dock      = DockStyle.Bottom,
+                Height    = 20,
+                Padding   = new Padding(14, 2, 14, 0),
+                Font      = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                ForeColor = Color.DimGray,
+                Text      = "Details",
+            };
+
             // ── Check rows (fill) ─────────────────────────────────────────────
             var content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 6, 14, 6) };
             int y = 6;
@@ -108,7 +134,11 @@ namespace RunAsHelper
                 y += CheckRow.RowHeight;
             }
 
+            // Bottom-docked controls stack with the earliest-added highest, so
+            // add top-to-bottom: details label, log box, summary, buttons.
             Controls.Add(content);
+            Controls.Add(logLabel);
+            Controls.Add(_log);
             Controls.Add(_summary);
             Controls.Add(buttons);
             Controls.Add(header);
@@ -127,6 +157,7 @@ namespace RunAsHelper
                 SetButtons(retry: false, elevate: false, repair: false, uninstall: false, close: false);
                 _summary.ForeColor = Color.DimGray;
                 _summary.Text      = "Running checks…";
+                _log.Clear();
 
                 bool admin = NativeMethods.IsUserAnAdmin();
 
@@ -284,6 +315,20 @@ namespace RunAsHelper
             // Capture the resolved account line for the token row detail.
             if (message.StartsWith("Token user:", StringComparison.OrdinalIgnoreCase))
                 _tokenDetail = message;
+
+            // Mirror every streamed line into the Details pane, verbatim.
+            AppendDetail(message);
+        }
+
+        private void AppendDetail(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return;
+            if (_log.IsHandleCreated && _log.InvokeRequired)
+            {
+                _log.BeginInvoke(() => AppendDetail(message));
+                return;
+            }
+            _log.AppendText(message + Environment.NewLine);
         }
 
         // ── Recovery actions ──────────────────────────────────────────────────

@@ -39,12 +39,14 @@ namespace RunAsHelper
             btnSave        = new Button();
             btnBrowse      = new Button();
             btnRun         = new Button();
+            btnActivate    = new Button();
             txtLog         = new TextBox();
             lblNotAdmin    = new Label();
 
             // ── Tray ─────────────────────────────────────────────────────────
             notifyIcon        = new NotifyIcon(components);
             trayMenu          = new ContextMenuStrip(components);
+            menuActivate      = new ToolStripMenuItem();
             menuSavedApps     = new ToolStripMenuItem();
             menuSavedSep      = new ToolStripSeparator();
             menuRecent        = new ToolStripMenuItem();
@@ -120,6 +122,14 @@ namespace RunAsHelper
             btnRun.Text      = "Launch Elevated";
             btnRun.FlatStyle = FlatStyle.System;
 
+            // ── Activate button (overlays Launch; shown only when NOT elevated) ─
+            btnActivate.Location  = new System.Drawing.Point(10, 126);
+            btnActivate.Size      = new System.Drawing.Size(522, 32);
+            btnActivate.Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            btnActivate.Text      = "Activate — elevate with Avecto";
+            btnActivate.FlatStyle = FlatStyle.System;
+            btnActivate.Visible   = false;
+
             // ── Log ──────────────────────────────────────────────────────────
             txtLog.Location   = new System.Drawing.Point(10, 172);
             txtLog.Size       = new System.Drawing.Size(522, 210);
@@ -153,8 +163,13 @@ namespace RunAsHelper
 
             menuExit.Text = "Exit";
 
+            menuActivate.Text    = "Activate — elevate with Avecto";
+            menuActivate.Visible = false;
+            menuActivate.Font    = new System.Drawing.Font(menuActivate.Font, System.Drawing.FontStyle.Bold);
+
             trayMenu.Items.AddRange(new ToolStripItem[]
             {
+                menuActivate,
                 menuSavedApps, menuSavedSep, menuRecent,
                 menuOpenPwsh, menuLaunchSep, menuStartService,
                 menuShow, menuSep, menuExit,
@@ -181,6 +196,7 @@ namespace RunAsHelper
             Controls.Add(btnSave);
             Controls.Add(btnBrowse);
             Controls.Add(btnRun);
+            Controls.Add(btnActivate);
             Controls.Add(txtLog);
             Controls.Add(lblNotAdmin);
 
@@ -210,12 +226,14 @@ namespace RunAsHelper
         private Button             btnSave;
         private Button             btnBrowse;
         private Button             btnRun;
+        private Button             btnActivate;
         private TextBox            txtLog;
         private Label              lblNotAdmin;
 
         // ── Tray ─────────────────────────────────────────────────────────────
         private NotifyIcon         notifyIcon;
         private ContextMenuStrip   trayMenu;
+        private ToolStripMenuItem  menuActivate;
         private ToolStripMenuItem  menuSavedApps;
         private ToolStripSeparator menuSavedSep;
         private ToolStripMenuItem  menuRecent;

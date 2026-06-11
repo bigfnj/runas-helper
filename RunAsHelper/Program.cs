@@ -25,8 +25,15 @@ namespace RunAsHelper
                 return;
             }
 
+            // Elevation hand-off: the non-elevated tray's "Activate" button
+            // relaunches the exe elevated with this flag. It is NOT a CLI launch —
+            // it opens the tray window, but waits briefly for the predecessor
+            // (the non-elevated instance) to release the single-instance mutex.
+            bool activateHandoff = args.Length == 1 &&
+                args[0].Equals("--activate", StringComparison.OrdinalIgnoreCase);
+
             // CLI mode: RunAsHelper.exe [/p:n] <path with optional args>
-            if (args.Length > 0)
+            if (args.Length > 0 && !activateHandoff)
             {
                 RunCli(string.Join(" ", args));
                 return;
@@ -35,7 +42,20 @@ namespace RunAsHelper
             // Single-instance guard — second launch exits silently; user sees the
             // existing tray icon and can click it to show the window.
             using var mutex = new Mutex(true, MutexName, out bool isFirstInstance);
-            if (!isFirstInstance) return;
+            if (!isFirstInstance)
+            {
+                if (!activateHandoff) return;
+                // The non-elevated predecessor is exiting; wait for it to drop the
+                // mutex so this elevated instance can take over cleanly.
+                try
+                {
+                    if (!mutex.WaitOne(TimeSpan.FromSeconds(5))) return;
+                }
+                catch (AbandonedMutexException)
+                {
+                    // Predecessor exited without releasing — we now own it.
+                }
+            }
 
             ApplicationConfiguration.Initialize();
             Application.Run(new MainForm());
