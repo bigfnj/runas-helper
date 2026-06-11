@@ -8,6 +8,7 @@ namespace RunAsHelper;
 internal sealed class SettingsForm : Form
 {
     private readonly AppSettings   _settings;
+    private readonly CheckBox      _chkStartWithWindows  = new();
     private readonly CheckBox      _chkStartMinimized    = new();
     private readonly CheckBox      _chkMinimizeToTray    = new();
     private readonly CheckBox      _chkShowNotifications = new();
@@ -25,7 +26,7 @@ internal sealed class SettingsForm : Form
     private void BuildLayout()
     {
         Text            = "Settings";
-        ClientSize      = new Size(360, 280);
+        ClientSize      = new Size(360, 308);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox     = false;
         MinimizeBox     = false;
@@ -33,6 +34,11 @@ internal sealed class SettingsForm : Form
 
         int y = 16;
         const int rowH = 28;
+
+        _chkStartWithWindows.Text     = "Start with Windows (tray icon at login)";
+        _chkStartWithWindows.Location = new Point(16, y);
+        _chkStartWithWindows.AutoSize = true;
+        y += rowH;
 
         _chkStartMinimized.Text     = "Start minimized to tray";
         _chkStartMinimized.Location = new Point(16, y);
@@ -94,7 +100,7 @@ internal sealed class SettingsForm : Form
 
         Controls.AddRange(new Control[]
         {
-            _chkStartMinimized, _chkMinimizeToTray, _chkShowNotifications,
+            _chkStartWithWindows, _chkStartMinimized, _chkMinimizeToTray, _chkShowNotifications,
             _chkEnableLogging, _chkAllowCli,
             lblMaxMru, _nudMaxMru,
             btnOk, btnCancel,
@@ -103,6 +109,7 @@ internal sealed class SettingsForm : Form
 
     private void LoadValues()
     {
+        _chkStartWithWindows.Checked  = _settings.StartWithWindows;
         _chkStartMinimized.Checked    = _settings.StartMinimized;
         _chkMinimizeToTray.Checked    = _settings.MinimizeToTray;
         _chkShowNotifications.Checked = _settings.ShowTrayNotifications;
@@ -113,6 +120,7 @@ internal sealed class SettingsForm : Form
 
     private void BtnOk_Click(object? sender, EventArgs e)
     {
+        _settings.StartWithWindows      = _chkStartWithWindows.Checked;
         _settings.StartMinimized        = _chkStartMinimized.Checked;
         _settings.MinimizeToTray        = _chkMinimizeToTray.Checked;
         _settings.ShowTrayNotifications = _chkShowNotifications.Checked;
