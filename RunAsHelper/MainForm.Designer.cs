@@ -30,11 +30,14 @@ namespace RunAsHelper
             menuExport        = new ToolStripMenuItem();
             menuToolsSep2     = new ToolStripSeparator();
             menuClearRecent   = new ToolStripMenuItem();
+            menuToolsSepH     = new ToolStripSeparator();
+            menuHowToUse      = new ToolStripMenuItem();
 
             // ── Top panel (quick run + saved-apps toolbar) ────────────────────
             panelTop      = new Panel();
             lblQuick      = new Label();
             comboPriority = new ComboBox();
+            comboAccountQuick = new ComboBox();
             comboPath     = new ComboBox();
             btnBrowse     = new Button();
             btnRun        = new Button();
@@ -78,6 +81,7 @@ namespace RunAsHelper
             menuImport.Text        = "Import Saved Apps...";
             menuExport.Text        = "Export Saved Apps...";
             menuClearRecent.Text   = "Clear Recent History";
+            menuHowToUse.Text      = "How to Use...";
 
             menuTools.Text = "Tools";
             menuTools.DropDownItems.AddRange(new ToolStripItem[]
@@ -87,6 +91,7 @@ namespace RunAsHelper
                 menuToolsOpenPwsh, menuToolsSepP,
                 menuImport, menuExport,
                 menuToolsSep2, menuClearRecent,
+                menuToolsSepH, menuHowToUse,
             });
 
             menuStrip.Items.Add(menuTools);
@@ -102,14 +107,21 @@ namespace RunAsHelper
 
             comboPriority.DropDownStyle = ComboBoxStyle.DropDownList;
             comboPriority.Location      = new System.Drawing.Point(8, 26);
-            comboPriority.Size          = new System.Drawing.Size(110, 23);
+            comboPriority.Size          = new System.Drawing.Size(96, 23);
             comboPriority.Anchor        = AnchorStyles.Top | AnchorStyles.Left;
             comboPriority.Items.AddRange(new object[]
             { "Idle", "Below Normal", "Normal", "Above Normal", "High", "Realtime" });
             comboPriority.SelectedIndex = 2;
 
-            comboPath.Location = new System.Drawing.Point(124, 26);
-            comboPath.Size     = new System.Drawing.Size(410, 23);
+            comboAccountQuick.DropDownStyle = ComboBoxStyle.DropDownList;
+            comboAccountQuick.Location      = new System.Drawing.Point(110, 26);
+            comboAccountQuick.Size          = new System.Drawing.Size(130, 23);
+            comboAccountQuick.Anchor        = AnchorStyles.Top | AnchorStyles.Left;
+            comboAccountQuick.Items.AddRange(new object[] { "TrustedInstaller", "SYSTEM" });
+            comboAccountQuick.SelectedIndex = 0;
+
+            comboPath.Location = new System.Drawing.Point(246, 26);
+            comboPath.Size     = new System.Drawing.Size(288, 23);
             comboPath.Anchor   = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
             btnBrowse.Location = new System.Drawing.Point(538, 26);
@@ -161,7 +173,7 @@ namespace RunAsHelper
 
             panelTop.Controls.AddRange(new Control[]
             {
-                lblQuick, comboPriority, comboPath, btnBrowse, btnRun,
+                lblQuick, comboPriority, comboAccountQuick, comboPath, btnBrowse, btnRun,
                 lblSaved, btnAddApp, btnRunSaved, btnEditApp, btnRemoveApp, btnUpApp, btnDownApp,
             });
 
@@ -273,11 +285,14 @@ namespace RunAsHelper
         private ToolStripMenuItem    menuExport;
         private ToolStripSeparator   menuToolsSep2;
         private ToolStripMenuItem    menuClearRecent;
+        private ToolStripSeparator   menuToolsSepH;
+        private ToolStripMenuItem    menuHowToUse;
 
         // ── Top panel ──────────────────────────────────────────────────────────
         private Panel    panelTop;
         private Label    lblQuick;
         private ComboBox comboPriority;
+        private ComboBox comboAccountQuick;
         private ComboBox comboPath;
         private Button   btnBrowse;
         private Button   btnRun;

@@ -13,7 +13,8 @@ public sealed record LaunchRequest(
     uint   Priority,
     string Verb             = "launch",
     string WorkingDirectory = "",
-    int    ShowWindow       = 1);
+    int    ShowWindow       = 1,
+    string Account          = "ti");   // "ti" (TrustedInstaller) | "system"
 
 /// <summary>Sent by the service back to the client: either a streaming log line or the final result.</summary>
 public sealed record PipeMessage(string Type, string Content);

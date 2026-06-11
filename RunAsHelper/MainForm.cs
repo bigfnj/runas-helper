@@ -82,6 +82,7 @@ namespace RunAsHelper
             menuImport.Click       += MenuImport_Click;
             menuExport.Click       += MenuExport_Click;
             menuClearRecent.Click  += MenuClearRecent_Click;
+            menuHowToUse.Click     += (_, _) => { using var f = new HelpForm(); f.ShowDialog(this); };
             menuOpenPwsh.Click     += MenuOpenPwsh_Click;
             menuToolsOpenPwsh.Click += MenuOpenPwsh_Click;
             btnActivate.Click      += (_, _) => ActivateElevation();
@@ -153,8 +154,8 @@ namespace RunAsHelper
                 // Activate action that relaunches elevated (via Avecto/UAC). On a
                 // standard-user/Avecto machine this is the supported way up — the
                 // tray can't be auto-started elevated by the logon task.
-                btnRun.Enabled = comboPriority.Enabled = comboPath.Enabled =
-                    btnBrowse.Enabled = false;
+                btnRun.Enabled = comboPriority.Enabled = comboAccountQuick.Enabled =
+                    comboPath.Enabled = btnBrowse.Enabled = false;
                 btnActivate.Visible  = true;
                 menuActivate.Visible = true;
                 NativeMethods.SendMessage(btnActivate.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
@@ -541,7 +542,7 @@ namespace RunAsHelper
                 }
 
                 bool ok = await _client.LaunchElevatedAsync(
-                    app.EffectiveCommandLine, app.Priority, app.WorkingDirectory, app.ShowWindow);
+                    app.EffectiveCommandLine, app.Priority, app.WorkingDirectory, app.ShowWindow, app.Account);
 
                 if (_settings.ShowTrayNotifications)
                     notifyIcon.ShowBalloonTip(2000, "RunAS Helper",
@@ -704,7 +705,8 @@ namespace RunAsHelper
             try
             {
                 uint priority = PriorityClasses[comboPriority.SelectedIndex];
-                bool ok = await _client.LaunchElevatedAsync(path, priority);
+                string account = comboAccountQuick.SelectedIndex == 1 ? "system" : "ti";
+                bool ok = await _client.LaunchElevatedAsync(path, priority, "", 1 /* SW_SHOWNORMAL */, account);
 
                 _settings.PriorityIndex = comboPriority.SelectedIndex;
                 _settings.AddMru(path);

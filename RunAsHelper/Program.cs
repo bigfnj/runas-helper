@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
 using RunAsHelper.Core;
@@ -25,6 +26,14 @@ namespace RunAsHelper
                 return;
             }
 
+            // Help: -h / --help / -help / /? / /h / help
+            if (args.Length >= 1 && IsHelpFlag(args[0]))
+            {
+                ShowConsole();
+                Console.WriteLine(HelpText.Cli);
+                return;
+            }
+
             // Elevation hand-off: the non-elevated tray's "Activate" button
             // relaunches the exe elevated with this flag. It is NOT a CLI launch —
             // it opens the tray window, but waits briefly for the predecessor
@@ -32,10 +41,10 @@ namespace RunAsHelper
             bool activateHandoff = args.Length == 1 &&
                 args[0].Equals("--activate", StringComparison.OrdinalIgnoreCase);
 
-            // CLI mode: RunAsHelper.exe [/p:n] <path with optional args>
+            // CLI mode: RunAsHelper.exe [/p:N] [/as:account] <path> [args]
             if (args.Length > 0 && !activateHandoff)
             {
-                RunCli(string.Join(" ", args));
+                RunCli(args);
                 return;
             }
 
@@ -61,41 +70,69 @@ namespace RunAsHelper
             Application.Run(new MainForm());
         }
 
-        private static void RunCli(string rawArgs)
-        {
-            uint priority = NativeMethods.NORMAL_PRIORITY_CLASS;
-            string commandLine = rawArgs;
+        private static bool IsHelpFlag(string a) =>
+            a.Equals("-h", StringComparison.OrdinalIgnoreCase)     ||
+            a.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
+            a.Equals("-help", StringComparison.OrdinalIgnoreCase)  ||
+            a.Equals("/?", StringComparison.OrdinalIgnoreCase)     ||
+            a.Equals("/h", StringComparison.OrdinalIgnoreCase)     ||
+            a.Equals("help", StringComparison.OrdinalIgnoreCase);
 
-            if (rawArgs.StartsWith("/p:", StringComparison.OrdinalIgnoreCase) && rawArgs.Length >= 5)
+        private static void RunCli(string[] args)
+        {
+            ShowConsole();
+
+            uint   priority = NativeMethods.NORMAL_PRIORITY_CLASS;
+            string account  = "ti";
+
+            // Consume leading /p:N and /as:ACCOUNT flags in any order.
+            int i = 0;
+            for (; i < args.Length; i++)
             {
-                char code = rawArgs[3];
-                priority = code switch
-                {
-                    '1' => NativeMethods.NORMAL_PRIORITY_CLASS,
-                    '2' => NativeMethods.IDLE_PRIORITY_CLASS,
-                    '3' => NativeMethods.HIGH_PRIORITY_CLASS,
-                    '4' => NativeMethods.REALTIME_PRIORITY_CLASS,
-                    '5' => NativeMethods.BELOW_NORMAL_PRIORITY_CLASS,
-                    '6' => NativeMethods.ABOVE_NORMAL_PRIORITY_CLASS,
-                    _   => NativeMethods.NORMAL_PRIORITY_CLASS,
-                };
-                commandLine = rawArgs[5..].TrimStart();
+                string a = args[i];
+                if (a.StartsWith("/p:", StringComparison.OrdinalIgnoreCase) && a.Length >= 4)
+                    priority = PriorityFromCode(a[3]);
+                else if (a.StartsWith("/as:", StringComparison.OrdinalIgnoreCase))
+                    account = a[4..].Equals("system", StringComparison.OrdinalIgnoreCase) ? "system" : "ti";
+                else
+                    break;
             }
+
+            // Re-quote tokens containing spaces so paths survive argv splitting.
+            string commandLine = string.Join(" ", args[i..].Select(a =>
+                a.Contains(' ') && !a.StartsWith('"') ? $"\"{a}\"" : a));
 
             if (string.IsNullOrWhiteSpace(commandLine))
             {
-                Console.Error.WriteLine("Usage: RunAsHelper.exe [/p:n] <path> [args]");
-                Console.Error.WriteLine("  /p:1 Normal  /p:2 Idle  /p:3 High");
-                Console.Error.WriteLine("  /p:4 Realtime  /p:5 BelowNormal  /p:6 AboveNormal");
+                Console.Error.WriteLine("Usage: RunAsHelper.exe [/p:N] [/as:system|ti] <path> [args]");
+                Console.Error.WriteLine("Run  RunAsHelper.exe --help  for details.");
                 Environment.Exit(1);
                 return;
             }
 
             var client = new PipeClient();
             client.LogMessage += msg => Console.WriteLine(msg);
-            bool ok = client.LaunchElevatedAsync(commandLine, priority)
+            bool ok = client.LaunchElevatedAsync(commandLine, priority, "", 1 /* SW_SHOWNORMAL */, account)
                             .GetAwaiter().GetResult();
             Environment.Exit(ok ? 0 : 1);
+        }
+
+        private static uint PriorityFromCode(char code) => code switch
+        {
+            '1' => NativeMethods.NORMAL_PRIORITY_CLASS,
+            '2' => NativeMethods.IDLE_PRIORITY_CLASS,
+            '3' => NativeMethods.HIGH_PRIORITY_CLASS,
+            '4' => NativeMethods.REALTIME_PRIORITY_CLASS,
+            '5' => NativeMethods.BELOW_NORMAL_PRIORITY_CLASS,
+            '6' => NativeMethods.ABOVE_NORMAL_PRIORITY_CLASS,
+            _   => NativeMethods.NORMAL_PRIORITY_CLASS,
+        };
+
+        // Attach to the parent console so CLI/help output is visible when run
+        // from cmd/powershell (the app is a WinExe with no console of its own).
+        private static void ShowConsole()
+        {
+            try { NativeMethods.AttachConsole(NativeMethods.ATTACH_PARENT_PROCESS); } catch { }
         }
     }
 }
