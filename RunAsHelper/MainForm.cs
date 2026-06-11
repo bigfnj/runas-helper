@@ -601,6 +601,11 @@ namespace RunAsHelper
 
         private void AppendLog(string message)
         {
+            // Activity logging is user-toggleable (Settings → Enable activity
+            // logging, on by default). When off, the main-window log stays quiet.
+            // The Validate Installation dialog has its own always-on Details pane.
+            if (!_settings.EnableLogging) return;
+
             if (txtLog.InvokeRequired)
             {
                 txtLog.Invoke(() => AppendLog(message));

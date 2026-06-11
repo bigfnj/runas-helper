@@ -468,9 +468,14 @@ internal sealed class ElevationLauncher
     {
         Log("Creating process...");
 
+        // Log the session topology: the service's own session (expected 0) and
+        // the interactive console session we will launch the process into.
+        NativeMethods.ProcessIdToSessionId(NativeMethods.GetCurrentProcessId(), out uint svcSession);
+
         // Remap the token to the active console session so the launched process
         // appears on the interactive desktop instead of the invisible Session 0.
         uint sessionId = NativeMethods.WTSGetActiveConsoleSessionId();
+        Log($"Launcher (service) session={svcSession}; active console session={sessionId}.");
         if (sessionId != uint.MaxValue)
         {
             if (!NativeMethods.SetTokenInformation(
