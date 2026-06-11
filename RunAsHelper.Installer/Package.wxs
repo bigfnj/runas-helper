@@ -167,16 +167,16 @@
     <ui:WixUI Id="WixUI_Minimal" />
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
 
-    <!-- Exit-dialog "Launch RunAS Helper" checkbox. UNCHECKED by default: the MSI
-         UI sequence is NOT elevated, so WixShellExec would start the tray with the
-         invoking user's *filtered* (non-elevated) token. That non-elevated instance
-         also holds the single-instance mutex, which would then block the elevated
-         instance the logon scheduled task starts. Leaving this off lets the
-         scheduled task open the tray cleanly (elevated, no UAC prompt) at the next
-         sign-in, which is also when the post-install validation runs all-green.
-         Power users can still tick it to launch immediately (non-elevated). -->
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch RunAS Helper now (non-elevated; sign out/in for full elevation)" />
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="0" />
+    <!-- Exit-dialog "Launch RunAS Helper" checkbox. CHECKED by default: it starts
+         the tray (non-elevated, in the installing user's session) right after
+         install. That first run also registers the login auto-start (HKCU Run →
+         "exe" --tray), so it comes up on its own at every later sign-in. The old
+         reason to leave it off (a non-elevated tray blocking the elevated logon
+         scheduled-task instance via the single-instance mutex) no longer applies:
+         the app now elevates on demand via the Activate flow rather than relying
+         on the logon task. Click the tray's Activate bar to elevate. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch RunAS Helper now" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
 
     <!-- WixShellExec runs as the (impersonated) installing user, so the tray app
          appears on that user's desktop. Reuses the same util CA binary already
