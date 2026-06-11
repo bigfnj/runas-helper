@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace RunAsHelper.Core
@@ -43,6 +44,37 @@ namespace RunAsHelper.Core
         [LibraryImport("user32.dll", EntryPoint = "SendMessageW")]
         internal static partial IntPtr SendMessage(
             IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        // Resolves a bare name (e.g. "lusrmgr.msc") via the standard search order
+        // (current dir, System32, Windows, PATH). Used to validate a saved app.
+        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+        internal static unsafe partial uint SearchPathW(
+            string? lpPath, string lpFileName, string? lpExtension,
+            uint nBufferLength, char* lpBuffer, IntPtr lpFilePart);
+
+        /// <summary>
+        /// Resolves a file location the way a launch would find it: rooted/relative
+        /// paths via existence, bare names via the PATH search order. Returns the
+        /// resolved full path, or null if it cannot be found.
+        /// </summary>
+        internal static unsafe string? ResolvePath(string location)
+        {
+            if (string.IsNullOrWhiteSpace(location)) return null;
+            string p = Environment.ExpandEnvironmentVariables(location.Trim().Trim('"'));
+
+            // Rooted or contains a directory separator → treat as a direct path.
+            if (Path.IsPathRooted(p) || p.Contains('\\') || p.Contains('/'))
+            {
+                try { return File.Exists(p) ? Path.GetFullPath(p) : null; }
+                catch { return null; }
+            }
+
+            // Bare name → search PATH (+ System32, Windows, current directory).
+            const int n = 1024;
+            char* buf = stackalloc char[n];
+            uint len = SearchPathW(null, p, null, n, buf, IntPtr.Zero);
+            return len > 0 && len < n ? new string(buf, 0, (int)len) : null;
+        }
 
         // Releases a GDI HICON produced by Bitmap.GetHicon().
         [LibraryImport("user32.dll", SetLastError = true)]
