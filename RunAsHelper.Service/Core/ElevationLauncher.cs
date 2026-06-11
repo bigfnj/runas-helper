@@ -57,6 +57,8 @@ internal sealed class ElevationLauncher
             // service's SeImpersonatePrivilege, not on active impersonation.
             if (!NativeMethods.RevertToSelf())
                 Log($"Warning: RevertToSelf failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            else
+                Log("Worker thread reverted to self (impersonation dropped after token clone).");
         }
     }
 
@@ -120,6 +122,14 @@ internal sealed class ElevationLauncher
     public unsafe bool ValidateToken(out string account)
     {
         account = string.Empty;
+
+        // Force a fresh, fully-logged acquisition instead of reusing the token
+        // cached at service start — so the entire chain (enable privileges →
+        // impersonate winlogon → start TrustedInstaller → grab its thread →
+        // duplicate token → revert) streams to the validation Details pane.
+        Log("Validation: forcing a fresh TrustedInstaller token acquisition...");
+        ReleaseToken();
+        _initialized = false;
         Initialize();
 
         if (_hElevatedToken == IntPtr.Zero)
@@ -128,7 +138,8 @@ internal sealed class ElevationLauncher
             return false;
         }
 
-        Log("Validating cached TrustedInstaller token...");
+        Log("Validating freshly-acquired TrustedInstaller token...");
+        LogTokenPrivileges(_hElevatedToken);
 
         // First call sizes the buffer (returns false + ERROR_INSUFFICIENT_BUFFER).
         NativeMethods.GetTokenInformation(
@@ -201,6 +212,45 @@ internal sealed class ElevationLauncher
         return "(unresolved account)";
     }
 
+    // Logs the full privilege set carried by the stolen token, each marked
+    // (on)/(off), so validation shows exactly what the acquired token can do.
+    private unsafe void LogTokenPrivileges(IntPtr hToken)
+    {
+        NativeMethods.GetTokenInformation(
+            hToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenPrivileges, null, 0, out uint len);
+        if (len == 0) { Log("Token privileges: (unavailable)"); return; }
+
+        byte* buf = stackalloc byte[(int)len];
+        if (!NativeMethods.GetTokenInformation(
+                hToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenPrivileges, buf, len, out _))
+        {
+            Log($"Token privileges: query failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            return;
+        }
+
+        // TOKEN_PRIVILEGES = DWORD PrivilegeCount; LUID_AND_ATTRIBUTES Privileges[].
+        uint count = *(uint*)buf;
+        var laa = (NativeMethods.LUID_AND_ATTRIBUTES*)(buf + sizeof(uint));
+
+        var sb = new System.Text.StringBuilder();
+        for (uint i = 0; i < count; i++)
+        {
+            bool enabled = (laa[i].Attributes & NativeMethods.SE_PRIVILEGE_ENABLED) != 0;
+            sb.Append(LookupPrivName(laa[i].Luid)).Append(enabled ? "(on) " : "(off) ");
+        }
+        Log($"Token privileges [{count}]: {sb.ToString().TrimEnd()}");
+    }
+
+    private unsafe string LookupPrivName(NativeMethods.LUID luid)
+    {
+        char* nameBuf = stackalloc char[256];
+        uint  cch     = 256;
+        NativeMethods.LUID local = luid;
+        if (NativeMethods.LookupPrivilegeNameW(null, &local, nameBuf, ref cch))
+            return new string(nameBuf, 0, (int)cch);
+        return $"(luid {luid.HighPart:X}:{luid.LowPart:X})";
+    }
+
     // ── Privilege adjustment ─────────────────────────────────────────────
 
     private void AdjustPrivileges()
@@ -219,7 +269,9 @@ internal sealed class ElevationLauncher
             {
                 NativeMethods.SE_DEBUG_NAME,
                 NativeMethods.SE_IMPERSONATE_NAME,
-                NativeMethods.SE_TCB_NAME,      // needed for SetTokenInformation(TokenSessionId)
+                NativeMethods.SE_TCB_NAME,                  // SetTokenInformation(TokenSessionId)
+                NativeMethods.SE_ASSIGNPRIMARYTOKEN_NAME,   // CreateProcessAsUser
+                NativeMethods.SE_INCREASE_QUOTA_NAME,       // CreateProcessAsUser
             })
             {
                 if (SetPrivilege(hToken, priv, true))
@@ -456,15 +508,20 @@ internal sealed class ElevationLauncher
                 lpDesktop = (IntPtr)pDesktop,
             };
 
+            // CreateProcessAsUser (not CreateProcessWithTokenW): the latter places
+            // the child in the service's Session 0 regardless of the token's
+            // session id, so its window is invisible on the user's desktop.
+            // CreateProcessAsUser honours the token's (remapped) session, putting
+            // the process on the interactive desktop.
             bool result;
             if (string.IsNullOrEmpty(args))
             {
                 if (commandLine.Contains('%'))
                     commandLine = ExpandEnvVars(commandLine);
 
-                result = NativeMethods.CreateProcessWithTokenW(
-                    hToken, NativeMethods.LOGON_WITH_PROFILE,
-                    null, commandLine,
+                result = NativeMethods.CreateProcessAsUserW(
+                    hToken, null, commandLine,
+                    IntPtr.Zero, IntPtr.Zero, false,
                     creationFlags,
                     IntPtr.Zero, null, &si, out _);
             }
@@ -473,15 +530,17 @@ internal sealed class ElevationLauncher
                 Log($"Args detected — app={app}  args={args}");
                 if (app.Contains('%')) app = ExpandEnvVars(app);
 
-                result = NativeMethods.CreateProcessWithTokenW(
-                    hToken, NativeMethods.LOGON_WITH_PROFILE,
-                    app, commandLine,
+                result = NativeMethods.CreateProcessAsUserW(
+                    hToken, app, commandLine,
+                    IntPtr.Zero, IntPtr.Zero, false,
                     creationFlags,
                     IntPtr.Zero, null, &si, out _);
             }
 
             if (!result)
-                Log($"CreateProcessWithTokenW failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                Log($"CreateProcessAsUser failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            else
+                Log($"Process created on session {sessionId} desktop WinSta0\\Default.");
             return result;
         }
     }
