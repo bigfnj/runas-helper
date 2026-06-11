@@ -6,7 +6,56 @@ using System.Text.Json.Serialization;
 
 namespace RunAsHelper.Settings
 {
-    internal sealed record SavedApplication(string Name, string CommandLine, uint Priority);
+    internal enum WindowsState { Normal = 0, Minimized = 1, Maximized = 2, Hidden = 3 }
+
+    internal sealed record SavedApplication
+    {
+        public string       Name             { get; init; } = string.Empty;
+        public string       Location         { get; init; } = string.Empty;  // exe / file path
+        public string       Parameter        { get; init; } = string.Empty;  // arguments
+        public uint         Priority         { get; init; } = 0x20;          // NORMAL_PRIORITY_CLASS
+        public string       WorkingDirectory { get; init; } = string.Empty;
+        public WindowsState WindowsState     { get; init; } = WindowsState.Normal;
+
+        // Legacy field from pre-1.2 settings.json; migrated to Location/Parameter on load.
+        public string? CommandLine { get; init; }
+
+        /// <summary>Full command line for the service: quoted location + parameter.</summary>
+        [JsonIgnore]
+        public string EffectiveCommandLine
+        {
+            get
+            {
+                string loc = Location.Contains(' ') && !Location.StartsWith('"') ? $"\"{Location}\"" : Location;
+                return string.IsNullOrWhiteSpace(Parameter) ? loc : $"{loc} {Parameter}";
+            }
+        }
+
+        /// <summary>Win32 SW_* value derived from the window state.</summary>
+        [JsonIgnore]
+        public int ShowWindow => WindowsState switch
+        {
+            WindowsState.Hidden    => 0,   // SW_HIDE
+            WindowsState.Minimized => 7,   // SW_SHOWMINNOACTIVE
+            WindowsState.Maximized => 3,   // SW_SHOWMAXIMIZED
+            _                      => 1,   // SW_SHOWNORMAL
+        };
+
+        /// <summary>Splits a legacy command line into (location, parameter).</summary>
+        public static (string location, string parameter) SplitCommandLine(string commandLine)
+        {
+            if (string.IsNullOrWhiteSpace(commandLine)) return (commandLine ?? string.Empty, string.Empty);
+            string s = commandLine.Trim();
+            if (s.StartsWith('"'))
+            {
+                int close = s.IndexOf('"', 1);
+                if (close < 0) return (s[1..], string.Empty);
+                return (s[1..close], s[(close + 1)..].TrimStart());
+            }
+            int sp = s.IndexOf(' ');
+            return sp < 0 ? (s, string.Empty) : (s[..sp], s[(sp + 1)..]);
+        }
+    }
 
     internal sealed class AppSettings
     {
@@ -34,12 +83,29 @@ namespace RunAsHelper.Settings
                 if (File.Exists(FilePath))
                 {
                     string json = File.ReadAllText(FilePath);
-                    return JsonSerializer.Deserialize(json, AppSettingsJsonContext.Default.AppSettings)
+                    var loaded = JsonSerializer.Deserialize(json, AppSettingsJsonContext.Default.AppSettings)
                         ?? new AppSettings();
+                    loaded.MigrateLegacy();
+                    return loaded;
                 }
             }
             catch { }
             return new AppSettings();
+        }
+
+        // Upgrade pre-1.2 saved apps (which stored a single CommandLine) into the
+        // Location + Parameter shape. Runs once on load; re-saving persists it.
+        private void MigrateLegacy()
+        {
+            for (int i = 0; i < SavedApplications.Count; i++)
+            {
+                var a = SavedApplications[i];
+                if (string.IsNullOrEmpty(a.Location) && !string.IsNullOrEmpty(a.CommandLine))
+                {
+                    var (loc, param) = SavedApplication.SplitCommandLine(a.CommandLine!);
+                    SavedApplications[i] = a with { Location = loc, Parameter = param, CommandLine = null };
+                }
+            }
         }
 
         public void Save()

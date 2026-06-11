@@ -63,7 +63,9 @@ internal sealed class ElevationLauncher
     }
 
     public bool LaunchElevated(string commandLine,
-        uint priorityClass = NativeMethods.NORMAL_PRIORITY_CLASS)
+        uint priorityClass = NativeMethods.NORMAL_PRIORITY_CLASS,
+        string? workingDirectory = null,
+        int showWindow = NativeMethods.SW_SHOWNORMAL)
     {
         Initialize();
 
@@ -96,7 +98,7 @@ internal sealed class ElevationLauncher
 
         try
         {
-            return CreateProcess(hDup, commandLine, priorityClass);
+            return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow);
         }
         finally
         {
@@ -506,7 +508,8 @@ internal sealed class ElevationLauncher
 
     // ── Process creation (session-aware for service context) ─────────────
 
-    private unsafe bool CreateProcess(IntPtr hToken, string commandLine, uint priorityClass)
+    private unsafe bool CreateProcess(IntPtr hToken, string commandLine, uint priorityClass,
+        string? workingDirectory = null, int showWindow = NativeMethods.SW_SHOWNORMAL)
     {
         Log("Creating process...");
 
@@ -547,12 +550,21 @@ internal sealed class ElevationLauncher
             Log("Console application detected — allocating an interactive console window.");
         }
 
+        // Working directory: empty = inherit; expand env vars (e.g. %USERPROFILE%).
+        string? workDir = string.IsNullOrWhiteSpace(workingDirectory)
+            ? null
+            : (workingDirectory.Contains('%') ? ExpandEnvVars(workingDirectory) : workingDirectory);
+        if (workDir is not null) Log($"Working directory: {workDir}");
+        Log($"Window state (SW_*): {showWindow}");
+
         fixed (char* pDesktop = "WinSta0\\Default")
         {
             var si = new NativeMethods.STARTUPINFOW
             {
-                cb        = (uint)sizeof(NativeMethods.STARTUPINFOW),
-                lpDesktop = (IntPtr)pDesktop,
+                cb          = (uint)sizeof(NativeMethods.STARTUPINFOW),
+                lpDesktop   = (IntPtr)pDesktop,
+                dwFlags     = NativeMethods.STARTF_USESHOWWINDOW,
+                wShowWindow = (ushort)showWindow,
             };
 
             // CreateProcessAsUser (not CreateProcessWithTokenW): the latter places
@@ -570,7 +582,7 @@ internal sealed class ElevationLauncher
                     hToken, null, commandLine,
                     IntPtr.Zero, IntPtr.Zero, false,
                     creationFlags,
-                    IntPtr.Zero, null, &si, out _);
+                    IntPtr.Zero, workDir, &si, out _);
             }
             else
             {
@@ -581,7 +593,7 @@ internal sealed class ElevationLauncher
                     hToken, app, commandLine,
                     IntPtr.Zero, IntPtr.Zero, false,
                     creationFlags,
-                    IntPtr.Zero, null, &si, out _);
+                    IntPtr.Zero, workDir, &si, out _);
             }
 
             if (!result)

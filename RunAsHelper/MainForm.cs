@@ -521,7 +521,8 @@ namespace RunAsHelper
                     return;
                 }
 
-                bool ok = await _client.LaunchElevatedAsync(app.CommandLine, app.Priority);
+                bool ok = await _client.LaunchElevatedAsync(
+                    app.EffectiveCommandLine, app.Priority, app.WorkingDirectory, app.ShowWindow);
 
                 if (_settings.ShowTrayNotifications)
                     notifyIcon.ShowBalloonTip(2000, "RunAS Helper",
@@ -563,7 +564,7 @@ namespace RunAsHelper
             if (string.IsNullOrWhiteSpace(name)) return;
 
             uint priority = PriorityClasses[comboPriority.SelectedIndex];
-            _settings.SaveApp(new SavedApplication(name, path, priority));
+            _settings.SaveApp(new SavedApplication { Name = name, Location = path, Priority = priority });
             AppendLog($"Saved \"{name}\".");
             RebuildSavedAppsMenu();
         }

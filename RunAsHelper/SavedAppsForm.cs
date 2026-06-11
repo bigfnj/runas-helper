@@ -101,7 +101,7 @@ internal sealed class SavedAppsForm : Form
         foreach (var app in _settings.SavedApplications)
         {
             var item = new ListViewItem(app.Name) { Tag = app };
-            item.SubItems.Add(app.CommandLine);
+            item.SubItems.Add(app.EffectiveCommandLine);
             item.SubItems.Add(NativeMethods.PriorityClassName(app.Priority));
             _listView.Items.Add(item);
         }
@@ -140,7 +140,8 @@ internal sealed class SavedAppsForm : Form
             return;
         }
 
-        bool ok = await _client.LaunchElevatedAsync(app.CommandLine, app.Priority);
+        bool ok = await _client.LaunchElevatedAsync(
+            app.EffectiveCommandLine, app.Priority, app.WorkingDirectory, app.ShowWindow);
         if (!ok)
             MessageBox.Show($"Failed to launch {app.Name}.", "RunAS Helper",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
