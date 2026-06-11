@@ -18,6 +18,8 @@ namespace RunAsHelper
         private bool  _isExiting;
         private Icon? _greyIcon;
         private bool? _serviceOnline;
+        private readonly bool _startHidden;
+        private bool  _firstShowHandled;
 
         private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 60_000 };
 
@@ -34,9 +36,10 @@ namespace RunAsHelper
             NativeMethods.REALTIME_PRIORITY_CLASS,
         };
 
-        public MainForm()
+        public MainForm(bool startHidden = false)
         {
             InitializeComponent();
+            _startHidden = startHidden || _settings.StartMinimized;
             // Set the window icon to power.ico before SetTrayIcon(), which derives
             // the tray icons (grey + colour) from this.Icon. Without this the form
             // falls back to the default WinForms icon.
@@ -45,6 +48,22 @@ namespace RunAsHelper
             SetTrayIcon();
             RebuildSavedAppsMenu();
             RefreshAppsList();
+        }
+
+        // Start to the tray only: suppress the very first show (no window flash),
+        // but force the handle so OnLoad/timers/tray icon still run. The tray-icon
+        // click (ShowFromTray) opens the window normally afterwards.
+        protected override void SetVisibleCore(bool value)
+        {
+            if (!_firstShowHandled && _startHidden && value)
+            {
+                _firstShowHandled = true;
+                if (!IsHandleCreated) CreateHandle();
+                base.SetVisibleCore(false);
+                return;
+            }
+            _firstShowHandled = true;
+            base.SetVisibleCore(value);
         }
 
         // Loads power.ico (embedded as a manifest resource) for the window/tray icon.
@@ -143,10 +162,13 @@ namespace RunAsHelper
             comboPriority.SelectedIndex = Math.Clamp(_settings.PriorityIndex, 0, comboPriority.Items.Count - 1);
             RefreshMruCombo();
 
-            // First launch after an install: run the validation popup. Queued here
-            // (before the non-admin early-return) so its "Restart as administrator"
-            // recovery is reachable even when the tray was started unelevated.
-            BeginInvoke(TryShowPendingValidation);
+            // Register/unregister the login auto-start (HKCU Run → "exe" --tray).
+            ApplyStartupRegistration();
+
+            // First launch after an install: run the validation popup — but not on a
+            // tray-only (login) start, which would defeat the clean startup.
+            if (!_startHidden)
+                BeginInvoke(TryShowPendingValidation);
 
             if (!NativeMethods.IsUserAnAdmin())
             {
@@ -169,9 +191,33 @@ namespace RunAsHelper
             AppendLog("Checking RunAS Helper service...");
             CheckServiceStatusAsync();
             _statusTimer.Start();
+            // Note: starting to the tray is handled by SetVisibleCore (no window
+            // flash), so no HideToTray call is needed here.
+        }
 
-            if (_settings.StartMinimized)
-                BeginInvoke(HideToTray);
+        // Keep the HKCU "Run" entry in sync with the StartWithWindows setting, so
+        // the tray launches (icon only) at login. Launches non-elevated with --tray.
+        private void ApplyStartupRegistration()
+        {
+            try
+            {
+                const string runKey   = @"Software\Microsoft\Windows\CurrentVersion\Run";
+                const string valueName = "RunAsHelper";
+                using var key = Registry.CurrentUser.OpenSubKey(runKey, writable: true)
+                                ?? Registry.CurrentUser.CreateSubKey(runKey);
+                if (key is null) return;
+
+                if (_settings.StartWithWindows)
+                {
+                    string exe = Environment.ProcessPath ?? Application.ExecutablePath;
+                    key.SetValue(valueName, $"\"{exe}\" --tray");
+                }
+                else
+                {
+                    key.DeleteValue(valueName, throwOnMissingValue: false);
+                }
+            }
+            catch { /* best-effort; startup registration is non-critical */ }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -289,7 +335,10 @@ namespace RunAsHelper
         {
             using var form = new SettingsForm(_settings);
             if (form.ShowDialog(this) == DialogResult.OK)
+            {
                 PushCliAllowed();
+                ApplyStartupRegistration();
+            }
         }
 
         // Push the current "Allow command line" state to the service (the gate).

@@ -284,6 +284,12 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll")]
     internal static partial uint GetCurrentProcessId();
 
+    // PID of the process at the other end of a named pipe — used to bind the
+    // CLI-allow gate to the tray that enabled it (lazy liveness check).
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetNamedPipeClientProcessId(IntPtr Pipe, out uint ClientProcessId);
+
     // Maps a process id to its Terminal Services session — used to log which
     // session the service itself runs in (expected 0) vs. the launch target.
     [LibraryImport("kernel32.dll", SetLastError = true)]

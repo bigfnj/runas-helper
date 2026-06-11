@@ -70,6 +70,7 @@ namespace RunAsHelper.Settings
         public int PriorityIndex { get; set; } = 2;
         public bool StartMinimized { get; set; } = false;
         public bool MinimizeToTray { get; set; } = true;
+        public bool StartWithWindows { get; set; } = true;   // auto-start tray at login
         public bool ShowTrayNotifications { get; set; } = true;
         public bool EnableLogging { get; set; } = true;
         public int MaxMruEntries { get; set; } = 20;

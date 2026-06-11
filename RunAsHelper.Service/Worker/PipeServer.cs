@@ -24,6 +24,10 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     // it to off on launch/exit. Tray-sourced launches are never gated by this.
     private volatile bool _allowCli;
 
+    // PID of the tray that enabled the gate. The gate is lazily revoked if that
+    // tray is no longer alive (e.g. it crashed without sending "setcli off").
+    private volatile uint _allowCliOwnerPid;
+
     public async Task RunAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -56,6 +60,30 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
             // Fire-and-forget — HandleConnectionAsync owns the pipe lifetime.
             _ = HandleConnectionAsync(pipe, ct);
         }
+    }
+
+    private static uint ClientPid(NamedPipeServerStream pipe)
+    {
+        try
+        {
+            return NativeMethods.GetNamedPipeClientProcessId(
+                pipe.SafePipeHandle.DangerousGetHandle(), out uint pid) ? pid : 0;
+        }
+        catch { return 0; }
+    }
+
+    // The gate owner is "alive" only if that PID is still a running RunAsHelper
+    // tray (guards against PID reuse by an unrelated process).
+    private static bool IsTrayAlive(uint pid)
+    {
+        if (pid == 0) return false;
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+            return !p.HasExited &&
+                   string.Equals(p.ProcessName, "RunAsHelper", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     private static NamedPipeServerStream CreatePipe()
@@ -94,25 +122,37 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                 logger.LogInformation("{Verb} request ({Source}): '{CommandLine}' priority=0x{Priority:X}",
                     request.Verb, request.Source, request.CommandLine, request.Priority);
 
-                // Configuration: the tray toggles whether CLI-sourced launches are allowed.
+                // Configuration: the tray toggles whether CLI-sourced launches are
+                // allowed, and we remember which tray enabled it (for liveness).
                 if (request.Verb == "setcli")
                 {
                     _allowCli = string.Equals(request.CommandLine, "on", StringComparison.OrdinalIgnoreCase);
-                    logger.LogInformation("CLI launches {State}.", _allowCli ? "ENABLED" : "disabled");
+                    _allowCliOwnerPid = _allowCli ? ClientPid(pipe) : 0;
+                    logger.LogInformation("CLI launches {State} (owner pid {Pid}).",
+                        _allowCli ? "ENABLED" : "disabled", _allowCliOwnerPid);
                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Success"), ct);
                     return;
                 }
 
                 // Gate: block command-line-sourced launches unless explicitly allowed.
+                // Lazily revoke the gate if the tray that enabled it is gone.
                 if (request.Verb == "launch" &&
-                    string.Equals(request.Source, "cli", StringComparison.OrdinalIgnoreCase) &&
-                    !_allowCli)
+                    string.Equals(request.Source, "cli", StringComparison.OrdinalIgnoreCase))
                 {
-                    logger.LogWarning("Blocked CLI launch (command line disabled): {CommandLine}", request.CommandLine);
-                    await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
-                        "Command line is disabled. Enable it in RunAS Helper > Settings > \"Allow command line\"."), ct);
-                    await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
-                    return;
+                    if (_allowCli && !IsTrayAlive(_allowCliOwnerPid))
+                    {
+                        logger.LogInformation("CLI gate owner (pid {Pid}) is gone — reverting to disabled.", _allowCliOwnerPid);
+                        _allowCli = false;
+                        _allowCliOwnerPid = 0;
+                    }
+                    if (!_allowCli)
+                    {
+                        logger.LogWarning("Blocked CLI launch (command line disabled): {CommandLine}", request.CommandLine);
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
+                            "Command line is disabled. Enable it in RunAS Helper > Settings > \"Allow command line\"."), ct);
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
+                        return;
+                    }
                 }
 
                 await _gate.WaitAsync(ct);

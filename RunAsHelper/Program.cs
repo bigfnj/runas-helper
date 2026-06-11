@@ -41,8 +41,12 @@ namespace RunAsHelper
             bool activateHandoff = args.Length == 1 &&
                 args[0].Equals("--activate", StringComparison.OrdinalIgnoreCase);
 
+            // Login auto-start: open to the tray only (no window). Not a CLI launch.
+            bool startTray = args.Length == 1 &&
+                args[0].Equals("--tray", StringComparison.OrdinalIgnoreCase);
+
             // CLI mode: RunAsHelper.exe [/p:N] [/as:account] <path> [args]
-            if (args.Length > 0 && !activateHandoff)
+            if (args.Length > 0 && !activateHandoff && !startTray)
             {
                 RunCli(args);
                 return;
@@ -67,7 +71,7 @@ namespace RunAsHelper
             }
 
             ApplicationConfiguration.Initialize();
-            Application.Run(new MainForm());
+            Application.Run(new MainForm(startHidden: startTray));
         }
 
         private static bool IsHelpFlag(string a) =>
