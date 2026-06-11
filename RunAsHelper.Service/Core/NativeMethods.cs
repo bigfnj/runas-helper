@@ -106,6 +106,7 @@ internal static partial class NativeMethods
     internal enum TOKEN_INFORMATION_CLASS
     {
         TokenUser       = 1,
+        TokenGroups     = 2,
         TokenPrivileges = 3,
         TokenSessionId  = 12,
     }
@@ -124,6 +125,13 @@ internal static partial class NativeMethods
     {
         public LUID Luid;
         public uint Attributes;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SID_AND_ATTRIBUTES
+    {
+        public IntPtr Sid;
+        public uint   Attributes;
     }
 
     [StructLayout(LayoutKind.Sequential)]
