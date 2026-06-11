@@ -59,6 +59,8 @@ namespace RunAsHelper
             menuClearRecent.Click  += MenuClearRecent_Click;
             menuOpenPwsh.Click     += MenuOpenPwsh_Click;
             menuToolsOpenPwsh.Click += MenuOpenPwsh_Click;
+            btnActivate.Click      += (_, _) => ActivateElevation();
+            menuActivate.Click     += (_, _) => ActivateElevation();
             notifyIcon.Click       += (_, _) => ShowFromTray();
             notifyIcon.DoubleClick += (_, _) => ShowFromTray();
             trayMenu.Opening       += (_, _) => { RebuildSavedAppsMenu(); RebuildRecentMenu(); };
@@ -122,11 +124,19 @@ namespace RunAsHelper
 
             if (!NativeMethods.IsUserAnAdmin())
             {
+                // Not elevated: grey the operational controls and surface a single
+                // Activate action that relaunches elevated (via Avecto/UAC). On a
+                // standard-user/Avecto machine this is the supported way up — the
+                // tray can't be auto-started elevated by the logon task.
                 btnRun.Enabled = comboPriority.Enabled = comboPath.Enabled =
                     btnBrowse.Enabled = btnSave.Enabled = false;
-                lblNotAdmin.Text    = "Restart as Administrator to use RunAS Helper.";
+                btnRun.Visible       = false;
+                btnActivate.Visible  = true;
+                menuActivate.Visible = true;
+                NativeMethods.SendMessage(btnActivate.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
+                lblNotAdmin.Text    = "Not elevated — click Activate to elevate with Avecto.";
                 lblNotAdmin.Visible = true;
-                AppendLog("Run as Administrator to connect to the RunAS Helper service.");
+                AppendLog("Not elevated. Click Activate to relaunch elevated (Avecto); the window then becomes fully functional.");
                 return;
             }
 
@@ -255,6 +265,36 @@ namespace RunAsHelper
         {
             using var form = new ValidationForm(standalone: false);
             form.ShowDialog(this);
+        }
+
+        // Relaunches this app elevated via Avecto/UAC (the "runas" verb). On this
+        // standard-user, Avecto-managed machine the tray starts non-elevated; this
+        // is the user-initiated, one-prompt elevation. The elevated copy is started
+        // with "--activate" so it waits for this instance to release the
+        // single-instance mutex before taking over.
+        private void ActivateElevation()
+        {
+            string? exe = Environment.ProcessPath;
+            if (exe is null) return;
+            try
+            {
+                System.Diagnostics.Process.Start(
+                    new System.Diagnostics.ProcessStartInfo(exe, "--activate")
+                    {
+                        UseShellExecute = true,
+                        Verb            = "runas",
+                    });
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // User declined the Avecto/UAC prompt — stay open so they can retry.
+                AppendLog("Elevation was cancelled.");
+                return;
+            }
+
+            // Hand off: exit so the elevated instance can claim the instance mutex.
+            _isExiting = true;
+            Application.Exit();
         }
 
         // Opens an interactive PowerShell as TrustedInstaller (via the service),
