@@ -57,6 +57,8 @@ namespace RunAsHelper
             menuImport.Click       += MenuImport_Click;
             menuExport.Click       += MenuExport_Click;
             menuClearRecent.Click  += MenuClearRecent_Click;
+            menuOpenPwsh.Click     += MenuOpenPwsh_Click;
+            menuToolsOpenPwsh.Click += MenuOpenPwsh_Click;
             notifyIcon.Click       += (_, _) => ShowFromTray();
             notifyIcon.DoubleClick += (_, _) => ShowFromTray();
             trayMenu.Opening       += (_, _) => { RebuildSavedAppsMenu(); RebuildRecentMenu(); };
@@ -253,6 +255,29 @@ namespace RunAsHelper
         {
             using var form = new ValidationForm(standalone: false);
             form.ShowDialog(this);
+        }
+
+        // Opens an interactive PowerShell as TrustedInstaller (via the service),
+        // so the user can keep one elevated shell open and paste commands into it
+        // — no per-command UAC. Routed through the same pipe as every other launch.
+        private async void MenuOpenPwsh_Click(object? sender, EventArgs e)
+        {
+            if (!NativeMethods.WaitNamedPipeW(@"\\.\pipe\RunAsHelper", 500))
+            {
+                if (_settings.ShowTrayNotifications)
+                    notifyIcon.ShowBalloonTip(3000, "RunAS Helper",
+                        "Service is not running.", ToolTipIcon.Warning);
+                AppendLog("Cannot open PowerShell — RunAS Helper service is not running.");
+                return;
+            }
+
+            AppendLog("Opening PowerShell as TrustedInstaller...");
+            bool ok = await _client.LaunchElevatedAsync("powershell.exe", NativeMethods.NORMAL_PRIORITY_CLASS);
+
+            if (_settings.ShowTrayNotifications)
+                notifyIcon.ShowBalloonTip(2000, "RunAS Helper",
+                    ok ? "PowerShell (TrustedInstaller) launched." : "Failed to open PowerShell.",
+                    ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
         }
 
         // Shows the validation dialog once after a fresh install. The MSI writes
