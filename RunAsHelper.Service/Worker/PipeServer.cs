@@ -86,6 +86,32 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         catch { return false; }
     }
 
+    // True if the client process on the other end of the pipe holds an elevated
+    // (admin) token. Used to restrict setcli and tray-source launches so that a
+    // non-elevated user who can now connect cannot manipulate the CLI gate or
+    // spoof the "tray" source to bypass it.
+    private static bool IsClientElevated(NamedPipeServerStream pipe)
+    {
+        uint pid = ClientPid(pipe);
+        if (pid == 0) return false;
+        try
+        {
+            IntPtr hProc = NativeMethods.OpenProcess(
+                NativeMethods.PROCESS_QUERY_INFORMATION, false, pid);
+            if (hProc == IntPtr.Zero) return false;
+            try
+            {
+                if (!NativeMethods.OpenProcessToken(hProc,
+                        NativeMethods.TOKEN_QUERY, out IntPtr hToken))
+                    return false;
+                try   { return NativeMethods.IsTokenElevated(hToken); }
+                finally { NativeMethods.CloseHandle(hToken); }
+            }
+            finally { NativeMethods.CloseHandle(hProc); }
+        }
+        catch { return false; }
+    }
+
     private static NamedPipeServerStream CreatePipe()
     {
         var security = new PipeSecurity();
@@ -97,6 +123,13 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         security.AddAccessRule(new PipeAccessRule(
             new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
             PipeAccessRights.FullControl,
+            AccessControlType.Allow));
+        // Allow any interactively logged-on user to connect so that non-elevated
+        // CLI launches can reach the pipe. Sensitive verbs (setcli, tray-source
+        // launches) are additionally gated by IsClientElevated() at the handler.
+        security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.InteractiveSid, null),
+            PipeAccessRights.ReadWrite,
             AccessControlType.Allow));
 
         return NamedPipeServerStreamAcl.Create(
@@ -124,8 +157,16 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
 
                 // Configuration: the tray toggles whether CLI-sourced launches are
                 // allowed, and we remember which tray enabled it (for liveness).
+                // Only an elevated caller (the RunAsHelper tray) may change this —
+                // reject non-elevated processes so they cannot manipulate the gate.
                 if (request.Verb == "setcli")
                 {
+                    if (!IsClientElevated(pipe))
+                    {
+                        logger.LogWarning("Rejected setcli from non-elevated process (pid {Pid}).", ClientPid(pipe));
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
+                        return;
+                    }
                     _allowCli = string.Equals(request.CommandLine, "on", StringComparison.OrdinalIgnoreCase);
                     _allowCliOwnerPid = _allowCli ? ClientPid(pipe) : 0;
                     logger.LogInformation("CLI launches {State} (owner pid {Pid}).",
@@ -134,24 +175,41 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     return;
                 }
 
-                // Gate: block command-line-sourced launches unless explicitly allowed.
-                // Lazily revoke the gate if the tray that enabled it is gone.
-                if (request.Verb == "launch" &&
-                    string.Equals(request.Source, "cli", StringComparison.OrdinalIgnoreCase))
+                if (request.Verb == "launch")
                 {
-                    if (_allowCli && !IsTrayAlive(_allowCliOwnerPid))
+                    bool isTray = string.Equals(request.Source, "tray", StringComparison.OrdinalIgnoreCase);
+                    bool isCli  = string.Equals(request.Source, "cli",  StringComparison.OrdinalIgnoreCase);
+
+                    // Tray-sourced launches must come from an elevated process.
+                    // Without this a non-elevated caller could set Source="tray"
+                    // in the request and bypass the CLI gate entirely.
+                    if (isTray && !IsClientElevated(pipe))
                     {
-                        logger.LogInformation("CLI gate owner (pid {Pid}) is gone — reverting to disabled.", _allowCliOwnerPid);
-                        _allowCli = false;
-                        _allowCliOwnerPid = 0;
-                    }
-                    if (!_allowCli)
-                    {
-                        logger.LogWarning("Blocked CLI launch (command line disabled): {CommandLine}", request.CommandLine);
+                        logger.LogWarning("Rejected tray-source launch from non-elevated process (pid {Pid}).", ClientPid(pipe));
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
-                            "Command line is disabled. Enable it in RunAS Helper > Settings > \"Allow command line\"."), ct);
+                            "Tray launch rejected: caller is not elevated."), ct);
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
                         return;
+                    }
+
+                    // Gate: block command-line-sourced launches unless explicitly allowed.
+                    // Lazily revoke the gate if the tray that enabled it is gone.
+                    if (isCli)
+                    {
+                        if (_allowCli && !IsTrayAlive(_allowCliOwnerPid))
+                        {
+                            logger.LogInformation("CLI gate owner (pid {Pid}) is gone — reverting to disabled.", _allowCliOwnerPid);
+                            _allowCli = false;
+                            _allowCliOwnerPid = 0;
+                        }
+                        if (!_allowCli)
+                        {
+                            logger.LogWarning("Blocked CLI launch (command line disabled): {CommandLine}", request.CommandLine);
+                            await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
+                                "Command line is disabled. Enable it in RunAS Helper > Settings > \"Allow command line\"."), ct);
+                            await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
+                            return;
+                        }
                     }
                 }
 
