@@ -117,6 +117,13 @@ internal static partial class NativeMethods
         TokenGroups     = 2,
         TokenPrivileges = 3,
         TokenSessionId  = 12,
+        TokenElevation  = 20,
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct TOKEN_ELEVATION
+    {
+        public uint TokenIsElevated;
     }
 
     // ── Blittable structs ─────────────────────────────────────────────────
@@ -503,4 +510,14 @@ internal static partial class NativeMethods
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     internal static partial IntPtr LocalFree(IntPtr hMem);
+
+    internal static unsafe bool IsTokenElevated(IntPtr hToken)
+    {
+        TOKEN_ELEVATION elev = default;
+        uint len;
+        return GetTokenInformation(
+                   hToken, TOKEN_INFORMATION_CLASS.TokenElevation,
+                   &elev, (uint)sizeof(TOKEN_ELEVATION), out len)
+               && elev.TokenIsElevated != 0;
+    }
 }
