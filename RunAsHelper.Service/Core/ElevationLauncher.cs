@@ -7,9 +7,9 @@ namespace RunAsHelper.Service.Core;
 /// Acquires a TrustedInstaller token and launches processes under it.
 /// Designed to run inside a Windows service (Session 0 / LocalSystem).
 /// Differences from the tray version:
-///   — DuplicateTokenEx uses TokenPrimary (required by CreateProcessWithTokenW).
-///   — SetTokenInformation(TokenSessionId) maps the launch to the active console
-///     session so the process appears on the interactive desktop.
+///   — DuplicateTokenEx uses TokenPrimary (required by CreateProcessAsUserW).
+///   — SetTokenInformation(TokenSessionId) maps the launch to the requesting
+///     client session so the process appears on the user's interactive desktop.
 ///   — SeTcbPrivilege is enabled to allow the session-ID change.
 /// </summary>
 internal sealed class ElevationLauncher
@@ -53,7 +53,7 @@ internal sealed class ElevationLauncher
             // TrustedInstaller impersonation mask. Drop it before this thread
             // returns to the pool — otherwise pooled threads silently keep
             // running under an impersonated identity. The cached token still
-            // works for later launches: CreateProcessWithTokenW relies on the
+            // works for later launches: CreateProcessAsUserW relies on the
             // service's SeImpersonatePrivilege, not on active impersonation.
             if (!NativeMethods.RevertToSelf())
                 Log($"Warning: RevertToSelf failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
@@ -62,11 +62,13 @@ internal sealed class ElevationLauncher
         }
     }
 
-    public bool LaunchElevated(string commandLine,
+    // Returns the PID of the launched process, or 0 on failure.
+    public uint LaunchElevated(string commandLine,
         uint priorityClass = NativeMethods.NORMAL_PRIORITY_CLASS,
         string? workingDirectory = null,
         int showWindow = NativeMethods.SW_SHOWNORMAL,
-        string account = "ti")
+        string account = "ti",
+        uint? targetSessionId = null)
     {
         bool asSystem = string.Equals(account, "system", StringComparison.OrdinalIgnoreCase);
 
@@ -83,7 +85,7 @@ internal sealed class ElevationLauncher
                     NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_QUERY, out source))
             {
                 Log($"Failed to open LocalSystem token. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
-                return false;
+                return 0;
             }
             closeSource = true;
             Log("Account=system — launching with the LocalSystem token (no TrustedInstaller group).");
@@ -94,7 +96,7 @@ internal sealed class ElevationLauncher
             if (_hElevatedToken == IntPtr.Zero)
             {
                 Log("Failed to acquire elevated token");
-                return false;
+                return 0;
             }
             source = _hElevatedToken;
             Log("Account=trustedinstaller — launching with the TrustedInstaller token.");
@@ -119,13 +121,13 @@ internal sealed class ElevationLauncher
                 {
                     Log($"LaunchElevated::Failed to duplicate token, " +
                         $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
-                    return false;
+                    return 0;
                 }
             }
 
             try
             {
-                return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow);
+                return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow, targetSessionId);
             }
             finally
             {
@@ -465,11 +467,18 @@ internal sealed class ElevationLauncher
     {
         Log("Waiting for TrustedInstaller service...");
         uint svcSize = (uint)sizeof(NativeMethods.SERVICE_STATUS_PROCESS);
+        long deadline = Environment.TickCount64 + 30_000;
 
         while (NativeMethods.QueryServiceStatusEx(
             hSvc, NativeMethods.SC_STATUS_PROCESS_INFO,
             out NativeMethods.SERVICE_STATUS_PROCESS st, svcSize, out _))
         {
+            if (Environment.TickCount64 > deadline)
+            {
+                Log("Timed out waiting for TrustedInstaller service to run.");
+                return 0;
+            }
+
             switch (st.dwCurrentState)
             {
                 case NativeMethods.ServiceState.Stopped:
@@ -487,8 +496,9 @@ internal sealed class ElevationLauncher
 
                 case NativeMethods.ServiceState.StartPending:
                 case NativeMethods.ServiceState.StopPending:
-                    Log($"Service pending, waiting {st.dwWaitHint}ms...");
-                    NativeMethods.Sleep(st.dwWaitHint);
+                    uint waitMs = Math.Clamp(st.dwWaitHint, 250u, 5_000u);
+                    Log($"Service pending, waiting {waitMs}ms...");
+                    NativeMethods.Sleep(waitMs);
                     break;
 
                 case NativeMethods.ServiceState.Running:
@@ -548,19 +558,23 @@ internal sealed class ElevationLauncher
 
     // ── Process creation (session-aware for service context) ─────────────
 
-    private unsafe bool CreateProcess(IntPtr hToken, string commandLine, uint priorityClass,
-        string? workingDirectory = null, int showWindow = NativeMethods.SW_SHOWNORMAL)
+    // Returns the PID of the created process, or 0 on failure.
+    private unsafe uint CreateProcess(IntPtr hToken, string commandLine, uint priorityClass,
+        string? workingDirectory = null,
+        int showWindow = NativeMethods.SW_SHOWNORMAL,
+        uint? targetSessionId = null)
     {
         Log("Creating process...");
 
         // Log the session topology: the service's own session (expected 0) and
-        // the interactive console session we will launch the process into.
+        // the client/console session we will launch the process into.
         NativeMethods.ProcessIdToSessionId(NativeMethods.GetCurrentProcessId(), out uint svcSession);
 
-        // Remap the token to the active console session so the launched process
+        // Remap the token to the requested interactive session so the launched process
         // appears on the interactive desktop instead of the invisible Session 0.
-        uint sessionId = NativeMethods.WTSGetActiveConsoleSessionId();
-        Log($"Launcher (service) session={svcSession}; active console session={sessionId}.");
+        uint sessionId = targetSessionId ?? NativeMethods.WTSGetActiveConsoleSessionId();
+        string sessionSource = targetSessionId.HasValue ? "requesting client" : "active console";
+        Log($"Launcher (service) session={svcSession}; target session={sessionId} ({sessionSource}).");
         if (sessionId != uint.MaxValue)
         {
             if (!NativeMethods.SetTokenInformation(
@@ -625,6 +639,7 @@ internal sealed class ElevationLauncher
             // session id, so its window is invisible on the user's desktop.
             // CreateProcessAsUser honours the token's (remapped) session, putting
             // the process on the interactive desktop.
+            NativeMethods.PROCESS_INFORMATION pi;
             bool result;
             if (string.IsNullOrEmpty(args))
             {
@@ -635,7 +650,7 @@ internal sealed class ElevationLauncher
                     hToken, null, commandLine,
                     IntPtr.Zero, IntPtr.Zero, false,
                     creationFlags,
-                    IntPtr.Zero, workDir, &si, out _);
+                    IntPtr.Zero, workDir, &si, out pi);
             }
             else
             {
@@ -646,14 +661,19 @@ internal sealed class ElevationLauncher
                     hToken, app, commandLine,
                     IntPtr.Zero, IntPtr.Zero, false,
                     creationFlags,
-                    IntPtr.Zero, workDir, &si, out _);
+                    IntPtr.Zero, workDir, &si, out pi);
             }
 
             if (!result)
+            {
                 Log($"CreateProcessAsUser failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
-            else
-                Log($"Process created on session {sessionId} desktop WinSta0\\Default.");
-            return result;
+                return 0;
+            }
+
+            NativeMethods.CloseHandle(pi.hProcess);
+            NativeMethods.CloseHandle(pi.hThread);
+            Log($"Process created: PID={pi.dwProcessId} session={sessionId} desktop=WinSta0\\Default.");
+            return pi.dwProcessId;
         }
     }
 
@@ -663,7 +683,7 @@ internal sealed class ElevationLauncher
     {
         IntPtr hSnap = NativeMethods.CreateToolhelp32Snapshot(
             NativeMethods.TH32CS_SNAPPROCESS, 0);
-        if (hSnap == IntPtr.Zero) return 0;
+        if (hSnap == IntPtr.Zero || hSnap == NativeMethods.INVALID_HANDLE_VALUE) return 0;
         uint result = 0;
         try
         {
@@ -685,7 +705,7 @@ internal sealed class ElevationLauncher
     {
         IntPtr hSnap = NativeMethods.CreateToolhelp32Snapshot(
             NativeMethods.TH32CS_SNAPTHREAD, 0);
-        if (hSnap == IntPtr.Zero) return 0;
+        if (hSnap == IntPtr.Zero || hSnap == NativeMethods.INVALID_HANDLE_VALUE) return 0;
         uint result = 0;
         try
         {

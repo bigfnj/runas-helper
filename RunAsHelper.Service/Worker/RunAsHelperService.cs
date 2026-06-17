@@ -21,7 +21,12 @@ internal sealed class RunAsHelperService(ILogger<RunAsHelperService> logger) : B
         if (_launcher.IsReady)
             logger.LogInformation("Token acquired. Listening for launch requests.");
         else
+        {
             logger.LogWarning("Token acquisition failed. Will retry on each request.");
+            EventLogHelper.TokenFailed("Token acquisition failed at service start; will retry on each launch request.");
+        }
+
+        EventLogHelper.ServiceStarted();
 
         var pipeServer = new PipeServer(_launcher, logger);
         await pipeServer.RunAsync(stoppingToken);
@@ -29,6 +34,7 @@ internal sealed class RunAsHelperService(ILogger<RunAsHelperService> logger) : B
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        EventLogHelper.ServiceStopped();
         _launcher.ReleaseToken();
         await base.StopAsync(cancellationToken);
     }

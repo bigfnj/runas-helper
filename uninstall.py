@@ -10,10 +10,9 @@ What it removes (best-effort, continues past missing pieces):
   1. The tray client process (RunAsHelper.exe), so files aren't locked.
   2. The MSI product itself (msiexec /x), found by DisplayName in the
      Uninstall registry.
-  3. The scheduled task  "RunAS Helper".
-  4. The Windows service "RunASHelper".
-  5. Registry keys HKLM\\Software\\RunAsHelper and HKCU\\Software\\RunAsHelper.
-  6. The leftover %ProgramFiles%\\RunAsHelper folder.
+  3. The Windows service "RunASHelper".
+  4. Registry keys HKLM\\Software\\RunAsHelper and HKCU\\Software\\RunAsHelper.
+  5. The leftover %ProgramFiles%\\RunAsHelper folder.
 
 Run from an elevated prompt, or just run it normally — it will relaunch itself
 elevated (UAC prompt) when needed.
@@ -35,7 +34,6 @@ import sys
 # ── Identifiers (must match RunAsHelper.Installer/Package.wxs) ───────────────
 PRODUCT_NAME = "RunAS Helper"          # MSI Package Name / ARP DisplayName
 SERVICE_NAME = "RunASHelper"           # ServiceInstall Name
-TASK_NAME = "RunAS Helper"             # schtasks /tn
 PROCESS_NAME = "RunAsHelper.exe"       # tray client image name
 INSTALL_DIRNAME = "RunAsHelper"        # folder under Program Files
 REG_KEYS = (
@@ -183,20 +181,6 @@ def uninstall_msi() -> None:
             )
 
 
-def delete_scheduled_task() -> None:
-    info(f'Removing scheduled task "{TASK_NAME}" ...')
-    r = run(["schtasks", "/delete", "/tn", TASK_NAME, "/f"])
-    if DRY_RUN:
-        return
-    out = (r.stdout + r.stderr).strip()
-    if r.returncode == 0:
-        ok("Scheduled task removed.")
-    elif "cannot find" in out.lower() or "does not exist" in out.lower():
-        info("Scheduled task was not present.")
-    else:
-        warn(f"schtasks: {out}")
-
-
 def delete_service() -> None:
     info(f'Removing Windows service "{SERVICE_NAME}" ...')
     # Stop first (ignore result), then delete.
@@ -285,7 +269,6 @@ def main() -> int:
     # Order matters: free file locks -> proper uninstall -> manual scrub.
     kill_tray_process()
     uninstall_msi()
-    delete_scheduled_task()
     delete_service()
     delete_registry_keys()
     remove_install_folder()

@@ -104,6 +104,13 @@ internal sealed class PipeClient
                     case "log":
                         Log(msg.Content);
                         break;
+                    case "pid":
+                        // Grant the launched process the right to bring itself to
+                        // the foreground. Must arrive before "result" so the process
+                        // has the activation right while it is still starting up.
+                        if (uint.TryParse(msg.Content, out uint fgPid) && fgPid != 0)
+                            NativeMethods.AllowSetForegroundWindow(fgPid);
+                        break;
                     case "result":
                         return msg.Content == "Success";
                 }

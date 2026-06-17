@@ -7,8 +7,6 @@
     <AssemblyName>RunAsHelper.Service</AssemblyName>
     <RootNamespace>RunAsHelper.Service</RootNamespace>
     <ProjectGuid>{C3D4E5F6-A7B8-9012-CDEF-3D4E5F607182}</ProjectGuid>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
     <!-- Framework-dependent; the installer assumes .NET 10 x64 Runtime is present. -->
   </PropertyGroup>
 

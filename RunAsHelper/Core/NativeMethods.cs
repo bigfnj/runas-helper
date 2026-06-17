@@ -88,6 +88,13 @@ namespace RunAsHelper.Core
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool DestroyIcon(IntPtr hIcon);
 
+        // Grants a process (by PID) the right to call SetForegroundWindow. The tray
+        // calls this with the PID returned by the service after a successful launch so
+        // the newly-spawned elevated process can bring itself to the foreground.
+        [LibraryImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool AllowSetForegroundWindow(uint dwProcessId);
+
         // ── Installer lookup (post-install validation recovery) ───────────────
 
         // Finds an installed ProductCode from the stable UpgradeCode so the
