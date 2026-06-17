@@ -21,9 +21,9 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     // Whether CLI-sourced launches are permitted. Defaults OFF and is controlled
-    // by the (signed, elevated) tray via the "setcli" verb; the tray resets it on
-    // launch/exit. When enabled, ANY process that can reach the pipe is elevated —
-    // the pipe ACL is the real boundary (Administrators + SYSTEM + InteractiveSid).
+    // by the (installed, elevated) tray via the "setcli" verb; the tray resets it
+    // on launch/exit. When enabled, ANY process that can reach the pipe is elevated
+    // — the pipe ACL is the real boundary (Administrators + SYSTEM + InteractiveSid).
     private volatile bool _allowCli;
 
     // PID of the tray that enabled the gate. The gate is lazily revoked if that
@@ -109,19 +109,42 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         finally { NativeMethods.CloseHandle(hProc); }
     }
 
-    // True if the pipe client is the signed RunAsHelper tray binary.
-    // Verifies both the executable name and the presence of an Authenticode signature.
+    // True if the pipe client is the RunAsHelper tray binary installed alongside
+    // this service. Identity is established by image path — the file must be named
+    // RunAsHelper.exe AND live in the same directory as this service's own
+    // executable (the per-machine install location). That cannot be faked by a
+    // spoofed Source field, and — unlike an Authenticode check — it does not break
+    // unsigned local or CI builds, which would otherwise never open the CLI gate.
+    // A code signature, when present, is reported for diagnostics (IsClientSigned)
+    // and can later be pinned to the official publisher as optional hardening.
     private static bool IsRunAsHelperTray(NamedPipeServerStream pipe)
     {
         string? path = GetClientExecutablePath(pipe);
         if (path is null) return false;
-        if (!path.EndsWith("RunAsHelper.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!path.EndsWith("\\RunAsHelper.exe", StringComparison.OrdinalIgnoreCase)) return false;
+
+        string? clientDir  = Path.GetDirectoryName(path);
+        string? installDir = Path.GetDirectoryName(Environment.ProcessPath);
+        if (clientDir is null || installDir is null) return false;
+
+        return string.Equals(
+            Path.TrimEndingDirectorySeparator(clientDir),
+            Path.TrimEndingDirectorySeparator(installDir),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Best-effort: true if the client binary carries an Authenticode signature.
+    // Reported in the connection log for diagnostics; NOT a gate (see
+    // IsRunAsHelperTray for why unsigned builds must still be trusted).
+    private static bool IsClientSigned(NamedPipeServerStream pipe)
+    {
+        string? path = GetClientExecutablePath(pipe);
+        if (path is null) return false;
         try
         {
-#pragma warning disable SYSLIB0057 // No replacement for Authenticode PE reading
-            var cert = X509Certificate.CreateFromSignedFile(path);
+#pragma warning disable SYSLIB0057 // No managed replacement for Authenticode PE reading
+            return X509Certificate.CreateFromSignedFile(path) is not null;
 #pragma warning restore SYSLIB0057
-            return cert is not null;
         }
         catch { return false; }
     }
@@ -198,9 +221,10 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                 bool isTrayElevated = isTray && IsClientElevated(pipe);
 
                 logger.LogInformation(
-                    "{Verb} request (source={Source} identity={Identity} pid={Pid}): '{CommandLine}' priority=0x{Priority:X}",
+                    "{Verb} request (source={Source} identity={Identity} signed={Signed} pid={Pid}): '{CommandLine}' priority=0x{Priority:X}",
                     request.Verb, request.Source,
                     isTrayElevated ? "tray-elevated" : isTray ? "tray-notelev" : "other",
+                    isTray && IsClientSigned(pipe),
                     clientPid, request.CommandLine, request.Priority);
 
                 // ── setcli: signed tray + elevated (both required to control the gate) ──
@@ -208,7 +232,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                 {
                     if (!isTrayElevated)
                     {
-                        string reason = !isTray ? "not the signed tray" : "tray is not elevated";
+                        string reason = !isTray ? "not the installed tray" : "tray is not elevated";
                         logger.LogWarning("Rejected setcli — {Reason} (pid {Pid}).", reason, clientPid);
                         EventLogHelper.Denied("setcli", $"pid {clientPid}: {reason}");
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
