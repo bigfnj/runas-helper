@@ -2,14 +2,54 @@
   <PropertyGroup>
     <!--
       Single source of truth for binary version numbers.
-      Local builds default to 1.0.0.0; CI passes the real version by running:
-        dotnet build RunAsHelper.sln -c Release -p:ProductVersion=X.Y.Z
+      Precedence:
+        1. An explicit -p:ProductVersion=X.Y.Z (CI passes this from the git tag).
+        2. Otherwise the current git tag, resolved by SetVersionFromGitTag below
+           (so a plain local 'dotnet build' stamps the binaries — and, via
+           bind.FileVersion, the MSI — with the current release version).
+        3. Otherwise 1.0.0.0 (no tag / git unavailable).
       The wixproj forwards ProductVersion to dotnet publish so the EXEs in the
-      MSI report the same FileVersion as the MSI ProductVersion.
+      MSI report the same FileVersion as the MSI version.
     -->
     <Version Condition="'$(ProductVersion)' != '' and '$(ProductVersion)' != '1.0.0.0'">$(ProductVersion)</Version>
     <Version Condition="'$(Version)' == ''">1.0.0.0</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
   </PropertyGroup>
+
+  <!--
+    Local builds: when no explicit ProductVersion was passed (CI passes
+    -p:ProductVersion=X.Y.Z and so skips this), derive the version from the most
+    recent git tag (e.g. v1.4.0 -> 1.4.0) so the output matches the current
+    release instead of 1.0.0.0. Runs before assembly-info generation so the
+    stamped FileVersion is correct; the MSI then binds its version to that
+    FileVersion (see Package.wxs). Falls back silently to 1.0.0.0 when git or a
+    usable tag is unavailable, so the build never fails on the version lookup.
+  -->
+  <Target Name="SetVersionFromGitTag"
+          Condition="'$(ProductVersion)' == '' or '$(ProductVersion)' == '1.0.0.0'"
+          BeforeTargets="GetAssemblyVersion;CoreGenerateAssemblyInfo;GenerateAssemblyInfo">
+    <Exec Command="git describe --tags --abbrev=0"
+          ConsoleToMSBuild="true"
+          ContinueOnError="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_RawGitTag" />
+      <Output TaskParameter="ExitCode"      PropertyName="_GitExitCode" />
+    </Exec>
+    <PropertyGroup Condition="'$(_GitExitCode)' == '0' and '$(_RawGitTag)' != ''">
+      <_GitVersion>$(_RawGitTag.Trim().TrimStart('v'))</_GitVersion>
+    </PropertyGroup>
+    <!-- Only accept a numeric MSI-style version (major.minor.build[.revision]). -->
+    <PropertyGroup Condition="'$(_GitVersion)' != '' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_GitVersion)', '^\d+\.\d+\.\d+(\.\d+)?$'))">
+      <Version>$(_GitVersion)</Version>
+      <ProductVersion>$(_GitVersion)</ProductVersion>
+      <AssemblyVersion>$(_GitVersion)</AssemblyVersion>
+      <FileVersion>$(_GitVersion)</FileVersion>
+      <InformationalVersion>$(_GitVersion)</InformationalVersion>
+      <_VersionFromGit>true</_VersionFromGit>
+    </PropertyGroup>
+    <Message Condition="'$(_VersionFromGit)' == 'true'" Importance="high"
+             Text="$(MSBuildProjectName): version $(Version) (resolved from git tag '$(_RawGitTag.Trim())')." />
+  </Target>
 </Project>

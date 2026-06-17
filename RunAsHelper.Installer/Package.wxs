@@ -15,9 +15,13 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <!-- Version binds to the packaged service EXE's FileVersion at link time, so
+       the MSI version always matches the binaries. That FileVersion comes from
+       the git tag for local builds (Directory.Build.props) or -p:ProductVersion
+       in CI — either way there is no separate version to keep in sync here. -->
   <Package Name="RunAS Helper"
            Manufacturer="Serenity Industries"
-           Version="$(var.ProductVersion)"
+           Version="!(bind.FileVersion.ServiceExe)"
            UpgradeCode="E5F60718-C9DA-1234-EF01-5F6071829304"
            Scope="perMachine">
 
