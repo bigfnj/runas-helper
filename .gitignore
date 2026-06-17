@@ -28,3 +28,10 @@ packages/
 .DS_Store
 Thumbs.db
 *:Zone.Identifier
+
+CLAUDE.md
+AGENTS.md
+.codex/
+.cursorrules
+.windsurfrules
+SESSION_*
