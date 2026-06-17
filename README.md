@@ -33,11 +33,18 @@ RunAS Helper is two cooperating processes:
 
 1. The **client** (tray app or CLI) sends a launch request over a named pipe.
 2. The **service**, running as LocalSystem, enables `SeDebug`/`SeImpersonate`/`SeTcb`, impersonates `winlogon.exe`, starts the `TrustedInstaller` service, and duplicates its access token.
-3. It remaps that token to the active console session so the new process shows up on **your** desktop instead of the invisible Session 0, then launches it via `CreateProcessWithTokenW`.
+3. It remaps that token to the requesting client's session so the new process shows up on **your** desktop instead of the invisible Session 0, then launches it via `CreateProcessAsUserW`.
 
 ### Security model
 
-The named pipe's ACL grants access to **`BUILTIN\Administrators` and `LocalSystem` only**. A non-administrator cannot connect, so this is *not* a local privilege-escalation path — it only lets an administrator (who can already reach TrustedInstaller by other means) do so conveniently. Keep it that way if you modify the pipe security.
+The named pipe ACL grants access to BUILTIN\Administrators, SYSTEM, and the interactive session — this lets endpoint-privilege-management tools (Avecto, BeyondTrust, CyberArk, etc.) elevate a standard-user tray process on-demand.
+
+The service enforces identity server-side, not via the client-supplied `Source` field:
+
+- **Tray control** (`setcli`, saving settings, validation): requires the client to be both the Authenticode-signed `RunAsHelper.exe` **and** running with an elevated token. Neither condition alone is sufficient.
+- **CLI gate** (any other process): when the elevated signed tray opens the gate, **any** process that can reach the pipe gets elevated to TrustedInstaller — the pipe ACL is the boundary. The gate resets whenever the owning tray exits or crashes.
+
+Keep the pipe ACL and the Authenticode check intact if you modify the pipe security.
 
 ## Install
 
@@ -142,9 +149,9 @@ context.
 > 🔒 **The command line is disabled by default.** As a hardening measure, the
 > service rejects CLI-sourced launches unless you enable them this session via
 > *Settings → "Allow command line"* (off again on every tray launch/exit). The
-> tray's own launches are unaffected. The real boundary is the control pipe's
-> ACL — **only elevated Administrators/SYSTEM can connect at all**; unelevated
-> processes are refused outright.
+> tray's own launches are unaffected. When the gate is open, **any** process that
+> can reach the pipe is elevated — the pipe ACL (Administrators + interactive
+> session) is the boundary, not per-caller elevation.
 
 ## Build from source
 
@@ -160,7 +167,7 @@ This produces a single self-contained installer at:
 RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi
 ```
 
-To stamp a specific version into the MSI (the release workflow does this from the git tag):
+To stamp a specific version into the MSI **and** the EXE `FileVersion`/`AssemblyVersion` (the release workflow does this from the git tag):
 
 ```
 dotnet build RunAsHelper.sln -c Release -p:ProductVersion=1.2.3
@@ -191,6 +198,14 @@ Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
 
+## What's new in 1.4.0
+
+- **Window foreground fix** — launched processes now reliably appear in the foreground instead of opening behind existing windows. The service sends the new process's PID to the tray, which calls `AllowSetForegroundWindow` before acknowledging the launch.
+- **Authenticode-based pipe gating** — the service now verifies the connecting binary's Authenticode signature (not just its path) before granting tray-control verbs. A renamed copy of the binary is rejected.
+- **Structured Windows Event Log** — events 1001 (request received), 1002 (launched), 1003 (denied), 1004 (token failure), and 1005 (service start/stop) are written to the Application log under the `RunAsHelper` source. Registered by the installer at install time.
+- **Binary versioning** — `FileVersion` and `AssemblyVersion` in both EXEs are now stamped from the release tag (was always `1.0.0.0`). Enterprise software-inventory tools will see the correct version.
+- **Code cleanup** — removed dead VB6 and twinBASIC legacy sources that were carried in the repo since the original port.
+
 ## Planned features
 
 Not done yet — tracked for future work:
@@ -204,10 +219,7 @@ Not done yet — tracked for future work:
 - **Silent-install auto-start** — register the per-user login entry for
   unattended (`/passive`, `/qn`) deployments, where there's no Finish dialog to
   trigger the first run.
-- **Signed-client enforcement (optional hardening)** — have the service verify
-  the connecting process is the signed RunAS Helper binary, to also constrain
-  *elevated* callers that talk to the pipe directly (beyond the command-line
-  gate, which already covers our own CLI).
+- **Authenticode signing** — sign the release binaries so the Authenticode pipe check also verifies the publisher, not just the presence of a signature.
 
 ## License
 

@@ -21,12 +21,16 @@ internal static partial class NativeMethods
     internal const uint TOKEN_ALL_ACCESS           =
         STANDARD_RIGHTS_REQUIRED | TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE |
         TOKEN_IMPERSONATE | TOKEN_QUERY | TOKEN_QUERY_SOURCE |
-        TOKEN_ADJUST_PRIVILEGES | TOKEN_ADJUST_GROUPS | TOKEN_ADJUST_DEFAULT;
+        TOKEN_ADJUST_PRIVILEGES | TOKEN_ADJUST_GROUPS | TOKEN_ADJUST_DEFAULT |
+        TOKEN_ADJUST_SESSIONID;
 
-    internal const uint SYNCHRONIZE               = 0x00100000;
-    internal const uint PROCESS_DUP_HANDLE        = 0x00000040;
-    internal const uint PROCESS_QUERY_INFORMATION = 0x00000400;
-    internal const uint THREAD_DIRECT_IMPERSONATION = 0x00000200;
+    internal const uint SYNCHRONIZE                      = 0x00100000;
+    internal const uint PROCESS_DUP_HANDLE               = 0x00000040;
+    internal const uint PROCESS_QUERY_INFORMATION        = 0x00000400;
+    // Lighter-weight than PROCESS_QUERY_INFORMATION; sufficient for
+    // QueryFullProcessImageNameW and OpenProcessToken(TOKEN_QUERY).
+    internal const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
+    internal const uint THREAD_DIRECT_IMPERSONATION       = 0x00000200;
 
     // ── Privilege names ──────────────────────────────────────────────────
     internal const string SE_DEBUG_NAME       = "SeDebugPrivilege";
@@ -80,6 +84,7 @@ internal static partial class NativeMethods
     // ── Misc ─────────────────────────────────────────────────────────────
     internal const int STATUS_SUCCESS = 0;
     internal const int MAX_PATH       = 260;
+    internal static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
 
     // ── Enums ─────────────────────────────────────────────────────────────
 
@@ -297,6 +302,16 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool GetNamedPipeClientProcessId(IntPtr Pipe, out uint ClientProcessId);
 
+    // Returns the full image path of a running process. Used to verify that the
+    // pipe client is the installed RunAsHelper tray binary (H-1 identity check).
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool QueryFullProcessImageNameW(
+        IntPtr  hProcess,
+        uint    dwFlags,
+        char*   lpExeName,
+        ref uint lpdwSize);
+
     // Maps a process id to its Terminal Services session — used to log which
     // session the service itself runs in (expected 0) vs. the launch target.
     [LibraryImport("kernel32.dll", SetLastError = true)]
@@ -443,19 +458,6 @@ internal static partial class NativeMethods
         TOKEN_INFORMATION_CLASS TokenInformationClass,
         void*                   TokenInformation,
         uint                    TokenInformationLength);
-
-    [LibraryImport("advapi32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static unsafe partial bool CreateProcessWithTokenW(
-        IntPtr              hToken,
-        uint                dwLogonFlags,
-        string?             lpApplicationName,
-        string?             lpCommandLine,
-        uint                dwCreationFlags,
-        IntPtr              lpEnvironment,
-        string?             lpCurrentDirectory,
-        STARTUPINFOW*       lpStartupInfo,
-        out PROCESS_INFORMATION lpProcessInformation);
 
     // Unlike CreateProcessWithTokenW (which places the child in the CALLER's
     // session), CreateProcessAsUser creates the process in the session carried

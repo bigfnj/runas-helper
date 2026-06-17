@@ -6,14 +6,6 @@
          (x86) folder) and keeps registry components on the 64-bit view. -->
     <InstallerPlatform>x64</InstallerPlatform>
     <!--
-      ICE03 fires because the deferred scheduled-task CustomAction stores a
-      ~400-char PowerShell command in the CustomAction.Target column (declared
-      max 255). Windows Installer reads the full string at runtime and does not
-      truncate it, so the task is created correctly; the warning is cosmetic.
-    -->
-    <SuppressIces>ICE03</SuppressIces>
-
-    <!--
       MSI ProductVersion. Defaults to 1.0.0.0 for local builds; the release
       workflow overrides it from the git tag (-p:ProductVersion=1.2.3) so each
       release ships a higher version and MajorUpgrade detects the upgrade.
@@ -49,7 +41,7 @@
     No .NET runtime is required on the target machine.
   -->
   <Target Name="PublishApps" BeforeTargets="CoreCompile">
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)publish\service\&quot;" />
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(MSBuildThisFileDirectory)publish\client\&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\service\&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\client\&quot;" />
   </Target>
 </Project>

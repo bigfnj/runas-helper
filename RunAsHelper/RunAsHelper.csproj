@@ -10,16 +10,8 @@
     <AssemblyName>RunAsHelper</AssemblyName>
     <RootNamespace>RunAsHelper</RootNamespace>
     <ProjectGuid>{A3F9C841-B78E-4E3C-9A5D-1B2C3D4E5F60}</ProjectGuid>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
-
-  <ItemGroup>
-    <!-- ElevationLauncher moved to RunAsHelper.Service; this file is kept for reference. -->
-    <Compile Remove="Core\ElevationLauncher.cs" />
-  </ItemGroup>
-
 
   <ItemGroup>
     <Compile Include="..\RunAsHelper.Shared\Protocol\PipeMessages.cs" Link="Protocol\PipeMessages.cs" />

@@ -78,6 +78,18 @@
                          KeyPath="yes" />
         </Component>
 
+        <!-- Registers the event source so EventLogHelper can write structured
+             entries (IDs 1001–1005) to the Application log without requiring
+             CreateEventSource at runtime. ForceDeleteOnUninstall removes the
+             key (and its log entries) when the product is uninstalled. -->
+        <Component Id="EventSourceComponent" Guid="2B3C4D5E-6F70-8192-A3B4-C5D6E7F80912">
+          <RegistryKey Root="HKLM"
+                       Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\RunAsHelper"
+                       ForceDeleteOnUninstall="yes">
+            <RegistryValue Name="TypesSupported" Type="integer" Value="7" KeyPath="yes" />
+          </RegistryKey>
+        </Component>
+
       </Directory>
     </StandardDirectory>
 
@@ -111,6 +123,7 @@
       <ComponentRef Id="ClientComponent" />
       <ComponentRef Id="StartMenuComponent" />
       <ComponentRef Id="ValidationFlagComponent" />
+      <ComponentRef Id="EventSourceComponent" />
     </Feature>
 
     <!-- ── User interface ────────────────────────────────────────────────
@@ -135,8 +148,7 @@
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
 
     <!-- WixShellExec runs as the (impersonated) installing user, so the tray app
-         appears on that user's desktop. Reuses the same util CA binary already
-         used for the scheduled-task action below. -->
+         appears on that user's desktop. -->
     <Property Id="WixShellExecTarget" Value="[#ClientExe]" />
     <CustomAction Id="LaunchApplication"
                   BinaryRef="Wix4UtilCA_X64"
