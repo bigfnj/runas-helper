@@ -126,7 +126,9 @@ RunAsHelper.exe -h | --help | /?      :: show full help
 
 Non-executable targets are launched via their host automatically (`.msc`→`mmc`,
 `.cpl`→`control`, `.bat`/`.cmd`→`cmd /c`, `.ps1`→`powershell`), and a bare name
-(e.g. `notepad.exe`, `lusrmgr.msc`) is resolved on the PATH.
+(e.g. `notepad.exe`, `lusrmgr.msc`) is resolved on the PATH — including when
+arguments follow, so targets outside `System32` such as `powershell.exe` launch
+correctly too.
 
 ```bat
 :: Open a TrustedInstaller command prompt
@@ -138,13 +140,43 @@ RunAsHelper.exe /p:3 regedit.exe
 :: Run as plain SYSTEM
 RunAsHelper.exe /as:system cmd.exe
 
+:: Run a PowerShell command as SYSTEM (see "Passing arguments" below)
+RunAsHelper.exe /as:system powershell.exe -NoProfile -Command "Restart-Service WSLService -Force"
+
 :: Quote paths that contain spaces
 RunAsHelper.exe "C:\Program Files\Some Tool\tool.exe" --flag
 ```
 
+#### Passing arguments
+
+Everything after the target path is forwarded to it. Two rules keep the
+arguments intact — get these wrong and the target may start but do nothing:
+
+- **Pass each switch as its own token; quote only the parts that contain
+  spaces** (typically just a `-Command`/`-c` script block). The CLI re-quotes any
+  *single* argument that contains a space, so a whole multi-switch command bundled
+  into one quoted string arrives at the target as one unparseable token. Given
+  such a blob, `powershell.exe` starts and exits without running anything —
+  `cmd.exe` only survives it because it re-parses the line internally, which is
+  what can make a `cmd /c …` wrapper look "required" when it isn't.
+
+  ```bat
+  :: GOOD — switches are separate tokens; only the script block is quoted
+  RunAsHelper.exe /as:system powershell.exe -NoProfile -Command "Get-Service WSLService | Restart-Service -Force"
+
+  :: BAD — the entire argument string is one quoted blob; PowerShell can't parse it
+  RunAsHelper.exe /as:system powershell.exe "-NoProfile -Command Get-Service WSLService | Restart-Service -Force"
+  ```
+
+- **Don't add `-ExecutionPolicy Bypass` for an inline `-Command`.** Execution
+  policy applies only to script *files* (`.ps1`), never to `-Command`, so it is
+  noise there. The tool already supplies it when *it* hosts a `.ps1` for you (the
+  host-mapping above). Note that where execution policy is enforced by Group
+  Policy, the switch is ignored for `.ps1` regardless.
+
 The CLI streams the service's log lines to stdout and exits `0` on success, `1`
 on failure. It requires the **RunASHelper** service running and an elevated
-context.
+context (see the gate note below).
 
 > 🔒 **The command line is disabled by default.** As a hardening measure, the
 > service rejects CLI-sourced launches unless you enable them this session via
@@ -152,6 +184,12 @@ context.
 > tray's own launches are unaffected. When the gate is open, **any** process that
 > can reach the pipe is elevated — the pipe ACL (Administrators + interactive
 > session) is the boundary, not per-caller elevation.
+>
+> **To use the CLI:** open the tray, click **Activate** (approve your OS/endpoint
+> elevation prompt), then toggle *Settings → "Allow command line"*. Only the
+> elevated, installed tray can open the gate, and it closes again when the tray
+> exits — so re-enable it per session. An already-elevated tray launches without
+> needing the gate at all; the gate exists for *non-elevated* CLI callers.
 
 ## Build from source
 
