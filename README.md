@@ -190,6 +190,10 @@ context (see the gate note below).
 > elevated, installed tray can open the gate, and it closes again when the tray
 > exits — so re-enable it per session. An already-elevated tray launches without
 > needing the gate at all; the gate exists for *non-elevated* CLI callers.
+>
+> **Awareness:** while the tray is running it watches the service's event log and
+> shows a tray balloon for every *command-line*-sourced launch, so an escalation
+> made through the open gate that you didn't initiate is flagged immediately.
 
 ## Build from source
 
@@ -239,7 +243,7 @@ reinstall in place (handy during development).
 ## What's new in 1.4.0
 
 - **Window foreground fix** — launched processes now reliably appear in the foreground instead of opening behind existing windows. The service sends the new process's PID to the tray, which calls `AllowSetForegroundWindow` before acknowledging the launch.
-- **Authenticode-based pipe gating** — the service now verifies the connecting binary's Authenticode signature (not just its path) before granting tray-control verbs. A renamed copy of the binary is rejected.
+- **Install-path pipe gating** — the service identifies the tray by image path: the connecting binary must be `RunAsHelper.exe` installed alongside the service. (1.4.0 briefly required an Authenticode *signature* here; 1.4.1 replaced that so unsigned local/CI builds work — a signature, when present, is now optional diagnostics, with publisher pinning tracked under *Planned features*.) A renamed or relocated copy is rejected.
 - **Structured Windows Event Log** — events 1001 (request received), 1002 (launched), 1003 (denied), 1004 (token failure), and 1005 (service start/stop) are written to the Application log under the `RunAsHelper` source. Registered by the installer at install time.
 - **Binary versioning** — `FileVersion` and `AssemblyVersion` in both EXEs are now stamped from the release tag (was always `1.0.0.0`). Enterprise software-inventory tools will see the correct version.
 - **Code cleanup** — removed dead VB6 and twinBASIC legacy sources that were carried in the repo since the original port.
@@ -257,7 +261,13 @@ Not done yet — tracked for future work:
 - **Silent-install auto-start** — register the per-user login entry for
   unattended (`/passive`, `/qn`) deployments, where there's no Finish dialog to
   trigger the first run.
-- **Authenticode signing** — sign the release binaries so the Authenticode pipe check also verifies the publisher, not just the presence of a signature.
+- **Authenticode signing** — sign the release binaries so the install-path pipe
+  check can additionally pin the publisher (the service already records whether a
+  caller is signed; today that is diagnostics only).
+- **CLI gate auto-expiry** — when "Allow command line" is enabled, start a
+  countdown (default 60 min) after which the service auto-closes the gate, so an
+  open gate isn't accidentally left enabled for a long-running tray session. The
+  service enforces the timeout; the tray mirrors it (auto-unchecks + toast).
 
 ## License
 

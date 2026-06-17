@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.Eventing.Reader;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -22,6 +23,9 @@ namespace RunAsHelper
         private bool  _firstShowHandled;
 
         private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 60_000 };
+
+        // Watches the service's structured events to flag CLI-sourced launches.
+        private EventLogWatcher? _cliWatcher;
 
         private const int TrayMenuCap   = 7;
         private const int RecentMenuCap = 5;
@@ -165,6 +169,11 @@ namespace RunAsHelper
             // Register/unregister the login auto-start (HKCU Run → "exe" --tray).
             ApplyStartupRegistration();
 
+            // Begin watching for command-line-sourced launches (independent of
+            // elevation — runs even on the non-elevated tray, so escalations made
+            // while the CLI gate is open are surfaced regardless).
+            StartCliLaunchMonitor();
+
             // First launch after an install: run the validation popup — but not on a
             // tray-only (login) start, which would defeat the clean startup.
             if (!_startHidden)
@@ -231,6 +240,7 @@ namespace RunAsHelper
             }
             _statusTimer.Stop();
             notifyIcon.Visible = false;
+            try { if (_cliWatcher is not null) { _cliWatcher.Enabled = false; _cliWatcher.Dispose(); } } catch { }
             // Reset the CLI gate to off on exit (best-effort), so the command line
             // isn't left enabled when no tray session is active.
             try { _client.SetCommandLineAllowedAsync(false).Wait(800); } catch { }
@@ -300,6 +310,72 @@ namespace RunAsHelper
             Show();
             WindowState = FormWindowState.Normal;
             Activate();
+        }
+
+        // ── CLI-launch awareness ─────────────────────────────────────────────
+
+        // Subscribes to the service's structured Application-log events (source
+        // RunAsHelper, ID 1001 = request received) and raises a tray balloon for any
+        // *command-line*-sourced launch. While "Allow command line" is enabled any
+        // interactive process can drive the pipe, so this makes an out-of-band
+        // escalation the user didn't initiate visible. Best-effort: if the log can't
+        // be subscribed to, notifications are simply skipped.
+        private void StartCliLaunchMonitor()
+        {
+            try
+            {
+                var query = new EventLogQuery("Application", PathType.LogName,
+                    "*[System[Provider[@Name='RunAsHelper'] and (EventID=1001)]]");
+                _cliWatcher = new EventLogWatcher(query);
+                _cliWatcher.EventRecordWritten += OnRunAsHelperEvent;
+                _cliWatcher.Enabled = true;
+            }
+            catch
+            {
+                _cliWatcher = null;
+            }
+        }
+
+        private void OnRunAsHelperEvent(object? sender, EventRecordWrittenEventArgs e)
+        {
+            using var record = e.EventRecord;
+            if (record is null) return;
+            try
+            {
+                // EventLog.WriteEntry stores the whole message as the first insertion
+                // string; read it directly (the source has no message DLL, so
+                // FormatDescription() is unreliable here).
+                string text = record.Properties.Count > 0
+                    ? record.Properties[0].Value?.ToString() ?? string.Empty
+                    : string.Empty;
+                if (text.IndexOf("Source: cli", StringComparison.OrdinalIgnoreCase) < 0)
+                    return;
+
+                string cmd = ExtractFirstQuoted(text);
+                if (IsHandleCreated)
+                    BeginInvoke(() => ShowCliLaunchToast(cmd));
+            }
+            catch { /* never let a log-read failure disturb the tray */ }
+        }
+
+        private void ShowCliLaunchToast(string commandLine)
+        {
+            string body = string.IsNullOrEmpty(commandLine)
+                ? "A command-line launch was elevated via RunAS Helper."
+                : "Command-line launch elevated:\n" +
+                  (commandLine.Length > 120 ? commandLine[..117] + "..." : commandLine);
+            notifyIcon.ShowBalloonTip(6000, "RunAS Helper — command-line launch",
+                body, ToolTipIcon.Warning);
+        }
+
+        // Text between the first pair of single quotes — the service logs the target
+        // as: Launch requested: '<commandLine>'.
+        private static string ExtractFirstQuoted(string s)
+        {
+            int a = s.IndexOf('\'');
+            if (a < 0) return string.Empty;
+            int b = s.IndexOf('\'', a + 1);
+            return b > a ? s.Substring(a + 1, b - a - 1) : string.Empty;
         }
 
         private void MenuExit_Click(object? sender, EventArgs e)
