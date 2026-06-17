@@ -240,6 +240,16 @@ Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
 
+## What's new in 1.5.0
+
+- **Command-line launch notifications** — while the tray is running it subscribes to the service's structured event log and pops a tray balloon for every *command-line*-sourced launch (showing the command). An escalation made through the open CLI gate that you didn't initiate is flagged immediately. Runs even on the non-elevated tray; best-effort, so it silently no-ops if the Application log can't be subscribed to.
+
+## What's new in 1.4.1–1.4.2
+
+- **Install-path tray identity** (1.4.1) — the service identifies the tray by image path (the installed `RunAsHelper.exe` next to the service) instead of an Authenticode signature, so unsigned local/CI builds work again. A signature, when present, is recorded as diagnostics only (publisher pinning is tracked under *Planned features*).
+- **Launch-target PATH resolution** (1.4.2) — targets with arguments that live outside `System32` (e.g. `powershell.exe`) now resolve via PATH and launch correctly. Previously only `System32`-resident targets like `cmd.exe` worked once arguments were present.
+- **Git-tag auto-versioning** — a plain local `dotnet build` now stamps the current git tag (e.g. `1.4.2`) into the binaries and MSI instead of `1.0.0.0`, so a locally built MSI can upgrade an installed release.
+
 ## What's new in 1.4.0
 
 - **Window foreground fix** — launched processes now reliably appear in the foreground instead of opening behind existing windows. The service sends the new process's PID to the tray, which calls `AllowSetForegroundWindow` before acknowledging the launch.
