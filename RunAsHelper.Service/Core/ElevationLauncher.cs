@@ -654,11 +654,18 @@ internal sealed class ElevationLauncher
             }
             else
             {
-                Log($"Args detected — app={app}  args={args}");
                 if (app.Contains('%')) app = ExpandEnvVars(app);
+                // CreateProcessAsUser does NOT search PATH for a non-null
+                // lpApplicationName — a bare name resolves only against the
+                // service's working directory (C:\Windows\System32). cmd.exe lives
+                // there, but powershell.exe (System32\WindowsPowerShell\v1.0) and
+                // most other tools do not, so they failed with FILE_NOT_FOUND once
+                // arguments were present. Resolve to a full path via PATH first.
+                string launchApp = ResolveExecutable(app) ?? app;
+                Log($"Args detected — app={launchApp}  args={args}");
 
                 result = NativeMethods.CreateProcessAsUserW(
-                    hToken, app, commandLine,
+                    hToken, launchApp, commandLine,
                     IntPtr.Zero, IntPtr.Zero, false,
                     creationFlags,
                     IntPtr.Zero, workDir, &si, out pi);
@@ -774,25 +781,31 @@ internal sealed class ElevationLauncher
     {
         try
         {
-            string exe = app.Trim().Trim('"');
-            if (exe.Length == 0) return false;
-            if (exe.Contains('%')) exe = ExpandEnvVars(exe);
-
-            string full = exe;
-            bool hasPath = exe.Contains('\\') || exe.Contains('/');
-            if (!hasPath)
-            {
-                const int n = NativeMethods.MAX_PATH * 2;
-                char* buf = stackalloc char[n];
-                uint len = NativeMethods.SearchPathW(null, exe, ".exe", n, buf, IntPtr.Zero);
-                if (len == 0 || len >= n) return false;
-                full = new string(buf, 0, (int)len);
-            }
-
-            if (!System.IO.File.Exists(full)) return false;
+            string? full = ResolveExecutable(app);
+            if (full is null) return false;
             return ReadPeSubsystem(full) == NativeMethods.IMAGE_SUBSYSTEM_WINDOWS_CUI;
         }
         catch { return false; }
+    }
+
+    // Resolves a launch target to a full image path. A rooted path is returned
+    // as-is if it exists; a bare name (e.g. "powershell.exe") is looked up on the
+    // standard search path including PATH. Returns null if it cannot be resolved.
+    // CreateProcessAsUser needs this because, unlike CreateProcess with a null
+    // lpApplicationName, it does not search PATH for the application name itself.
+    private static unsafe string? ResolveExecutable(string app)
+    {
+        string exe = app.Trim().Trim('"');
+        if (exe.Length == 0) return null;
+        if (exe.Contains('%')) exe = ExpandEnvVars(exe);
+
+        if (exe.Contains('\\') || exe.Contains('/'))
+            return System.IO.File.Exists(exe) ? exe : null;
+
+        const int n = NativeMethods.MAX_PATH * 2;
+        char* buf = stackalloc char[n];
+        uint len = NativeMethods.SearchPathW(null, exe, ".exe", n, buf, IntPtr.Zero);
+        return (len > 0 && len < n) ? new string(buf, 0, (int)len) : null;
     }
 
     private static ushort ReadPeSubsystem(string path)
