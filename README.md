@@ -64,6 +64,17 @@ The tray runs **non-elevated** and registers its own per-user login auto-start
 (an `HKCU\…\Run` entry that opens just the tray icon). Click the tray's
 **Activate** button to elevate on demand (no standing scheduled task).
 
+The installer bundles the app's public code-signing certificate and offers an
+**optional, off-by-default** step to trust it on the machine (a checkbox during
+setup). When enabled, the certificate is imported into `LocalMachine\Root` so
+Windows shows *Serenity Software* as a verified publisher for the app's signature
+instead of "Unknown publisher". It trusts anything signed by that certificate on
+that computer and is **not** removed on uninstall. To enable it silently:
+
+```
+msiexec /i RunAsHelper-Setup-<version>.msi /qn INSTALLCERT=1
+```
+
 ### Uninstall
 
 ```
@@ -269,6 +280,15 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
 Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
+
+## What's new in 1.5.7
+
+- **Optional certificate trust at install** — the installer bundles the public
+  *Serenity Software* code-signing certificate and adds an off-by-default checkbox
+  to import it into the machine's Trusted Root store, so the app's signature reads
+  as a verified publisher. Opt in with the checkbox or `INSTALLCERT=1`; it is left
+  in place on uninstall. A self-signed root is a machine-wide trust change, so it
+  stays opt-in.
 
 ## What's new in 1.5.6
 
