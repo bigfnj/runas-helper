@@ -121,12 +121,14 @@ namespace RunAsHelper
             btnBrowse.Anchor   = AnchorStyles.Top | AnchorStyles.Left;
             btnBrowse.Text     = "Browse...";
 
-            // Width leaves a ~24px right margin at the design width; the Left|Right
-            // anchor keeps that margin constant as the window grows (the box stretches
-            // but never hugs the border).
+            // Anchored Top|Left only. The right edge (and thus the width) is driven
+            // explicitly by LayoutQuickRunPath() — a DPI-aware calculation run on show
+            // and on resize — because a plain Left|Right anchor did not reliably hold
+            // the right margin under AutoScaleMode.Font, so widening the box in the
+            // designer had no visible effect.
             comboPath.Location = new System.Drawing.Point(196, 26);
-            comboPath.Size     = new System.Drawing.Size(424, 23);
-            comboPath.Anchor   = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            comboPath.Size     = new System.Drawing.Size(400, 23);
+            comboPath.Anchor   = AnchorStyles.Top | AnchorStyles.Left;
 
             // Row 2: one explicit run button per account — the account is chosen by
             // which button you click, so there is no separate account dropdown. Both
