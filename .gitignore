@@ -20,6 +20,12 @@ packages/
 *.nupkg
 .nuget/
 
+# Code-signing private keys — NEVER commit. The public .cer (signing/*.cer) is
+# intentionally tracked; the private key stays in the user's certificate store.
+*.pfx
+*.p12
+*.snk
+
 # Rider / JetBrains
 .idea/
 *.DotSettings.user

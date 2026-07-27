@@ -18,6 +18,18 @@
   </PropertyGroup>
 
   <!--
+    Product identity stamped into both EXEs' Win32 version info (Properties →
+    Details) and matched by the MSI Manufacturer + the code-signing certificate
+    subject. Publisher/moniker is "Serenity Software"; author is BigFN'j.
+  -->
+  <PropertyGroup>
+    <Company>Serenity Software</Company>
+    <Authors>BigFN'j</Authors>
+    <Product>RunAS Helper</Product>
+    <Copyright>Copyright © 2026 BigFN'j (Serenity Software)</Copyright>
+  </PropertyGroup>
+
+  <!--
     Local builds: when no explicit ProductVersion was passed (CI passes
     -p:ProductVersion=X.Y.Z and so skips this), derive the version from the most
     recent git tag (e.g. v1.4.0 -> 1.4.0) so the output matches the current
