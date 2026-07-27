@@ -37,10 +37,10 @@ namespace RunAsHelper
             panelTop      = new Panel();
             lblQuick      = new Label();
             comboPriority = new ComboBox();
-            comboAccountQuick = new ComboBox();
             comboPath     = new ComboBox();
             btnBrowse     = new Button();
-            btnRun        = new Button();
+            btnRunTI      = new Button();
+            btnRunSystem  = new Button();
             btnActivate   = new Button();
             lblSaved      = new Label();
             btnAddApp     = new Button();
@@ -99,12 +99,15 @@ namespace RunAsHelper
 
             // ── Top panel ─────────────────────────────────────────────────────
             panelTop.Dock   = DockStyle.Top;
-            panelTop.Height  = 116;
+            panelTop.Height  = 144;
 
             lblQuick.AutoSize = true;
             lblQuick.Location = new System.Drawing.Point(8, 6);
             lblQuick.Text     = "Quick run (one-off):";
 
+            // Row 1: priority + browse + path. Browse sits at a fixed position right
+            // after the priority dropdown (left-anchored, so it is always visible);
+            // the path box is the only control that stretches to the right edge.
             comboPriority.DropDownStyle = ComboBoxStyle.DropDownList;
             comboPriority.Location      = new System.Drawing.Point(8, 26);
             comboPriority.Size          = new System.Drawing.Size(96, 23);
@@ -113,67 +116,73 @@ namespace RunAsHelper
             { "Idle", "Below Normal", "Normal", "Above Normal", "High", "Realtime" });
             comboPriority.SelectedIndex = 2;
 
-            comboAccountQuick.DropDownStyle = ComboBoxStyle.DropDownList;
-            comboAccountQuick.Location      = new System.Drawing.Point(110, 26);
-            comboAccountQuick.Size          = new System.Drawing.Size(130, 23);
-            comboAccountQuick.Anchor        = AnchorStyles.Top | AnchorStyles.Left;
-            comboAccountQuick.Items.AddRange(new object[] { "TrustedInstaller", "SYSTEM" });
-            comboAccountQuick.SelectedIndex = 0;
+            btnBrowse.Location = new System.Drawing.Point(110, 25);
+            btnBrowse.Size     = new System.Drawing.Size(80, 25);
+            btnBrowse.Anchor   = AnchorStyles.Top | AnchorStyles.Left;
+            btnBrowse.Text     = "Browse...";
 
-            comboPath.Location = new System.Drawing.Point(246, 26);
-            comboPath.Size     = new System.Drawing.Size(288, 23);
+            // Width leaves a ~24px right margin at the design width; the Left|Right
+            // anchor keeps that margin constant as the window grows (the box stretches
+            // but never hugs the border).
+            comboPath.Location = new System.Drawing.Point(196, 26);
+            comboPath.Size     = new System.Drawing.Size(424, 23);
             comboPath.Anchor   = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
-            btnBrowse.Location = new System.Drawing.Point(538, 26);
-            btnBrowse.Size     = new System.Drawing.Size(34, 24);
-            btnBrowse.Anchor   = AnchorStyles.Top | AnchorStyles.Right;
-            btnBrowse.Text     = "...";
+            // Row 2: one explicit run button per account — the account is chosen by
+            // which button you click, so there is no separate account dropdown. Both
+            // carry the UAC shield (BCM_SETSHIELD, applied once elevated in
+            // MainForm.OnLoad / ApplyServiceState).
+            btnRunTI.Location  = new System.Drawing.Point(8, 55);
+            btnRunTI.Size      = new System.Drawing.Size(190, 26);
+            btnRunTI.Anchor    = AnchorStyles.Top | AnchorStyles.Left;
+            btnRunTI.Text      = "Run as TrustedInstaller";
+            btnRunTI.FlatStyle = FlatStyle.System;
 
-            btnRun.Location  = new System.Drawing.Point(576, 26);
-            btnRun.Size      = new System.Drawing.Size(60, 24);
-            btnRun.Anchor    = AnchorStyles.Top | AnchorStyles.Right;
-            btnRun.Text      = "Run";
-            btnRun.FlatStyle = FlatStyle.System;
+            btnRunSystem.Location  = new System.Drawing.Point(206, 55);
+            btnRunSystem.Size      = new System.Drawing.Size(130, 26);
+            btnRunSystem.Anchor    = AnchorStyles.Top | AnchorStyles.Left;
+            btnRunSystem.Text      = "Run as SYSTEM";
+            btnRunSystem.FlatStyle = FlatStyle.System;
 
             lblSaved.AutoSize = true;
-            lblSaved.Location = new System.Drawing.Point(8, 60);
+            lblSaved.Location = new System.Drawing.Point(8, 88);
             lblSaved.Font     = new System.Drawing.Font("Segoe UI", 9.5f, System.Drawing.FontStyle.Bold);
             lblSaved.Text     = "Saved applications";
 
-            btnAddApp.Location  = new System.Drawing.Point(8, 82);
+            btnAddApp.Location  = new System.Drawing.Point(8, 110);
             btnAddApp.Size      = new System.Drawing.Size(130, 26);
             btnAddApp.Anchor    = AnchorStyles.Top | AnchorStyles.Left;
             btnAddApp.Text      = "Add Application";
             btnAddApp.FlatStyle = FlatStyle.System;
 
-            btnRunSaved.Location = new System.Drawing.Point(146, 82);
+            btnRunSaved.Location = new System.Drawing.Point(146, 110);
             btnRunSaved.Size     = new System.Drawing.Size(64, 26);
             btnRunSaved.Anchor   = AnchorStyles.Top | AnchorStyles.Left;
             btnRunSaved.Text     = "Run";
 
-            btnEditApp.Location = new System.Drawing.Point(214, 82);
+            btnEditApp.Location = new System.Drawing.Point(214, 110);
             btnEditApp.Size     = new System.Drawing.Size(64, 26);
             btnEditApp.Anchor   = AnchorStyles.Top | AnchorStyles.Left;
             btnEditApp.Text     = "Edit";
 
-            btnRemoveApp.Location = new System.Drawing.Point(282, 82);
+            btnRemoveApp.Location = new System.Drawing.Point(282, 110);
             btnRemoveApp.Size     = new System.Drawing.Size(76, 26);
             btnRemoveApp.Anchor   = AnchorStyles.Top | AnchorStyles.Left;
             btnRemoveApp.Text     = "Remove";
 
-            btnUpApp.Location = new System.Drawing.Point(364, 82);
+            btnUpApp.Location = new System.Drawing.Point(364, 110);
             btnUpApp.Size     = new System.Drawing.Size(30, 26);
             btnUpApp.Anchor   = AnchorStyles.Top | AnchorStyles.Left;
             btnUpApp.Text     = "↑";
 
-            btnDownApp.Location = new System.Drawing.Point(398, 82);
+            btnDownApp.Location = new System.Drawing.Point(398, 110);
             btnDownApp.Size     = new System.Drawing.Size(30, 26);
             btnDownApp.Anchor   = AnchorStyles.Top | AnchorStyles.Left;
             btnDownApp.Text     = "↓";
 
             panelTop.Controls.AddRange(new Control[]
             {
-                lblQuick, comboPriority, comboAccountQuick, comboPath, btnBrowse, btnRun,
+                lblQuick, comboPriority, comboPath, btnBrowse, btnRunTI, btnRunSystem,
                 lblSaved, btnAddApp, btnRunSaved, btnEditApp, btnRemoveApp, btnUpApp, btnDownApp,
             });
 
@@ -292,10 +301,10 @@ namespace RunAsHelper
         private Panel    panelTop;
         private Label    lblQuick;
         private ComboBox comboPriority;
-        private ComboBox comboAccountQuick;
         private ComboBox comboPath;
         private Button   btnBrowse;
-        private Button   btnRun;
+        private Button   btnRunTI;
+        private Button   btnRunSystem;
         private Button   btnActivate;
         private Label    lblSaved;
         private Button   btnAddApp;

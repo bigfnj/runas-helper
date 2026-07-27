@@ -85,7 +85,8 @@ namespace RunAsHelper
 
         private void WireEvents()
         {
-            btnRun.Click           += BtnRun_Click;
+            btnRunTI.Click         += async (_, _) => await RunQuickAsync("ti");
+            btnRunSystem.Click     += async (_, _) => await RunQuickAsync("system");
             btnBrowse.Click        += BtnBrowse_Click;
             btnAddApp.Click        += (_, _) => AddApplication();
             btnRunSaved.Click      += async (_, _) => await RunSelectedAppAsync();
@@ -185,7 +186,7 @@ namespace RunAsHelper
                 // Activate action that relaunches elevated (via Avecto/UAC). On a
                 // standard-user/Avecto machine this is the supported way up — the
                 // tray can't be auto-started elevated by the logon task.
-                btnRun.Enabled = comboPriority.Enabled = comboAccountQuick.Enabled =
+                btnRunTI.Enabled = btnRunSystem.Enabled = comboPriority.Enabled =
                     comboPath.Enabled = btnBrowse.Enabled = false;
                 btnActivate.Visible  = true;
                 menuActivate.Visible = true;
@@ -196,7 +197,8 @@ namespace RunAsHelper
                 return;
             }
 
-            NativeMethods.SendMessage(btnRun.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
+            NativeMethods.SendMessage(btnRunTI.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
+            NativeMethods.SendMessage(btnRunSystem.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
             AppendLog("Checking RunAS Helper service...");
             CheckServiceStatusAsync();
             _statusTimer.Start();
@@ -279,7 +281,7 @@ namespace RunAsHelper
                 AppendLog("RunAS Helper service is running. Ready.");
                 if (NativeMethods.IsUserAnAdmin())
                 {
-                    btnRun.Enabled      = true;
+                    btnRunTI.Enabled = btnRunSystem.Enabled = true;
                     lblNotAdmin.Visible = false;
                     PushCliAllowed();   // sync the CLI gate (off on startup = reset)
                 }
@@ -289,7 +291,7 @@ namespace RunAsHelper
                 notifyIcon.Icon     = _greyIcon ?? this.Icon;
                 notifyIcon.Text     = "RunAS Helper  ✗ Service offline";
                 AppendLog("RunAS Helper service is not running.");
-                btnRun.Enabled      = false;
+                btnRunTI.Enabled = btnRunSystem.Enabled = false;
                 lblNotAdmin.Text    = "RunAS Helper service is not running.";
                 lblNotAdmin.Visible = true;
             }
@@ -830,7 +832,10 @@ namespace RunAsHelper
 
         // ── Quick run (one-off) ──────────────────────────────────────────────
 
-        private async void BtnRun_Click(object? sender, EventArgs e)
+        // Quick-run: launch the typed/browsed path under the given account ("ti" or
+        // "system"). Called by the two account-specific run buttons — the button you
+        // click selects the account, so there is no separate account dropdown.
+        private async Task RunQuickAsync(string account)
         {
             string path = comboPath.Text.Trim();
             if (string.IsNullOrWhiteSpace(path))
@@ -839,22 +844,22 @@ namespace RunAsHelper
                 return;
             }
 
-            btnRun.Enabled = false;
+            string acctName = account == "system" ? "SYSTEM" : "TrustedInstaller";
+            btnRunTI.Enabled = btnRunSystem.Enabled = false;
             try
             {
                 uint priority = PriorityClasses[comboPriority.SelectedIndex];
-                string account = comboAccountQuick.SelectedIndex == 1 ? "system" : "ti";
                 bool ok = await _client.LaunchElevatedAsync(path, priority, "", 1 /* SW_SHOWNORMAL */, account);
 
                 _settings.PriorityIndex = comboPriority.SelectedIndex;
                 _settings.AddMru(path);
                 RefreshMruCombo();
 
-                AppendLog(ok ? "Launch succeeded." : "Launch failed.");
+                AppendLog(ok ? $"Launch succeeded (as {acctName})." : $"Launch failed (as {acctName}).");
             }
             finally
             {
-                btnRun.Enabled = true;
+                btnRunTI.Enabled = btnRunSystem.Enabled = true;
             }
         }
 

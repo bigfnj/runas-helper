@@ -57,7 +57,8 @@ EXAMPLES
   RunAsHelper.exe ""C:\Program Files\Tool\tool.exe"" --flag
 
 TRAY APP
-  Quick run (one-off):  pick priority + account, type or browse a path, Run.
+  Quick run (one-off):  pick a priority, type or Browse... to a path, then click
+                        ""Run as TrustedInstaller"" or ""Run as SYSTEM"".
   Saved applications:   Add Application stores name, location, parameters,
                         working directory, window state, account and priority.
                         Double-click or Run to launch; Edit / Remove / Up / Down
