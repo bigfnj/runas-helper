@@ -44,4 +44,35 @@
     <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\service\&quot;" />
     <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\client\&quot;" />
   </Target>
+
+  <!--
+    Optional Authenticode signing. Active only when both -p:SigningCertThumbprint
+    and -p:SignToolPath are supplied (signing/Build-Signed.ps1 supplies both). A
+    plain `dotnet build` leaves these empty and produces an UNSIGNED build, so
+    unsigned local/CI builds still work — the service trusts the installed tray by
+    image path, not by signature.
+
+    The published EXEs are signed after PublishApps but before CoreCompile (the
+    WiX link that packs them), so the signed binaries are what ends up inside the
+    MSI; the MSI itself is signed after Build. Timestamping is included when
+    -p:SignTimestampUrl is non-empty (default via the wrapper).
+  -->
+  <PropertyGroup Condition="'$(SigningCertThumbprint)' != '' and '$(SignToolPath)' != ''">
+    <_SignTs Condition="'$(SignTimestampUrl)' != ''">/tr $(SignTimestampUrl) /td SHA256</_SignTs>
+    <_SignArgs>sign /sha1 $(SigningCertThumbprint) /fd SHA256 $(_SignTs) /d "RunAS Helper"</_SignArgs>
+  </PropertyGroup>
+
+  <Target Name="SignPublishedApps"
+          AfterTargets="PublishApps" BeforeTargets="CoreCompile"
+          Condition="'$(SigningCertThumbprint)' != '' and '$(SignToolPath)' != ''">
+    <Message Importance="high" Text="Signing published EXEs with cert $(SigningCertThumbprint)..." />
+    <Exec Command="&quot;$(SignToolPath)&quot; $(_SignArgs) &quot;$(MSBuildThisFileDirectory)publish\service\RunAsHelper.Service.exe&quot; &quot;$(MSBuildThisFileDirectory)publish\client\RunAsHelper.exe&quot;" />
+  </Target>
+
+  <Target Name="SignMsi"
+          AfterTargets="Build"
+          Condition="'$(SigningCertThumbprint)' != '' and '$(SignToolPath)' != ''">
+    <Message Importance="high" Text="Signing MSI $(OutDir)$(OutputName).msi ..." />
+    <Exec Command="&quot;$(SignToolPath)&quot; $(_SignArgs) &quot;$(OutDir)$(OutputName).msi&quot;" />
+  </Target>
 </Project>
