@@ -43,6 +43,9 @@ namespace RunAsHelper
         public MainForm(bool startHidden = false)
         {
             InitializeComponent();
+            // Stamp the running version into the title bar so screenshots are
+            // unambiguous about exactly which build is on screen.
+            Text = $"RunAS Helper - {AppVersionString()}";
             _startHidden = startHidden || _settings.StartMinimized;
             // Set the window icon to power.ico before SetTrayIcon(), which derives
             // the tray icons (grey + colour) from this.Icon. Without this the form
@@ -88,6 +91,7 @@ namespace RunAsHelper
             btnRunTI.Click         += async (_, _) => await RunQuickAsync("ti");
             btnRunSystem.Click     += async (_, _) => await RunQuickAsync("system");
             btnBrowse.Click        += BtnBrowse_Click;
+            panelTop.SizeChanged   += (_, _) => LayoutQuickRunPath();
             btnAddApp.Click        += (_, _) => AddApplication();
             btnRunSaved.Click      += async (_, _) => await RunSelectedAppAsync();
             btnEditApp.Click       += (_, _) => EditSelectedApp();
@@ -204,6 +208,32 @@ namespace RunAsHelper
             _statusTimer.Start();
             // Note: starting to the tray is handled by SetVisibleCore (no window
             // flash), so no HideToTray call is needed here.
+        }
+
+        // Size the quick-run path box once the form is fully laid out (and again on
+        // every resize, via panelTop.SizeChanged) so it keeps a fixed right margin.
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            LayoutQuickRunPath();
+        }
+
+        // Sets the quick-run path box width so its right edge keeps a fixed, DPI-scaled
+        // margin from the panel's right border, at any window width. Driven explicitly
+        // (OnShown + panelTop.SizeChanged) instead of via a Left|Right anchor, which did
+        // not reliably hold the margin under AutoScaleMode.Font.
+        private void LayoutQuickRunPath()
+        {
+            if (comboPath is null || panelTop is null) return;
+            int w = panelTop.ClientSize.Width - comboPath.Left - LogicalToDeviceUnits(48);
+            w = Math.Max(60, w);
+            if (comboPath.Width != w) comboPath.Width = w;
+        }
+
+        private static string AppVersionString()
+        {
+            var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            return v is null ? "v?" : $"v{v.Major}.{v.Minor}.{v.Build}";
         }
 
         // Keep the HKCU "Run" entry in sync with the StartWithWindows setting, so
