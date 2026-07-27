@@ -41,10 +41,10 @@ The named pipe ACL grants access to BUILTIN\Administrators, SYSTEM, and the inte
 
 The service enforces identity server-side, not via the client-supplied `Source` field:
 
-- **Tray control** (`setcli`, saving settings, validation): requires the client to be both the Authenticode-signed `RunAsHelper.exe` **and** running with an elevated token. Neither condition alone is sufficient.
-- **CLI gate** (any other process): when the elevated signed tray opens the gate, **any** process that can reach the pipe gets elevated to TrustedInstaller — the pipe ACL is the boundary. The gate resets whenever the owning tray exits or crashes.
+- **Tray control** (`setcli`, saving settings, validation): requires the client to be both the installed `RunAsHelper.exe` — identified by image path (the binary sitting next to the service), so unsigned local/CI builds still work — **and** running with an elevated token. Neither condition alone is sufficient. A caller's Authenticode signature is recorded for diagnostics; pinning it to a specific publisher is optional future hardening (see *Planned features*).
+- **CLI gate** (any other process): when the elevated tray opens the gate, **any** process that can reach the pipe gets elevated to TrustedInstaller — the pipe ACL is the boundary. The gate resets whenever the owning tray exits or crashes.
 
-Keep the pipe ACL and the Authenticode check intact if you modify the pipe security.
+Keep the pipe ACL and the install-path identity check intact if you modify the pipe security.
 
 ## Install
 
@@ -83,8 +83,9 @@ icon (see *Startup* below). The main window is a **saved-applications manager**:
   **window state** (Normal / Minimized / Maximized / Hidden), priority, and
   **account** (TrustedInstaller or SYSTEM). Double-click or **Run** to launch;
   **Edit** / **Remove** / **↑ ↓** to manage (Del / F2 / Enter shortcuts).
-- **Quick run (one-off)** — a top row to launch a path once (with priority +
-  account) without saving it.
+- **Quick run (one-off)** — launch a path once without saving it: pick a
+  priority, type or **Browse…** to a path, then click **Run as TrustedInstaller**
+  or **Run as SYSTEM** (the button you click chooses the account).
 - **Tools menu** — Settings, Validate Installation, Open PowerShell
   (TrustedInstaller), Import/Export saved apps, and **How to Use**.
 
@@ -215,6 +216,35 @@ To stamp a specific version into the MSI **and** the EXE `FileVersion`/`Assembly
 dotnet build RunAsHelper.sln -c Release -p:ProductVersion=1.2.3
 ```
 
+### Signed build (optional)
+
+A plain build is **unsigned** — that is fully supported (the service trusts the
+tray by install path, not by signature). To produce Authenticode-signed EXEs and
+MSI, use the helper scripts in [`signing/`](signing):
+
+```powershell
+# One-time: create a self-signed code-signing cert (CN=Serenity Software) in your
+# user store and, with -TrustMachine (elevated), trust it on this machine.
+.\signing\New-SigningCert.ps1 -TrustMachine
+
+# Build a signed release. Resolves signtool + the cert, signs both EXEs before
+# WiX packs them, then signs the MSI (RFC3161-timestamped when reachable).
+.\signing\Build-Signed.ps1 -Version 1.5.6
+```
+
+Signing is opt-in at the MSBuild level: the installer's sign targets fire only
+when `-p:SigningCertThumbprint` and `-p:SignToolPath` are supplied (the wrapper
+does this). A **self-signed** cert is trusted only where its public certificate
+has been imported into Trusted Root — it is not a substitute for a CA/EV cert for
+public distribution, and does not earn SmartScreen reputation. The public
+certificate is committed at `signing/serenity-software.cer`; private keys
+(`*.pfx`/`*.p12`) are git-ignored and never leave your certificate store.
+
+Give each installed build a **distinct** version — Windows Installer can't tell
+two builds apart if they share a `ProductVersion`, so a same-version reinstall
+may silently keep the old bits. The tray shows its running version in the window
+title to make this unambiguous.
+
 ### Projects
 
 | Project | Output | Role |
@@ -239,6 +269,21 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
 Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
+
+## What's new in 1.5.6
+
+- **Quick-run redesign** — the one-off launcher is now priority + path + **Browse…**
+  on one row, with explicit **Run as TrustedInstaller** and **Run as SYSTEM**
+  buttons below (the account is chosen by which button you click, replacing the
+  old account dropdown). Both buttons carry the UAC shield. The path box keeps a
+  fixed right margin at any window width (sized explicitly rather than via a
+  `Left|Right` anchor, which `AutoScaleMode.Font` layout was overriding).
+- **Version in the title bar** — the window title reads `RunAS Helper - vX.Y.Z`
+  so it is always obvious which build is running.
+- **Self-signed code signing (opt-in)** — a build pipeline that Authenticode-signs
+  both EXEs and the MSI under the **Serenity Software** publisher, with the author
+  recorded in the binaries' file metadata. See *Signed build* under *Build from
+  source*. Unsigned builds remain fully supported.
 
 ## What's new in 1.5.0
 
@@ -271,9 +316,12 @@ Not done yet — tracked for future work:
 - **Silent-install auto-start** — register the per-user login entry for
   unattended (`/passive`, `/qn`) deployments, where there's no Finish dialog to
   trigger the first run.
-- **Authenticode signing** — sign the release binaries so the install-path pipe
-  check can additionally pin the publisher (the service already records whether a
-  caller is signed; today that is diagnostics only).
+- **Publisher pinning** — signing now exists (opt-in, self-signed *Serenity
+  Software*; see *Signed build*), but the pipe gate still identifies the tray by
+  image path only. Remaining work: a trusted/purchased cert for public
+  distribution, and wiring the pipe check to additionally require a valid
+  signature from a pinned publisher (the service already records whether a caller
+  is signed; today that is diagnostics only).
 - **CLI gate auto-expiry** — when "Allow command line" is enabled, start a
   countdown (default 60 min) after which the service auto-closes the gate, so an
   open gate isn't accidentally left enabled for a long-running tray session. The
