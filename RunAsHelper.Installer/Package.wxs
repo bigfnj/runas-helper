@@ -94,6 +94,13 @@
           </RegistryKey>
         </Component>
 
+        <!-- The public code-signing certificate, installed next to the app so the
+             optional trust step can import it and so it stays available for a manual
+             import later. Public key only — safe to ship. -->
+        <Component Id="CertFileComponent" Guid="4D5E6F70-8192-A3B4-C5D6-E7F8091A2B3C">
+          <File Id="SerenityCer" Source="..\signing\serenity-software.cer" KeyPath="yes" />
+        </Component>
+
       </Directory>
     </StandardDirectory>
 
@@ -128,6 +135,7 @@
       <ComponentRef Id="StartMenuComponent" />
       <ComponentRef Id="ValidationFlagComponent" />
       <ComponentRef Id="EventSourceComponent" />
+      <ComponentRef Id="CertFileComponent" />
     </Feature>
 
     <!-- ── User interface ────────────────────────────────────────────────
@@ -161,12 +169,69 @@
                   Impersonate="yes"
                   Return="check" />
 
+    <!-- ── Optional: trust the self-signed code-signing certificate ─────────
+      OFF by default. INSTALLCERT is left UNSET so the CertDlg checkbox renders
+      unchecked — an MSI checkbox is checked whenever its bound property is non-empty,
+      so a default of "0" would (wrongly) show as ticked. Opt in via the checkbox
+      (which sets it to "1") or INSTALLCERT=1 on the msiexec command line. When set, a
+      deferred custom action runs as SYSTEM after the files are laid down and imports
+      the bundled public certificate into LocalMachine\Root via certutil, so Windows
+      validates the app's signature as a verified "Serenity Software" publisher on this
+      machine. Best-effort (Return="ignore") so a certutil failure never fails the
+      install; not undone on uninstall. The command reaches the deferred action as
+      CustomActionData because the SetProperty Id matches the deferred action's Id. -->
+    <Property Id="INSTALLCERT" Secure="yes" />
+
+    <SetProperty Id="ImportSerenityCert"
+                 Sequence="execute"
+                 Before="ImportSerenityCert"
+                 Value="&quot;[System64Folder]certutil.exe&quot; -addstore -f Root &quot;[INSTALLFOLDER]serenity-software.cer&quot;"
+                 Condition="INSTALLCERT=1 AND NOT Installed" />
+
+    <CustomAction Id="ImportSerenityCert"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="ImportSerenityCert" After="InstallFiles"
+              Condition="INSTALLCERT=1 AND NOT Installed" />
+    </InstallExecuteSequence>
+
     <UI>
       <Publish Dialog="ExitDialog"
                Control="Finish"
                Event="DoAction"
                Value="LaunchApplication"
                Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+
+      <!-- Insert an optional certificate-trust page between the welcome/EULA and the
+           install. WelcomeEulaDlg's Install button advances to CertDlg once the
+           licence is accepted; CertDlg's Install begins the installation. -->
+      <Publish Dialog="WelcomeEulaDlg" Control="Install" Event="NewDialog" Value="CertDlg"
+               Order="10" Condition="LicenseAccepted = &quot;1&quot;" />
+
+      <Dialog Id="CertDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="15" Y="15" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Trust the app's certificate (optional)" />
+        <Control Id="Description" Type="Text" X="25" Y="42" Width="320" Height="72" NoPrefix="yes"
+                 Text="RunAS Helper is signed by a self-signed &quot;Serenity Software&quot; certificate. Adding that certificate to this machine's Trusted Root store makes Windows show a verified publisher and removes the &quot;Unknown publisher&quot; warning for the app's signature.&#13;&#10;&#13;&#10;This trusts anything signed by that certificate on this computer, and is left in place if you later uninstall. Leave it unchecked to install without changing the machine's trust." />
+        <Control Id="InstallCertCheckBox" Type="CheckBox" X="25" Y="124" Width="320" Height="18"
+                 Property="INSTALLCERT" CheckBoxValue="1"
+                 Text="Trust the Serenity Software certificate on this machine" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="WelcomeEulaDlg" />
+        </Control>
+        <Control Id="Install" Type="PushButton" ElevationShield="yes" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Install">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
     </UI>
 
   </Package>
