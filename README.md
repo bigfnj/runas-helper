@@ -240,7 +240,7 @@ MSI, use the helper scripts in [`signing/`](signing):
 
 # Build a signed release. Resolves signtool + the cert, signs both EXEs before
 # WiX packs them, then signs the MSI (RFC3161-timestamped when reachable).
-.\signing\Build-Signed.ps1 -Version 1.5.6
+.\signing\Build-Signed.ps1 -Version 1.5.7
 ```
 
 Signing is opt-in at the MSBuild level: the installer's sign targets fire only
