@@ -9,6 +9,8 @@ publish/
 *.user
 *.userosscache
 *.sln.docstates
+UpgradeLog*.htm
+UpgradeLog*.xml
 
 # WiX intermediate
 *.wixobj
