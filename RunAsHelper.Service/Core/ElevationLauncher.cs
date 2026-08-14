@@ -62,13 +62,16 @@ internal sealed class ElevationLauncher
         }
     }
 
-    // Returns the PID of the launched process, or 0 on failure.
-    public uint LaunchElevated(string commandLine,
+    // Returns (pid, hProcess, stdout). hProcess and stdout are non-zero/non-null
+    // only when captureOutput=true; the caller owns both and must close/dispose them.
+    public (uint Pid, IntPtr hProcess, System.IO.Stream? Stdout) LaunchElevated(
+        string commandLine,
         uint priorityClass = NativeMethods.NORMAL_PRIORITY_CLASS,
         string? workingDirectory = null,
         int showWindow = NativeMethods.SW_SHOWNORMAL,
         string account = "ti",
-        uint? targetSessionId = null)
+        uint? targetSessionId = null,
+        bool captureOutput = false)
     {
         bool asSystem = string.Equals(account, "system", StringComparison.OrdinalIgnoreCase);
 
@@ -85,7 +88,7 @@ internal sealed class ElevationLauncher
                     NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_QUERY, out source))
             {
                 Log($"Failed to open LocalSystem token. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
-                return 0;
+                return (0, IntPtr.Zero, null);
             }
             closeSource = true;
             Log("Account=system — launching with the LocalSystem token (no TrustedInstaller group).");
@@ -96,7 +99,7 @@ internal sealed class ElevationLauncher
             if (_hElevatedToken == IntPtr.Zero)
             {
                 Log("Failed to acquire elevated token");
-                return 0;
+                return (0, IntPtr.Zero, null);
             }
             source = _hElevatedToken;
             Log("Account=trustedinstaller — launching with the TrustedInstaller token.");
@@ -121,13 +124,13 @@ internal sealed class ElevationLauncher
                 {
                     Log($"LaunchElevated::Failed to duplicate token, " +
                         $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
-                    return 0;
+                    return (0, IntPtr.Zero, null);
                 }
             }
 
             try
             {
-                return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow, targetSessionId);
+                return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow, targetSessionId, captureOutput);
             }
             finally
             {
@@ -252,6 +255,84 @@ internal sealed class ElevationLauncher
     // Well-known SID of NT SERVICE\TrustedInstaller.
     private const string TrustedInstallerSid =
         "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
+    // Well-known SID for NT AUTHORITY\SYSTEM (LocalSystem).
+    private const string SystemSid = "S-1-5-18";
+
+    /// <summary>
+    /// Validates that the service's own LocalSystem token (the SYSTEM account path
+    /// used when account="system") is accessible and well-formed. Mirrors the
+    /// structure of <see cref="ValidateToken"/> for symmetry in the validation UI.
+    /// </summary>
+    public unsafe bool ValidateSystemToken(out string account)
+    {
+        account = string.Empty;
+
+        Log("Validation: acquiring LocalSystem (SYSTEM) token...");
+        EnsurePrivileges();
+
+        if (!NativeMethods.OpenProcessToken(
+                NativeMethods.GetCurrentProcess(),
+                NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_QUERY, out IntPtr hToken))
+        {
+            Log($"Validation: OpenProcessToken failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            return false;
+        }
+
+        try
+        {
+            Log("LocalSystem token opened.");
+            LogTokenPrivileges(hToken);
+
+            NativeMethods.GetTokenInformation(
+                hToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenUser,
+                null, 0, out uint len);
+            if (len == 0)
+            {
+                Log($"Validation: GetTokenInformation(size) failed. " +
+                    $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                return false;
+            }
+
+            byte* buf = stackalloc byte[(int)len];
+            if (!NativeMethods.GetTokenInformation(
+                    hToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenUser,
+                    buf, len, out _))
+            {
+                Log($"Validation: GetTokenInformation failed. " +
+                    $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                return false;
+            }
+
+            IntPtr pSid = *(IntPtr*)buf;
+
+            string sidString = "(unknown)";
+            if (NativeMethods.ConvertSidToStringSidW(pSid, out IntPtr pStr) && pStr != IntPtr.Zero)
+            {
+                sidString = Marshal.PtrToStringUni(pStr) ?? sidString;
+                NativeMethods.LocalFree(pStr);
+            }
+
+            account = LookupSid(pSid);
+            Log($"Token user: {account} (SID {sidString})");
+
+            bool isSystem =
+                string.Equals(sidString, SystemSid, StringComparison.OrdinalIgnoreCase)
+                || account.EndsWith("SYSTEM", StringComparison.OrdinalIgnoreCase);
+
+            if (isSystem)
+                Log("Validation OK: token is NT AUTHORITY\\SYSTEM.");
+            else
+                Log($"Validation FAILED: unexpected account ({account}, SID {sidString}).");
+
+            Log("SYSTEM token released.");
+            return isSystem;
+        }
+        finally
+        {
+            NativeMethods.CloseHandle(hToken);
+        }
+    }
 
     private unsafe string LookupSid(IntPtr pSid)
     {
@@ -558,11 +639,17 @@ internal sealed class ElevationLauncher
 
     // ── Process creation (session-aware for service context) ─────────────
 
-    // Returns the PID of the created process, or 0 on failure.
-    private unsafe uint CreateProcess(IntPtr hToken, string commandLine, uint priorityClass,
+    // Returns (pid, hProcess, stdout).
+    // When captureOutput=false (default), hProcess=Zero and stdout=null — the
+    // process is fire-and-forget.  When captureOutput=true the caller receives
+    // an open process handle (to wait on) and a stream for the child's merged
+    // stdout+stderr; the caller is responsible for closing both.
+    private unsafe (uint pid, IntPtr hProcess, System.IO.Stream? stdout) CreateProcess(
+        IntPtr hToken, string commandLine, uint priorityClass,
         string? workingDirectory = null,
         int showWindow = NativeMethods.SW_SHOWNORMAL,
-        uint? targetSessionId = null)
+        uint? targetSessionId = null,
+        bool captureOutput = false)
     {
         Log("Creating process...");
 
@@ -610,8 +697,14 @@ internal sealed class ElevationLauncher
         // Console-subsystem programs (cmd, powershell) launched from a service
         // get no usable window unless we allocate a fresh console. GUI apps
         // (regedit, notepad, mmc) must NOT get one, or an empty console flashes up.
+        // In capture mode, no console window is wanted — stdout goes to the pipe.
         uint creationFlags = NativeMethods.CREATE_UNICODE_ENVIRONMENT | priorityClass;
-        if (IsConsoleSubsystem(consoleProbe))
+        if (captureOutput)
+        {
+            creationFlags |= NativeMethods.CREATE_NO_WINDOW;
+            Log("Output capture mode — no console window; stdout/stderr piped back to caller.");
+        }
+        else if (IsConsoleSubsystem(consoleProbe))
         {
             creationFlags |= NativeMethods.CREATE_NEW_CONSOLE;
             Log("Console application detected — allocating an interactive console window.");
@@ -624,63 +717,173 @@ internal sealed class ElevationLauncher
         if (workDir is not null) Log($"Working directory: {workDir}");
         Log($"Window state (SW_*): {showWindow}");
 
-        fixed (char* pDesktop = "WinSta0\\Default")
+        // Set up anonymous pipes for stdout/stderr when capture is requested.
+        // The write end (hWritePipe) is inheritable and passed to the child via
+        // STARTUPINFOEX; the read end (hReadPipe) stays in the service.
+        // PROC_THREAD_ATTRIBUTE_HANDLE_LIST restricts inheritance to only hWritePipe
+        // so no other service handles leak into the elevated child process.
+        IntPtr hReadPipe  = IntPtr.Zero;
+        IntPtr hWritePipe = IntPtr.Zero;
+
+        if (captureOutput)
         {
-            var si = new NativeMethods.STARTUPINFOW
+            var sa = new NativeMethods.SECURITY_ATTRIBUTES
             {
-                cb          = (uint)sizeof(NativeMethods.STARTUPINFOW),
-                lpDesktop   = (IntPtr)pDesktop,
-                dwFlags     = NativeMethods.STARTF_USESHOWWINDOW,
-                wShowWindow = (ushort)showWindow,
+                nLength = (uint)sizeof(NativeMethods.SECURITY_ATTRIBUTES),
+                bInheritHandle = 1  // write end must be inheritable
             };
-
-            // CreateProcessAsUser (not CreateProcessWithTokenW): the latter places
-            // the child in the service's Session 0 regardless of the token's
-            // session id, so its window is invisible on the user's desktop.
-            // CreateProcessAsUser honours the token's (remapped) session, putting
-            // the process on the interactive desktop.
-            NativeMethods.PROCESS_INFORMATION pi;
-            bool result;
-            if (string.IsNullOrEmpty(args))
+            if (!NativeMethods.CreatePipe(out hReadPipe, out hWritePipe, &sa, 0))
             {
-                if (commandLine.Contains('%'))
-                    commandLine = ExpandEnvVars(commandLine);
-
-                result = NativeMethods.CreateProcessAsUserW(
-                    hToken, null, commandLine,
-                    IntPtr.Zero, IntPtr.Zero, false,
-                    creationFlags,
-                    IntPtr.Zero, workDir, &si, out pi);
+                Log($"CreatePipe failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())} — falling back to fire-and-forget.");
+                captureOutput = false;
             }
             else
             {
-                if (app.Contains('%')) app = ExpandEnvVars(app);
-                // CreateProcessAsUser does NOT search PATH for a non-null
-                // lpApplicationName — a bare name resolves only against the
-                // service's working directory (C:\Windows\System32). cmd.exe lives
-                // there, but powershell.exe (System32\WindowsPowerShell\v1.0) and
-                // most other tools do not, so they failed with FILE_NOT_FOUND once
-                // arguments were present. Resolve to a full path via PATH first.
-                string launchApp = ResolveExecutable(app) ?? app;
-                Log($"Args detected — app={launchApp}  args={args}");
+                // Clear the inherit flag on the read end; we don't want the child to hold it.
+                NativeMethods.SetHandleInformation(hReadPipe, NativeMethods.HANDLE_FLAG_INHERIT, 0);
+            }
+        }
 
-                result = NativeMethods.CreateProcessAsUserW(
-                    hToken, launchApp, commandLine,
-                    IntPtr.Zero, IntPtr.Zero, false,
-                    creationFlags,
-                    IntPtr.Zero, workDir, &si, out pi);
+        fixed (char* pDesktop = "WinSta0\\Default")
+        {
+            NativeMethods.PROCESS_INFORMATION pi = default;
+            bool callResult;
+
+            if (captureOutput)
+            {
+                // Build a PROC_THREAD_ATTRIBUTE_LIST that names only hWritePipe as
+                // the handle to inherit — guards against leaking every other open
+                // service handle into the TrustedInstaller/SYSTEM child process.
+                nuint attrSize = 0;
+                NativeMethods.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, &attrSize);
+                IntPtr attrList = Marshal.AllocHGlobal((int)attrSize);
+                try
+                {
+                    NativeMethods.InitializeProcThreadAttributeList(attrList, 1, 0, &attrSize);
+                    try
+                    {
+                        IntPtr toInherit = hWritePipe;
+                        NativeMethods.UpdateProcThreadAttribute(
+                            attrList, 0,
+                            NativeMethods.PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                            &toInherit, (nuint)IntPtr.Size, null, null);
+
+                        var siex = new NativeMethods.STARTUPINFOEXW
+                        {
+                            StartupInfo = new NativeMethods.STARTUPINFOW
+                            {
+                                cb          = (uint)sizeof(NativeMethods.STARTUPINFOEXW),
+                                lpDesktop   = (IntPtr)pDesktop,
+                                dwFlags     = NativeMethods.STARTF_USESHOWWINDOW | NativeMethods.STARTF_USESTDHANDLES,
+                                wShowWindow = (ushort)showWindow,
+                                hStdInput   = IntPtr.Zero,
+                                hStdOutput  = hWritePipe,
+                                hStdError   = hWritePipe,
+                            },
+                            lpAttributeList = attrList,
+                        };
+
+                        uint captureFlags = creationFlags | NativeMethods.EXTENDED_STARTUPINFO_PRESENT;
+
+                        if (string.IsNullOrEmpty(args))
+                        {
+                            if (commandLine.Contains('%')) commandLine = ExpandEnvVars(commandLine);
+                            callResult = NativeMethods.CreateProcessAsUserExW(
+                                hToken, null, commandLine,
+                                IntPtr.Zero, IntPtr.Zero, true,
+                                captureFlags,
+                                IntPtr.Zero, workDir, &siex, out pi);
+                        }
+                        else
+                        {
+                            if (app.Contains('%')) app = ExpandEnvVars(app);
+                            string launchApp = ResolveExecutable(app) ?? app;
+                            Log($"Args detected — app={launchApp}  args={args}");
+                            callResult = NativeMethods.CreateProcessAsUserExW(
+                                hToken, launchApp, commandLine,
+                                IntPtr.Zero, IntPtr.Zero, true,
+                                captureFlags,
+                                IntPtr.Zero, workDir, &siex, out pi);
+                        }
+                    }
+                    finally { NativeMethods.DeleteProcThreadAttributeList(attrList); }
+                }
+                finally { Marshal.FreeHGlobal(attrList); }
+            }
+            else
+            {
+                // Standard (fire-and-forget) path — unchanged from the original.
+                var si = new NativeMethods.STARTUPINFOW
+                {
+                    cb          = (uint)sizeof(NativeMethods.STARTUPINFOW),
+                    lpDesktop   = (IntPtr)pDesktop,
+                    dwFlags     = NativeMethods.STARTF_USESHOWWINDOW,
+                    wShowWindow = (ushort)showWindow,
+                };
+
+                // CreateProcessAsUser (not CreateProcessWithTokenW): the latter places
+                // the child in the service's Session 0 regardless of the token's
+                // session id, so its window is invisible on the user's desktop.
+                // CreateProcessAsUser honours the token's (remapped) session, putting
+                // the process on the interactive desktop.
+                if (string.IsNullOrEmpty(args))
+                {
+                    if (commandLine.Contains('%'))
+                        commandLine = ExpandEnvVars(commandLine);
+
+                    callResult = NativeMethods.CreateProcessAsUserW(
+                        hToken, null, commandLine,
+                        IntPtr.Zero, IntPtr.Zero, false,
+                        creationFlags,
+                        IntPtr.Zero, workDir, &si, out pi);
+                }
+                else
+                {
+                    if (app.Contains('%')) app = ExpandEnvVars(app);
+                    // CreateProcessAsUser does NOT search PATH for a non-null
+                    // lpApplicationName — a bare name resolves only against the
+                    // service's working directory (C:\Windows\System32). cmd.exe lives
+                    // there, but powershell.exe (System32\WindowsPowerShell\v1.0) and
+                    // most other tools do not, so they failed with FILE_NOT_FOUND once
+                    // arguments were present. Resolve to a full path via PATH first.
+                    string launchApp = ResolveExecutable(app) ?? app;
+                    Log($"Args detected — app={launchApp}  args={args}");
+
+                    callResult = NativeMethods.CreateProcessAsUserW(
+                        hToken, launchApp, commandLine,
+                        IntPtr.Zero, IntPtr.Zero, false,
+                        creationFlags,
+                        IntPtr.Zero, workDir, &si, out pi);
+                }
             }
 
-            if (!result)
+            if (!callResult)
             {
                 Log($"CreateProcessAsUser failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
-                return 0;
+                if (hWritePipe != IntPtr.Zero) NativeMethods.CloseHandle(hWritePipe);
+                if (hReadPipe  != IntPtr.Zero) NativeMethods.CloseHandle(hReadPipe);
+                return (0, IntPtr.Zero, null);
+            }
+
+            NativeMethods.CloseHandle(pi.hThread);
+
+            if (captureOutput && hReadPipe != IntPtr.Zero)
+            {
+                // Service's copy of the write end is no longer needed — the child
+                // holds its own inherited copy. Closing ours here ensures the pipe
+                // reaches EOF when the child exits (not when the service decides to).
+                NativeMethods.CloseHandle(hWritePipe);
+
+                // Wrap the read end in a FileStream the caller can drain asynchronously.
+                var safeHandle = new Microsoft.Win32.SafeHandles.SafeFileHandle(hReadPipe, ownsHandle: true);
+                var stream = new System.IO.FileStream(safeHandle, System.IO.FileAccess.Read, bufferSize: 4096, isAsync: true);
+                Log($"Process created: PID={pi.dwProcessId} session={sessionId} desktop=WinSta0\\Default (capture mode).");
+                return (pi.dwProcessId, pi.hProcess, stream);
             }
 
             NativeMethods.CloseHandle(pi.hProcess);
-            NativeMethods.CloseHandle(pi.hThread);
             Log($"Process created: PID={pi.dwProcessId} session={sessionId} desktop=WinSta0\\Default.");
-            return pi.dwProcessId;
+            return (pi.dwProcessId, IntPtr.Zero, null);
         }
     }
 

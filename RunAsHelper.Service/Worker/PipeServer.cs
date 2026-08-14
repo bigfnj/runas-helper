@@ -283,28 +283,84 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     try
                     {
                         string sourceKind = isTrayElevated ? "tray" : "cli";
-                        if (request.Verb != "validate")
+                        bool isValidate = request.Verb is "validate" or "validate-system";
+                        if (!isValidate)
                             EventLogHelper.RequestReceived(request.CommandLine, clientPid, sourceKind);
 
+                        // Run the blocking work (token chain + CreateProcess) on a thread-pool
+                        // thread so the pipe log-drain loop runs concurrently.
                         var launchTask = Task.Run(() =>
                         {
                             if (request.Verb == "validate")
                             {
                                 bool ok = launcher.ValidateToken(out _);
                                 logChannel.Writer.Complete();
-                                return (ok, 0u);
+                                return (ok, 0u, IntPtr.Zero, (System.IO.Stream?)null);
                             }
-                            uint pid = launcher.LaunchElevated(
+                            if (request.Verb == "validate-system")
+                            {
+                                bool ok = launcher.ValidateSystemToken(out _);
+                                logChannel.Writer.Complete();
+                                return (ok, 0u, IntPtr.Zero, (System.IO.Stream?)null);
+                            }
+                            var (pid, hProc, stdout) = launcher.LaunchElevated(
                                 request.CommandLine, request.Priority,
-                                request.WorkingDirectory, request.ShowWindow, request.Account);
+                                request.WorkingDirectory, request.ShowWindow, request.Account,
+                                captureOutput: request.CaptureOutput);
                             logChannel.Writer.Complete();
-                            return (pid != 0, pid);
+                            return (pid != 0, pid, hProc, stdout);
                         }, ct);
 
                         await foreach (string msg in logChannel.Reader.ReadAllAsync(ct))
                             await PipeProtocol.WriteAsync(pipe, new PipeMessage("log", msg), ct);
 
-                        var (result, launchedPid) = await launchTask;
+                        var (result, launchedPid, hProcess, stdoutStream) = await launchTask;
+
+                        // When output capture is active, stream the child's stdout/stderr
+                        // back to the caller as "stdout" messages and wait for the child to
+                        // exit (up to the requested timeout) before sending "result".
+                        if (result && stdoutStream is not null)
+                        {
+                            uint waitMs = request.TimeoutSeconds > 0
+                                ? (uint)(request.TimeoutSeconds * 1_000)
+                                : NativeMethods.INFINITE;
+
+                            // Pump stdout on a background task so we don't block the
+                            // await below. Catches IOException/ObjectDisposedException that
+                            // occur when we close the stream after a timeout.
+                            var pumpTask = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    using var reader = new System.IO.StreamReader(stdoutStream);
+                                    string? line;
+                                    while ((line = await reader.ReadLineAsync(ct)) is not null)
+                                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("stdout", line), ct);
+                                }
+                                catch (Exception ex)
+                                    when (ex is System.IO.IOException or ObjectDisposedException
+                                              or OperationCanceledException) { }
+                            }, ct);
+
+                            // Wait for the child process to exit (blocking, on a thread-pool thread).
+                            uint waitResult = await Task.Run(
+                                () => NativeMethods.WaitForSingleObject(hProcess, waitMs), ct);
+
+                            if (waitResult == NativeMethods.WAIT_TIMEOUT)
+                            {
+                                await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
+                                    $"[timeout] Process did not exit within {request.TimeoutSeconds}s — closing output stream."), ct);
+                                // Dispose the stream to unblock the pump task's ReadLineAsync.
+                                await stdoutStream.DisposeAsync();
+                            }
+
+                            NativeMethods.CloseHandle(hProcess);
+                            await pumpTask;
+                        }
+                        else if (hProcess != IntPtr.Zero)
+                        {
+                            NativeMethods.CloseHandle(hProcess);
+                        }
 
                         // Send PID before result so the tray can call AllowSetForegroundWindow
                         // before acknowledging success — the launched process needs the right
@@ -313,7 +369,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                             await PipeProtocol.WriteAsync(pipe,
                                 new PipeMessage("pid", launchedPid.ToString()), ct);
 
-                        if (request.Verb != "validate")
+                        if (!isValidate)
                         {
                             if (result)
                                 EventLogHelper.Launched(request.CommandLine, launchedPid);

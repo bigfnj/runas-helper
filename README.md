@@ -121,20 +121,22 @@ Settings are stored in `%AppData%\RunAsHelper\settings.json`.
 ### Command line
 
 ```
-RunAsHelper.exe [/p:N] [/as:ACCOUNT] <path> [args]
+RunAsHelper.exe [/capture] [/timeout:N] [/p:N] [/as:ACCOUNT] <path> [args]
 RunAsHelper.exe -h | --help | /?      :: show full help
 ```
 
-`/p:N` sets the priority class; `/as:ACCOUNT` chooses the account:
-
-| Flag   | Priority         |   | Flag         | Account                      |
-|--------|------------------|---|--------------|------------------------------|
-| `/p:1` | Normal (default) |   | `/as:ti`     | TrustedInstaller (default)   |
-| `/p:2` | Idle             |   | `/as:system` | LocalSystem                  |
-| `/p:3` | High             |
-| `/p:4` | Realtime         |
-| `/p:5` | Below Normal     |
-| `/p:6` | Above Normal     |
+| Flag          | Meaning                                                                        |
+|---------------|--------------------------------------------------------------------------------|
+| `/p:1`        | Normal priority (default)                                                      |
+| `/p:2`        | Idle                                                                           |
+| `/p:3`        | High                                                                           |
+| `/p:4`        | Realtime                                                                       |
+| `/p:5`        | Below Normal                                                                   |
+| `/p:6`        | Above Normal                                                                   |
+| `/as:ti`      | Run as TrustedInstaller (default)                                              |
+| `/as:system`  | Run as plain LocalSystem                                                       |
+| `/capture`    | Stream child stdout/stderr back through the pipe; CLI blocks until child exits |
+| `/timeout:N`  | Hard ceiling in seconds; on timeout the stream closes, child is left running   |
 
 Non-executable targets are launched via their host automatically (`.msc`→`mmc`,
 `.cpl`→`control`, `.bat`/`.cmd`→`cmd /c`, `.ps1`→`powershell`), and a bare name
@@ -154,6 +156,12 @@ RunAsHelper.exe /as:system cmd.exe
 
 :: Run a PowerShell command as SYSTEM (see "Passing arguments" below)
 RunAsHelper.exe /as:system powershell.exe -NoProfile -Command "Restart-Service WSLService -Force"
+
+:: Stream child output back to the caller (blocks until the script exits)
+RunAsHelper.exe /capture /as:system powershell.exe -NoProfile -Command "Get-Service Wuauserv"
+
+:: Capture with a 30-second timeout; child is left running if it doesn't finish
+RunAsHelper.exe /capture /timeout:30 /as:system powershell.exe -NoProfile -File C:\scripts\fix.ps1
 
 :: Quote paths that contain spaces
 RunAsHelper.exe "C:\Program Files\Some Tool\tool.exe" --flag
@@ -280,6 +288,17 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
 Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
+
+## What's new in 1.6.0
+
+- **Output capture** — add `/capture` to the CLI to stream the elevated child's stdout and stderr
+  back through the named pipe to your shell. No more write-to-file workarounds for scripts: the
+  CLI blocks until the child exits and prints its output directly. Combine with `/timeout:N`
+  (seconds) to put a hard ceiling on how long to wait; on timeout the stream closes but the child
+  is left running on the desktop.
+- **SYSTEM token validation** — the *Tools → Validate Installation* dialog now runs a fourth check:
+  acquiring and releasing a plain LocalSystem (SYSTEM) token, confirming the `account=system`
+  launch path works end-to-end in addition to the existing TrustedInstaller check.
 
 ## What's new in 1.5.7
 
