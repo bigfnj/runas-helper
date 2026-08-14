@@ -11,11 +11,13 @@ namespace RunAsHelper.Shared.Protocol;
 public sealed record LaunchRequest(
     string CommandLine,
     uint   Priority,
-    string Verb             = "launch",   // "launch" | "validate" | "setcli"
+    string Verb             = "launch",   // "launch" | "validate" | "validate-system" | "setcli"
     string WorkingDirectory = "",
     int    ShowWindow       = 1,
     string Account          = "ti",       // "ti" (TrustedInstaller) | "system"
-    string Source           = "tray");    // "tray" | "cli" — gated by the service
+    string Source           = "tray",     // "tray" | "cli" — gated by the service
+    bool   CaptureOutput    = false,      // stream child stdout/stderr back through the pipe
+    int    TimeoutSeconds   = 0);         // 0 = wait forever; > 0 = hard ceiling before closing the output stream
 
 /// <summary>Sent by the service back to the client: either a streaming log line or the final result.</summary>
 public sealed record PipeMessage(string Type, string Content);

@@ -56,7 +56,22 @@ internal static partial class NativeMethods
 
     // STARTUPINFO.dwFlags: honor wShowWindow. Plus the SW_* show-window states
     // the client maps a saved app's "Windows State" onto.
-    internal const uint   STARTF_USESHOWWINDOW = 0x00000001;
+    internal const uint   STARTF_USESHOWWINDOW  = 0x00000001;
+    // Redirect the child's stdin/stdout/stderr to the handles in STARTUPINFO.
+    internal const uint   STARTF_USESTDHANDLES  = 0x00000100;
+    // Suppress the console window; used for capture-mode launches (no visible console).
+    internal const uint   CREATE_NO_WINDOW       = 0x08000000;
+    // Pass a STARTUPINFOEXW instead of a plain STARTUPINFOW.
+    internal const uint   EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+    // Attribute key for UpdateProcThreadAttribute: restrict handle inheritance to
+    // an explicit list so only the pipe write-end reaches the child.
+    internal const nuint  PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002;
+    // SetHandleInformation mask: controls whether a handle can be inherited.
+    internal const uint   HANDLE_FLAG_INHERIT    = 0x00000001;
+    // WaitForSingleObject return values / timeout sentinel.
+    internal const uint   WAIT_OBJECT_0          = 0x00000000;
+    internal const uint   WAIT_TIMEOUT           = 0x00000102;
+    internal const uint   INFINITE               = 0xFFFFFFFF;
     internal const ushort SW_HIDE              = 0;
     internal const ushort SW_SHOWNORMAL        = 1;
     internal const ushort SW_SHOWMAXIMIZED     = 3;
@@ -191,6 +206,15 @@ internal static partial class NativeMethods
         public IntPtr hStdInput;
         public IntPtr hStdOutput;
         public IntPtr hStdError;
+    }
+
+    // Extended startup info used when EXTENDED_STARTUPINFO_PRESENT is set.
+    // The embedded STARTUPINFOW's cb field must equal sizeof(STARTUPINFOEXW).
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct STARTUPINFOEXW
+    {
+        public STARTUPINFOW StartupInfo;
+        public IntPtr       lpAttributeList;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -512,6 +536,73 @@ internal static partial class NativeMethods
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     internal static partial IntPtr LocalFree(IntPtr hMem);
+
+    // ── Pipe / output capture ────────────────────────────────────────────
+
+    // Creates an anonymous pipe. The write end is passed to the child via
+    // STARTUPINFOEX; the read end stays in the service.
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool CreatePipe(
+        out IntPtr             hReadPipe,
+        out IntPtr             hWritePipe,
+        SECURITY_ATTRIBUTES*   lpPipeAttributes,
+        uint                   nSize);
+
+    // Controls handle attributes; used to clear HANDLE_FLAG_INHERIT on the
+    // read end so only the write end reaches the child.
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetHandleInformation(
+        IntPtr hObject,
+        uint   dwMask,
+        uint   dwFlags);
+
+    // Attribute list lifetime management for PROC_THREAD_ATTRIBUTE_HANDLE_LIST.
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool InitializeProcThreadAttributeList(
+        IntPtr  lpAttributeList,
+        uint    dwAttributeCount,
+        uint    dwFlags,
+        nuint*  lpSize);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool UpdateProcThreadAttribute(
+        IntPtr  lpAttributeList,
+        uint    dwFlags,
+        nuint   Attribute,
+        void*   lpValue,
+        nuint   cbSize,
+        void*   lpPreviousValue,
+        nuint*  lpReturnSize);
+
+    [LibraryImport("kernel32.dll")]
+    internal static partial void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
+
+    // Block the calling thread until the process signals or the timeout expires.
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    internal static partial uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+    // CreateProcessAsUserW overload that accepts a STARTUPINFOEXW (used when
+    // EXTENDED_STARTUPINFO_PRESENT is set in dwCreationFlags). Declared with a
+    // distinct C# name via EntryPoint so both overloads coexist.
+    [LibraryImport("advapi32.dll", EntryPoint = "CreateProcessAsUserW",
+        SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool CreateProcessAsUserExW(
+        IntPtr               hToken,
+        string?              lpApplicationName,
+        string?              lpCommandLine,
+        IntPtr               lpProcessAttributes,
+        IntPtr               lpThreadAttributes,
+        [MarshalAs(UnmanagedType.Bool)] bool bInheritHandles,
+        uint                 dwCreationFlags,
+        IntPtr               lpEnvironment,
+        string?              lpCurrentDirectory,
+        STARTUPINFOEXW*      lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
 
     internal static unsafe bool IsTokenElevated(IntPtr hToken)
     {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
@@ -27,9 +27,10 @@ namespace RunAsHelper
         private string              _lastServiceLog = string.Empty;
         private bool                _running;
 
-        private readonly CheckRow _svcRow   = new("RunAS Helper service is running");
-        private readonly CheckRow _trayRow  = new("Tray application running");
-        private readonly CheckRow _tokenRow = new("TrustedInstaller token acquired & released");
+        private readonly CheckRow _svcRow    = new("RunAS Helper service is running");
+        private readonly CheckRow _trayRow   = new("Tray application running");
+        private readonly CheckRow _tokenRow  = new("TrustedInstaller token acquired & released");
+        private readonly CheckRow _systemRow = new("SYSTEM token acquired & released");
 
         private readonly Label   _summary;
         private readonly TextBox _log;
@@ -53,7 +54,7 @@ namespace RunAsHelper
             MaximizeBox     = false;
             MinimizeBox     = false;
             StartPosition   = FormStartPosition.CenterScreen;
-            ClientSize      = new Size(520, 560);
+            ClientSize      = new Size(520, 612);
             AutoScaleMode   = AutoScaleMode.Font;
             try { Icon = new Icon(SystemIcons.Shield, 32, 32); } catch { /* non-fatal */ }
 
@@ -126,7 +127,7 @@ namespace RunAsHelper
             // ── Check rows (fill) ─────────────────────────────────────────────
             var content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 6, 14, 6) };
             int y = 6;
-            foreach (var row in new[] { _svcRow, _trayRow, _tokenRow })
+            foreach (var row in new[] { _svcRow, _trayRow, _tokenRow, _systemRow })
             {
                 row.AddTo(content, y);
                 y += CheckRow.RowHeight;
@@ -199,7 +200,31 @@ namespace RunAsHelper
                             : "Could not acquire/validate the TrustedInstaller token"));
                 }
 
-                AllPassed = svc && tray && token;
+                // 4) SYSTEM token round-trip — confirms the account=”system” path works.
+                _systemRow.SetRunning();
+                bool systemToken;
+                if (!admin)
+                {
+                    systemToken = false;
+                    _systemRow.SetResult(false, "Requires administrator — use “Restart as administrator”");
+                }
+                else if (!svc)
+                {
+                    systemToken = false;
+                    _systemRow.SetResult(false, "Skipped — service is not responding");
+                }
+                else
+                {
+                    _lastServiceLog = string.Empty;
+                    systemToken = await _client.ValidateSystemTokenAsync();
+                    _systemRow.SetResult(systemToken, systemToken
+                        ? "SYSTEM token acquired and released cleanly"
+                        : (_lastServiceLog.Length > 0
+                            ? "Failed: " + _lastServiceLog
+                            : "Could not acquire/validate the SYSTEM token"));
+                }
+
+                AllPassed = svc && tray && token && systemToken;
                 ShowOutcome(admin);
             }
             finally

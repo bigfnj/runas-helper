@@ -86,10 +86,12 @@ namespace RunAsHelper
         {
             ShowConsole();
 
-            uint   priority = NativeMethods.NORMAL_PRIORITY_CLASS;
-            string account  = "ti";
+            uint   priority      = NativeMethods.NORMAL_PRIORITY_CLASS;
+            string account       = "ti";
+            bool   captureOutput = false;
+            int    timeoutSecs   = 0;
 
-            // Consume leading /p:N and /as:ACCOUNT flags in any order.
+            // Consume leading /p:N, /as:ACCOUNT, /capture, /timeout:N flags in any order.
             int i = 0;
             for (; i < args.Length; i++)
             {
@@ -98,6 +100,11 @@ namespace RunAsHelper
                     priority = PriorityFromCode(a[3]);
                 else if (a.StartsWith("/as:", StringComparison.OrdinalIgnoreCase))
                     account = a[4..].Equals("system", StringComparison.OrdinalIgnoreCase) ? "system" : "ti";
+                else if (a.Equals("/capture", StringComparison.OrdinalIgnoreCase))
+                    captureOutput = true;
+                else if (a.StartsWith("/timeout:", StringComparison.OrdinalIgnoreCase) &&
+                         int.TryParse(a[9..], out int ts) && ts > 0)
+                    timeoutSecs = ts;
                 else
                     break;
             }
@@ -108,7 +115,7 @@ namespace RunAsHelper
 
             if (string.IsNullOrWhiteSpace(commandLine))
             {
-                Console.Error.WriteLine("Usage: RunAsHelper.exe [/p:N] [/as:system|ti] <path> [args]");
+                Console.Error.WriteLine("Usage: RunAsHelper.exe [/capture] [/timeout:N] [/p:N] [/as:system|ti] <path> [args]");
                 Console.Error.WriteLine("Run  RunAsHelper.exe --help  for details.");
                 Environment.Exit(1);
                 return;
@@ -116,7 +123,7 @@ namespace RunAsHelper
 
             var client = new PipeClient();
             client.LogMessage += msg => Console.WriteLine(msg);
-            bool ok = client.LaunchFromCliAsync(commandLine, priority, account)
+            bool ok = client.LaunchFromCliAsync(commandLine, priority, account, captureOutput, timeoutSecs)
                             .GetAwaiter().GetResult();
             Environment.Exit(ok ? 0 : 1);
         }
