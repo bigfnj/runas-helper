@@ -147,9 +147,13 @@ namespace RunAsHelper
 
         // Attach to the parent console so CLI/help output is visible when run
         // from cmd/powershell (the app is a WinExe with no console of its own).
+        // When stdout is already redirected (piped shell, VSCode extension), the
+        // handles are already wired — skip AttachConsole which would replace them
+        // with the parent's console (which may not exist in that context).
         private static void ShowConsole()
         {
-            try { NativeMethods.AttachConsole(NativeMethods.ATTACH_PARENT_PROCESS); } catch { }
+            if (!Console.IsOutputRedirected)
+                try { NativeMethods.AttachConsole(NativeMethods.ATTACH_PARENT_PROCESS); } catch { }
         }
     }
 }

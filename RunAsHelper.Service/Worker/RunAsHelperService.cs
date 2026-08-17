@@ -13,10 +13,8 @@ internal sealed class RunAsHelperService(ILogger<RunAsHelperService> logger) : B
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _launcher.LogMessage += msg => logger.LogInformation("{Message}", msg);
-
         logger.LogInformation("Acquiring elevated token...");
-        await Task.Run(_launcher.Initialize, stoppingToken);
+        await Task.Run(() => _launcher.Initialize(msg => logger.LogInformation("{Message}", msg)), stoppingToken);
 
         if (_launcher.IsReady)
             logger.LogInformation("Token acquired. Listening for launch requests.");
