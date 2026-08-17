@@ -289,6 +289,20 @@ Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
 
+## What's new in 1.6.1
+
+- **Crash diagnostics** — the app now installs process-wide exception handlers
+  (`AppDomain.UnhandledException`, `Application.ThreadException`,
+  `TaskScheduler.UnobservedTaskException`) that record the full stack to
+  `%AppData%\RunAsHelper\crash.log` and the Application event log (source
+  `RunAsHelper`, ID 1099) before the process exits. Previously an exception on a
+  background thread — or in CLI mode, which has no message loop — ended the tray
+  with a bare `0xe0434352` ("unknown software exception") Windows dialog and left
+  nothing to diagnose.
+- **Background-thread hardening** — the event-log watcher callback (`_cliWatcher`)
+  and the service-status check now fully guard their cross-thread work, so a stray
+  failure on those threads can no longer take the tray down.
+
 ## What's new in 1.6.0
 
 - **Output capture** — add `/capture` to the CLI to stream the elevated child's stdout and stderr

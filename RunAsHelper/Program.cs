@@ -14,6 +14,12 @@ namespace RunAsHelper
         [STAThread]
         static void Main(string[] args)
         {
+            // Last-resort exception logging for every entry path (GUI, CLI, tray,
+            // validation). Without this a background-thread throw kills the process
+            // with a bare "0xe0434352" dialog and no diagnostics; now the stack is
+            // recorded to %AppData%\RunAsHelper\crash.log first.
+            CrashLogger.Install();
+
             // Post-install / on-demand validation: open the validation dialog
             // standalone (used by the "Restart as administrator" recovery path,
             // which relaunches this exe elevated).
