@@ -248,7 +248,7 @@ MSI, use the helper scripts in [`signing/`](signing):
 
 # Build a signed release. Resolves signtool + the cert, signs both EXEs before
 # WiX packs them, then signs the MSI (RFC3161-timestamped when reachable).
-.\signing\Build-Signed.ps1 -Version 1.6.1
+.\signing\Build-Signed.ps1 -Version 1.6.3
 ```
 
 Signing is opt-in at the MSBuild level: the installer's sign targets fire only
@@ -288,6 +288,44 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
 Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
+
+## What's new in 1.6.3
+
+- **`/capture` output visible in piped shells** — `RunAsHelper.exe` is a WinExe
+  with no console of its own. Previously it always called `AttachConsole` to
+  attach to the parent's console window, which failed silently in non-interactive
+  shells (CI pipelines, IDE extension runners, PowerShell jobs) and discarded all
+  output. Now `AttachConsole` is only called when stdout is *not* already
+  redirected; when it is (piped shells), `Console.Out` is already wired and output
+  flows correctly without it.
+- **`/capture` mode fixed** — anonymous pipe handles created by `CreatePipe` are
+  synchronous (no `FILE_FLAG_OVERLAPPED`). The `FileStream` wrapping the read end
+  was constructed with `isAsync: true`, which throws
+  `"Handle does not support asynchronous operations"` and aborted every capture
+  launch. Changed to `isAsync: false`; `StreamReader.ReadLineAsync` on a sync
+  stream works correctly from `Task.Run`.
+
+## What's new in 1.6.2
+
+- **Concurrent launches** — the service previously serialized *all* pipe connections
+  through a single `SemaphoreSlim(1,1)` gate to avoid interleaved log output. This
+  caused a critical stuck-gate failure: one long-running `/capture` launch (or a
+  hung child process) blocked every subsequent CLI call indefinitely. The gate is
+  now `SemaphoreSlim(10,10)` — up to ten concurrent launches run in parallel, each
+  routed to its own `Channel<string>` log stream.
+- **30-second busy timeout** — if all ten slots are occupied, new requests fail
+  fast with a "service busy" message rather than queueing behind stuck jobs.
+- **Log-channel deadlock fix** — if `LaunchElevated` threw before writing to the
+  log channel, the `await foreach` drain loop on the pipe would hang forever
+  because `Writer.Complete()` was never called. Now wrapped in `try/finally` so the
+  channel is always completed, even on exception.
+- **Thread-safe token initialization** — `ElevationLauncher.Initialize()` is now
+  guarded by a lock so concurrent `ValidateToken` calls can't race on the token
+  chain. Log messages are routed per-call via an `Action<string>? log` parameter
+  instead of a shared event, eliminating the last shared-state coupling.
+- **`/capture` without `/timeout` warning** — the service now emits a `[warning]`
+  log line when `/capture` is used without a `/timeout:N` ceiling, so operators
+  know an infinite wait is in effect.
 
 ## What's new in 1.6.1
 

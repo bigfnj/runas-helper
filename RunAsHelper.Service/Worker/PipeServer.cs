@@ -17,8 +17,12 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
 {
     private const string PipeName = "RunAsHelper";
 
-    // Serializes launches so log messages route to the correct connection.
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    // Limits concurrent launches. Each connection has its own log channel so
+    // messages are routed correctly without serializing launches. The bound (10)
+    // prevents runaway resource use while allowing multiple concurrent callers.
+    // A 30-second wait timeout prevents new requests from queuing behind a stuck
+    // job indefinitely — callers get a "service busy" error and can retry.
+    private readonly SemaphoreSlim _launchGate = new(10, 10);
 
     // Whether CLI-sourced launches are permitted. Defaults OFF and is controlled
     // by the (installed, elevated) tray via the "setcli" verb; the tray resets it
@@ -272,119 +276,135 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     }
                 }
 
-                await _gate.WaitAsync(ct);
+                // Allow up to 10 concurrent launches; reject new requests quickly
+                // if the service is busy rather than queuing them indefinitely.
+                bool acquired = await _launchGate.WaitAsync(30_000, ct);
+                if (!acquired)
+                {
+                    await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
+                        "Service is busy with too many concurrent launches — try again in a moment."), ct);
+                    await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
+                    return;
+                }
                 try
                 {
                     var logChannel = Channel.CreateUnbounded<string>(
                         new UnboundedChannelOptions { SingleWriter = true });
 
-                    void LogHandler(string msg) => logChannel.Writer.TryWrite(msg);
-                    launcher.LogMessage += LogHandler;
-                    try
-                    {
-                        string sourceKind = isTrayElevated ? "tray" : "cli";
-                        bool isValidate = request.Verb is "validate" or "validate-system";
-                        if (!isValidate)
-                            EventLogHelper.RequestReceived(request.CommandLine, clientPid, sourceKind);
+                    void LogCallback(string msg) => logChannel.Writer.TryWrite(msg);
 
-                        // Run the blocking work (token chain + CreateProcess) on a thread-pool
-                        // thread so the pipe log-drain loop runs concurrently.
-                        var launchTask = Task.Run(() =>
+                    string sourceKind = isTrayElevated ? "tray" : "cli";
+                    bool isValidate = request.Verb is "validate" or "validate-system";
+                    if (!isValidate)
+                        EventLogHelper.RequestReceived(request.CommandLine, clientPid, sourceKind);
+
+                    // Run the blocking work (token chain + CreateProcess) on a thread-pool
+                    // thread so the pipe log-drain loop runs concurrently.
+                    // try/finally ensures logChannel is always completed even if the
+                    // launcher throws, preventing the drain loop from hanging forever.
+                    var launchTask = Task.Run(() =>
+                    {
+                        try
                         {
                             if (request.Verb == "validate")
                             {
-                                bool ok = launcher.ValidateToken(out _);
-                                logChannel.Writer.Complete();
+                                bool ok = launcher.ValidateToken(out _, LogCallback);
                                 return (ok, 0u, IntPtr.Zero, (System.IO.Stream?)null);
                             }
                             if (request.Verb == "validate-system")
                             {
-                                bool ok = launcher.ValidateSystemToken(out _);
-                                logChannel.Writer.Complete();
+                                bool ok = launcher.ValidateSystemToken(out _, LogCallback);
                                 return (ok, 0u, IntPtr.Zero, (System.IO.Stream?)null);
                             }
+
+                            // Warn when /capture is requested without a timeout — an infinite
+                            // wait blocks this launch slot until the child exits naturally.
+                            if (request.CaptureOutput && request.TimeoutSeconds <= 0)
+                                LogCallback("[warning] /capture used without /timeout — this launch slot is held until the child process exits. Use /timeout:N to set a ceiling.");
+
                             var (pid, hProc, stdout) = launcher.LaunchElevated(
                                 request.CommandLine, request.Priority,
                                 request.WorkingDirectory, request.ShowWindow, request.Account,
-                                captureOutput: request.CaptureOutput);
-                            logChannel.Writer.Complete();
+                                captureOutput: request.CaptureOutput,
+                                log: LogCallback);
                             return (pid != 0, pid, hProc, stdout);
+                        }
+                        finally
+                        {
+                            logChannel.Writer.TryComplete();
+                        }
+                    }, ct);
+
+                    await foreach (string msg in logChannel.Reader.ReadAllAsync(ct))
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("log", msg), ct);
+
+                    var (result, launchedPid, hProcess, stdoutStream) = await launchTask;
+
+                    // When output capture is active, stream the child's stdout/stderr
+                    // back to the caller as "stdout" messages and wait for the child to
+                    // exit (up to the requested timeout) before sending "result".
+                    if (result && stdoutStream is not null)
+                    {
+                        uint waitMs = request.TimeoutSeconds > 0
+                            ? (uint)(request.TimeoutSeconds * 1_000)
+                            : NativeMethods.INFINITE;
+
+                        // Pump stdout on a background task so we don't block the
+                        // await below. Catches IOException/ObjectDisposedException that
+                        // occur when we close the stream after a timeout.
+                        var pumpTask = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                using var reader = new System.IO.StreamReader(stdoutStream);
+                                string? line;
+                                while ((line = await reader.ReadLineAsync(ct)) is not null)
+                                    await PipeProtocol.WriteAsync(pipe, new PipeMessage("stdout", line), ct);
+                            }
+                            catch (Exception ex)
+                                when (ex is System.IO.IOException or ObjectDisposedException
+                                          or OperationCanceledException) { }
                         }, ct);
 
-                        await foreach (string msg in logChannel.Reader.ReadAllAsync(ct))
-                            await PipeProtocol.WriteAsync(pipe, new PipeMessage("log", msg), ct);
+                        // Wait for the child process to exit (blocking, on a thread-pool thread).
+                        uint waitResult = await Task.Run(
+                            () => NativeMethods.WaitForSingleObject(hProcess, waitMs), ct);
 
-                        var (result, launchedPid, hProcess, stdoutStream) = await launchTask;
-
-                        // When output capture is active, stream the child's stdout/stderr
-                        // back to the caller as "stdout" messages and wait for the child to
-                        // exit (up to the requested timeout) before sending "result".
-                        if (result && stdoutStream is not null)
+                        if (waitResult == NativeMethods.WAIT_TIMEOUT)
                         {
-                            uint waitMs = request.TimeoutSeconds > 0
-                                ? (uint)(request.TimeoutSeconds * 1_000)
-                                : NativeMethods.INFINITE;
-
-                            // Pump stdout on a background task so we don't block the
-                            // await below. Catches IOException/ObjectDisposedException that
-                            // occur when we close the stream after a timeout.
-                            var pumpTask = Task.Run(async () =>
-                            {
-                                try
-                                {
-                                    using var reader = new System.IO.StreamReader(stdoutStream);
-                                    string? line;
-                                    while ((line = await reader.ReadLineAsync(ct)) is not null)
-                                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("stdout", line), ct);
-                                }
-                                catch (Exception ex)
-                                    when (ex is System.IO.IOException or ObjectDisposedException
-                                              or OperationCanceledException) { }
-                            }, ct);
-
-                            // Wait for the child process to exit (blocking, on a thread-pool thread).
-                            uint waitResult = await Task.Run(
-                                () => NativeMethods.WaitForSingleObject(hProcess, waitMs), ct);
-
-                            if (waitResult == NativeMethods.WAIT_TIMEOUT)
-                            {
-                                await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
-                                    $"[timeout] Process did not exit within {request.TimeoutSeconds}s — closing output stream."), ct);
-                                // Dispose the stream to unblock the pump task's ReadLineAsync.
-                                await stdoutStream.DisposeAsync();
-                            }
-
-                            NativeMethods.CloseHandle(hProcess);
-                            await pumpTask;
-                        }
-                        else if (hProcess != IntPtr.Zero)
-                        {
-                            NativeMethods.CloseHandle(hProcess);
+                            await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
+                                $"[timeout] Process did not exit within {request.TimeoutSeconds}s — closing output stream."), ct);
+                            // Dispose the stream to unblock the pump task's ReadLineAsync.
+                            await stdoutStream.DisposeAsync();
                         }
 
-                        // Send PID before result so the tray can call AllowSetForegroundWindow
-                        // before acknowledging success — the launched process needs the right
-                        // while it is starting up.
-                        if (result && launchedPid != 0)
-                            await PipeProtocol.WriteAsync(pipe,
-                                new PipeMessage("pid", launchedPid.ToString()), ct);
-
-                        if (!isValidate)
-                        {
-                            if (result)
-                                EventLogHelper.Launched(request.CommandLine, launchedPid);
-                            else
-                                EventLogHelper.Denied(request.CommandLine, "launch failed");
-                        }
-
-                        await PipeProtocol.WriteAsync(pipe,
-                            new PipeMessage("result", result ? "Success" : "Failed"), ct);
+                        NativeMethods.CloseHandle(hProcess);
+                        await pumpTask;
                     }
-                    // Always unsubscribe, even if the client disconnects mid-launch;
-                    // otherwise stale handlers accumulate on the shared launcher.
-                    finally { launcher.LogMessage -= LogHandler; }
+                    else if (hProcess != IntPtr.Zero)
+                    {
+                        NativeMethods.CloseHandle(hProcess);
+                    }
+
+                    // Send PID before result so the tray can call AllowSetForegroundWindow
+                    // before acknowledging success — the launched process needs the right
+                    // while it is starting up.
+                    if (result && launchedPid != 0)
+                        await PipeProtocol.WriteAsync(pipe,
+                            new PipeMessage("pid", launchedPid.ToString()), ct);
+
+                    if (!isValidate)
+                    {
+                        if (result)
+                            EventLogHelper.Launched(request.CommandLine, launchedPid);
+                        else
+                            EventLogHelper.Denied(request.CommandLine, "launch failed");
+                    }
+
+                    await PipeProtocol.WriteAsync(pipe,
+                        new PipeMessage("result", result ? "Success" : "Failed"), ct);
                 }
-                finally { _gate.Release(); }
+                finally { _launchGate.Release(); }
             }
             catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException) { }
             catch (Exception ex) { logger.LogWarning(ex, "Pipe handler error."); }

@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace RunAsHelper.Service.Core;
 
@@ -11,6 +12,9 @@ namespace RunAsHelper.Service.Core;
 ///   — SetTokenInformation(TokenSessionId) maps the launch to the requesting
 ///     client session so the process appears on the user's interactive desktop.
 ///   — SeTcbPrivilege is enabled to allow the session-ID change.
+/// Thread-safety: Initialize() is idempotent and lock-protected. LaunchElevated()
+/// is safe for concurrent calls after init. ValidateToken() resets init state so
+/// it should not run concurrently with LaunchElevated(); callers enforce this.
 /// </summary>
 internal sealed class ElevationLauncher
 {
@@ -19,9 +23,8 @@ internal sealed class ElevationLauncher
     private volatile IntPtr _hElevatedToken = IntPtr.Zero;
     private          IntPtr _hNtDll   = IntPtr.Zero;
 
-    public event Action<string>? LogMessage;
-
-    private void Log(string msg) => LogMessage?.Invoke(msg);
+    // Guards the one-time initialization path (idempotent after first success).
+    private readonly object _initLock = new();
 
     // ── Public API ───────────────────────────────────────────────────────
 
@@ -29,41 +32,41 @@ internal sealed class ElevationLauncher
 
     /// <summary>
     /// Runs the privilege chain and caches the TrustedInstaller token.
-    /// Idempotent — safe to call from any thread, multiple times.
+    /// Idempotent and thread-safe — lock-protected so only one thread runs
+    /// the acquisition chain even under concurrent launch requests.
     /// </summary>
-    public void Initialize()
+    public void Initialize(Action<string>? log = null)
     {
-        EnsurePrivileges();
-        if (!_initialized)
+        lock (_initLock)
         {
-            Log("Impersonating system...");
-            if (!ImpersonateSystem()) { Log("Failed to impersonate system."); return; }
-            _initialized = true;
-        }
+            EnsurePrivileges(log);
+            if (!_initialized)
+            {
+                log?.Invoke("Impersonating system...");
+                if (!ImpersonateSystem(log)) { log?.Invoke("Failed to impersonate system."); return; }
+                _initialized = true;
+            }
 
-        try
-        {
-            if (_hElevatedToken == IntPtr.Zero)
-                StartAndAcquireToken();
-        }
-        finally
-        {
-            // The token is now duplicated into _hElevatedToken (a process-owned
-            // handle), so the thread no longer needs to wear the winlogon /
-            // TrustedInstaller impersonation mask. Drop it before this thread
-            // returns to the pool — otherwise pooled threads silently keep
-            // running under an impersonated identity. The cached token still
-            // works for later launches: CreateProcessAsUserW relies on the
-            // service's SeImpersonatePrivilege, not on active impersonation.
-            if (!NativeMethods.RevertToSelf())
-                Log($"Warning: RevertToSelf failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
-            else
-                Log("Worker thread reverted to self (impersonation dropped after token clone).");
+            try
+            {
+                if (_hElevatedToken == IntPtr.Zero)
+                    StartAndAcquireToken(log);
+            }
+            finally
+            {
+                // Drop the impersonation mask before returning to the thread pool.
+                // The cached token handle in _hElevatedToken remains valid.
+                if (!NativeMethods.RevertToSelf())
+                    log?.Invoke($"Warning: RevertToSelf failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                else
+                    log?.Invoke("Worker thread reverted to self (impersonation dropped after token clone).");
+            }
         }
     }
 
     // Returns (pid, hProcess, stdout). hProcess and stdout are non-zero/non-null
     // only when captureOutput=true; the caller owns both and must close/dispose them.
+    // Safe to call concurrently after Initialize() has succeeded at least once.
     public (uint Pid, IntPtr hProcess, System.IO.Stream? Stdout) LaunchElevated(
         string commandLine,
         uint priorityClass = NativeMethods.NORMAL_PRIORITY_CLASS,
@@ -71,7 +74,8 @@ internal sealed class ElevationLauncher
         int showWindow = NativeMethods.SW_SHOWNORMAL,
         string account = "ti",
         uint? targetSessionId = null,
-        bool captureOutput = false)
+        bool captureOutput = false,
+        Action<string>? log = null)
     {
         bool asSystem = string.Equals(account, "system", StringComparison.OrdinalIgnoreCase);
 
@@ -82,32 +86,32 @@ internal sealed class ElevationLauncher
         bool   closeSource = false;
         if (asSystem)
         {
-            EnsurePrivileges();
+            EnsurePrivileges(log);
             if (!NativeMethods.OpenProcessToken(
                     NativeMethods.GetCurrentProcess(),
                     NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_QUERY, out source))
             {
-                Log($"Failed to open LocalSystem token. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                log?.Invoke($"Failed to open LocalSystem token. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 return (0, IntPtr.Zero, null);
             }
             closeSource = true;
-            Log("Account=system — launching with the LocalSystem token (no TrustedInstaller group).");
+            log?.Invoke("Account=system — launching with the LocalSystem token (no TrustedInstaller group).");
         }
         else
         {
-            Initialize();
+            Initialize(log);
             if (_hElevatedToken == IntPtr.Zero)
             {
-                Log("Failed to acquire elevated token");
+                log?.Invoke("Failed to acquire elevated token");
                 return (0, IntPtr.Zero, null);
             }
             source = _hElevatedToken;
-            Log("Account=trustedinstaller — launching with the TrustedInstaller token.");
+            log?.Invoke("Account=trustedinstaller — launching with the TrustedInstaller token.");
         }
 
         try
         {
-            Log("Duplicating token...");
+            log?.Invoke("Duplicating token...");
             IntPtr hDup;
             unsafe
             {
@@ -122,7 +126,7 @@ internal sealed class ElevationLauncher
                         NativeMethods.TokenType.TokenPrimary,
                         out hDup))
                 {
-                    Log($"LaunchElevated::Failed to duplicate token, " +
+                    log?.Invoke($"LaunchElevated::Failed to duplicate token, " +
                         $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                     return (0, IntPtr.Zero, null);
                 }
@@ -130,7 +134,7 @@ internal sealed class ElevationLauncher
 
             try
             {
-                return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow, targetSessionId, captureOutput);
+                return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow, targetSessionId, captureOutput, log);
             }
             finally
             {
@@ -143,11 +147,11 @@ internal sealed class ElevationLauncher
         }
     }
 
-    private void EnsurePrivileges()
+    private void EnsurePrivileges(Action<string>? log = null)
     {
         if (_privilegesAdjusted) return;
-        Log("Enabling privileges...");
-        AdjustPrivileges();
+        log?.Invoke("Enabling privileges...");
+        AdjustPrivileges(log);
         _privilegesAdjusted = true;
     }
 
@@ -165,8 +169,9 @@ internal sealed class ElevationLauncher
     /// it really belongs to NT SERVICE\TrustedInstaller, and ensures the worker
     /// thread is reverted to its own identity afterwards. Used by the tray app's
     /// post-install validation to prove the elevation chain works end to end.
+    /// Note: resets cached token state — do not call concurrently with LaunchElevated.
     /// </summary>
-    public unsafe bool ValidateToken(out string account)
+    public unsafe bool ValidateToken(out string account, Action<string>? log = null)
     {
         account = string.Empty;
 
@@ -174,19 +179,22 @@ internal sealed class ElevationLauncher
         // cached at service start — so the entire chain (enable privileges →
         // impersonate winlogon → start TrustedInstaller → grab its thread →
         // duplicate token → revert) streams to the validation Details pane.
-        Log("Validation: forcing a fresh TrustedInstaller token acquisition...");
-        ReleaseToken();
-        _initialized = false;
-        Initialize();
+        log?.Invoke("Validation: forcing a fresh TrustedInstaller token acquisition...");
+        lock (_initLock)
+        {
+            ReleaseToken();
+            _initialized = false;
+            Initialize(log);
+        }
 
         if (_hElevatedToken == IntPtr.Zero)
         {
-            Log("Validation: TrustedInstaller token could not be acquired.");
+            log?.Invoke("Validation: TrustedInstaller token could not be acquired.");
             return false;
         }
 
-        Log("Validating freshly-acquired TrustedInstaller token...");
-        LogTokenPrivileges(_hElevatedToken);
+        log?.Invoke("Validating freshly-acquired TrustedInstaller token...");
+        LogTokenPrivileges(_hElevatedToken, log);
 
         // First call sizes the buffer (returns false + ERROR_INSUFFICIENT_BUFFER).
         NativeMethods.GetTokenInformation(
@@ -194,7 +202,7 @@ internal sealed class ElevationLauncher
             null, 0, out uint len);
         if (len == 0)
         {
-            Log($"Validation: GetTokenInformation(size) failed. " +
+            log?.Invoke($"Validation: GetTokenInformation(size) failed. " +
                 $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
             return false;
         }
@@ -204,7 +212,7 @@ internal sealed class ElevationLauncher
                 _hElevatedToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenUser,
                 buf, len, out _))
         {
-            Log($"Validation: GetTokenInformation failed. " +
+            log?.Invoke($"Validation: GetTokenInformation failed. " +
                 $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
             return false;
         }
@@ -220,7 +228,7 @@ internal sealed class ElevationLauncher
         }
 
         account = LookupSid(pSid);
-        Log($"Token user: {account} (SID {sidString})");
+        log?.Invoke($"Token user: {account} (SID {sidString})");
 
         bool userIsTI =
             string.Equals(sidString, TrustedInstallerSid, StringComparison.OrdinalIgnoreCase)
@@ -231,22 +239,22 @@ internal sealed class ElevationLauncher
         // TrustedInstaller SID carried as a GROUP. That group is what grants
         // TrustedInstaller-level access, so it is the real success criterion.
         bool groupHasTI = TokenHasGroup(_hElevatedToken, TrustedInstallerSid);
-        Log($"TrustedInstaller group present in token: {groupHasTI}");
+        log?.Invoke($"TrustedInstaller group present in token: {groupHasTI}");
 
         bool isTrustedInstaller = userIsTI || groupHasTI;
 
         if (userIsTI)
-            Log("Validation OK: token user is NT SERVICE\\TrustedInstaller.");
+            log?.Invoke("Validation OK: token user is NT SERVICE\\TrustedInstaller.");
         else if (groupHasTI)
-            Log("Validation OK: token runs as SYSTEM and carries the NT SERVICE\\TrustedInstaller group (TrustedInstaller-level access).");
+            log?.Invoke("Validation OK: token runs as SYSTEM and carries the NT SERVICE\\TrustedInstaller group (TrustedInstaller-level access).");
         else
-            Log($"Validation FAILED: token has neither the TrustedInstaller user nor group (resolved {account}).");
+            log?.Invoke($"Validation FAILED: token has neither the TrustedInstaller user nor group (resolved {account}).");
 
         // Belt and braces: make sure no impersonation mask remains on this thread
         // before it returns to the pool. (Initialize already reverts; repeat here
         // so a future refactor of Initialize cannot silently leak impersonation.)
         if (!NativeMethods.RevertToSelf())
-            Log($"Warning: RevertToSelf after validation failed. " +
+            log?.Invoke($"Warning: RevertToSelf after validation failed. " +
                 $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
 
         return isTrustedInstaller;
@@ -264,32 +272,32 @@ internal sealed class ElevationLauncher
     /// used when account="system") is accessible and well-formed. Mirrors the
     /// structure of <see cref="ValidateToken"/> for symmetry in the validation UI.
     /// </summary>
-    public unsafe bool ValidateSystemToken(out string account)
+    public unsafe bool ValidateSystemToken(out string account, Action<string>? log = null)
     {
         account = string.Empty;
 
-        Log("Validation: acquiring LocalSystem (SYSTEM) token...");
-        EnsurePrivileges();
+        log?.Invoke("Validation: acquiring LocalSystem (SYSTEM) token...");
+        EnsurePrivileges(log);
 
         if (!NativeMethods.OpenProcessToken(
                 NativeMethods.GetCurrentProcess(),
                 NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_QUERY, out IntPtr hToken))
         {
-            Log($"Validation: OpenProcessToken failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            log?.Invoke($"Validation: OpenProcessToken failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
             return false;
         }
 
         try
         {
-            Log("LocalSystem token opened.");
-            LogTokenPrivileges(hToken);
+            log?.Invoke("LocalSystem token opened.");
+            LogTokenPrivileges(hToken, log);
 
             NativeMethods.GetTokenInformation(
                 hToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenUser,
                 null, 0, out uint len);
             if (len == 0)
             {
-                Log($"Validation: GetTokenInformation(size) failed. " +
+                log?.Invoke($"Validation: GetTokenInformation(size) failed. " +
                     $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 return false;
             }
@@ -299,7 +307,7 @@ internal sealed class ElevationLauncher
                     hToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenUser,
                     buf, len, out _))
             {
-                Log($"Validation: GetTokenInformation failed. " +
+                log?.Invoke($"Validation: GetTokenInformation failed. " +
                     $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 return false;
             }
@@ -314,18 +322,18 @@ internal sealed class ElevationLauncher
             }
 
             account = LookupSid(pSid);
-            Log($"Token user: {account} (SID {sidString})");
+            log?.Invoke($"Token user: {account} (SID {sidString})");
 
             bool isSystem =
                 string.Equals(sidString, SystemSid, StringComparison.OrdinalIgnoreCase)
                 || account.EndsWith("SYSTEM", StringComparison.OrdinalIgnoreCase);
 
             if (isSystem)
-                Log("Validation OK: token is NT AUTHORITY\\SYSTEM.");
+                log?.Invoke("Validation OK: token is NT AUTHORITY\\SYSTEM.");
             else
-                Log($"Validation FAILED: unexpected account ({account}, SID {sidString}).");
+                log?.Invoke($"Validation FAILED: unexpected account ({account}, SID {sidString}).");
 
-            Log("SYSTEM token released.");
+            log?.Invoke("SYSTEM token released.");
             return isSystem;
         }
         finally
@@ -334,7 +342,7 @@ internal sealed class ElevationLauncher
         }
     }
 
-    private unsafe string LookupSid(IntPtr pSid)
+    private unsafe string LookupSid(IntPtr pSid, Action<string>? log = null)
     {
         char* name = stackalloc char[256];
         char* dom  = stackalloc char[256];
@@ -381,17 +389,17 @@ internal sealed class ElevationLauncher
 
     // Logs the full privilege set carried by the stolen token, each marked
     // (on)/(off), so validation shows exactly what the acquired token can do.
-    private unsafe void LogTokenPrivileges(IntPtr hToken)
+    private unsafe void LogTokenPrivileges(IntPtr hToken, Action<string>? log = null)
     {
         NativeMethods.GetTokenInformation(
             hToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenPrivileges, null, 0, out uint len);
-        if (len == 0) { Log("Token privileges: (unavailable)"); return; }
+        if (len == 0) { log?.Invoke("Token privileges: (unavailable)"); return; }
 
         byte* buf = stackalloc byte[(int)len];
         if (!NativeMethods.GetTokenInformation(
                 hToken, NativeMethods.TOKEN_INFORMATION_CLASS.TokenPrivileges, buf, len, out _))
         {
-            Log($"Token privileges: query failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            log?.Invoke($"Token privileges: query failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
             return;
         }
 
@@ -405,7 +413,7 @@ internal sealed class ElevationLauncher
             bool enabled = (laa[i].Attributes & NativeMethods.SE_PRIVILEGE_ENABLED) != 0;
             sb.Append(LookupPrivName(laa[i].Luid)).Append(enabled ? "(on) " : "(off) ");
         }
-        Log($"Token privileges [{count}]: {sb.ToString().TrimEnd()}");
+        log?.Invoke($"Token privileges [{count}]: {sb.ToString().TrimEnd()}");
     }
 
     private unsafe string LookupPrivName(NativeMethods.LUID luid)
@@ -420,14 +428,14 @@ internal sealed class ElevationLauncher
 
     // ── Privilege adjustment ─────────────────────────────────────────────
 
-    private void AdjustPrivileges()
+    private void AdjustPrivileges(Action<string>? log = null)
     {
         if (!NativeMethods.OpenProcessToken(
                 NativeMethods.GetCurrentProcess(),
                 NativeMethods.TOKEN_ADJUST_PRIVILEGES | NativeMethods.TOKEN_QUERY,
                 out IntPtr hToken))
         {
-            Log("AdjustPrivileges::Failed to open process token.");
+            log?.Invoke("AdjustPrivileges::Failed to open process token.");
             return;
         }
         try
@@ -441,21 +449,21 @@ internal sealed class ElevationLauncher
                 NativeMethods.SE_INCREASE_QUOTA_NAME,       // CreateProcessAsUser
             })
             {
-                if (SetPrivilege(hToken, priv, true))
-                    Log($"AdjustPrivileges::Enabled {priv}.");
+                if (SetPrivilege(hToken, priv, true, log))
+                    log?.Invoke($"AdjustPrivileges::Enabled {priv}.");
                 else
-                    Log($"AdjustPrivileges::Failed to enable {priv}.");
+                    log?.Invoke($"AdjustPrivileges::Failed to enable {priv}.");
             }
         }
         finally { NativeMethods.CloseHandle(hToken); }
     }
 
-    private unsafe bool SetPrivilege(IntPtr hToken, string privilege, bool enable)
+    private unsafe bool SetPrivilege(IntPtr hToken, string privilege, bool enable, Action<string>? log = null)
     {
         NativeMethods.LUID luid;
         if (!NativeMethods.LookupPrivilegeValueW(null, privilege, &luid))
         {
-            Log($"SetPrivilege::LookupPrivilegeValue failed for {privilege}. " +
+            log?.Invoke($"SetPrivilege::LookupPrivilegeValue failed for {privilege}. " +
                 $"LastError={GetErrorName((uint)Marshal.GetLastWin32Error())}");
             return false;
         }
@@ -473,24 +481,24 @@ internal sealed class ElevationLauncher
         NativeMethods.AdjustTokenPrivileges(hToken, false, &tp, 0, null, null);
 
         uint err = (uint)Marshal.GetLastWin32Error();
-        if (err != 0) { Log($"SetPrivilege::Error={GetErrorName(err)}"); return false; }
+        if (err != 0) { log?.Invoke($"SetPrivilege::Error={GetErrorName(err)}"); return false; }
         return true;
     }
 
     // ── System impersonation ─────────────────────────────────────────────
 
-    private bool ImpersonateSystem()
+    private bool ImpersonateSystem(Action<string>? log = null)
     {
         uint pidWinLogon = FindProcessByName("winlogon.exe");
-        if (pidWinLogon == 0) { Log("Failed to find winlogon pid."); return false; }
+        if (pidWinLogon == 0) { log?.Invoke("Failed to find winlogon pid."); return false; }
 
-        Log("Got winlogon pid, opening process...");
+        log?.Invoke("Got winlogon pid, opening process...");
         IntPtr hWinLogon = NativeMethods.OpenProcess(
             NativeMethods.PROCESS_DUP_HANDLE | NativeMethods.PROCESS_QUERY_INFORMATION,
             false, pidWinLogon);
         if (hWinLogon == IntPtr.Zero)
         {
-            Log($"Failed to open winlogon. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            log?.Invoke($"Failed to open winlogon. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
             return false;
         }
         try
@@ -500,14 +508,14 @@ internal sealed class ElevationLauncher
                     NativeMethods.TOKEN_QUERY | NativeMethods.TOKEN_DUPLICATE,
                     out IntPtr hSysTkn))
             {
-                Log($"Failed to open winlogon token. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                log?.Invoke($"Failed to open winlogon token. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 return false;
             }
             try
             {
                 bool ok = NativeMethods.ImpersonateLoggedOnUser(hSysTkn);
-                if (ok) Log("Successfully impersonated system!");
-                else    Log($"Failed to impersonate. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                if (ok) log?.Invoke("Successfully impersonated system!");
+                else    log?.Invoke($"Failed to impersonate. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 return ok;
             }
             finally { NativeMethods.CloseHandle(hSysTkn); }
@@ -517,12 +525,12 @@ internal sealed class ElevationLauncher
 
     // ── Elevated token acquisition ─────────────────────────────────────
 
-    private void StartAndAcquireToken()
+    private void StartAndAcquireToken(Action<string>? log = null)
     {
         IntPtr hSCM = NativeMethods.OpenSCManagerW(null, null, NativeMethods.SC_MANAGER_ALL_ACCESS);
         if (hSCM == IntPtr.Zero)
         {
-            Log($"Failed to open SCManager. error={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            log?.Invoke($"Failed to open SCManager. error={GetErrorName((uint)Marshal.GetLastWin32Error())}");
             return;
         }
         try
@@ -531,22 +539,22 @@ internal sealed class ElevationLauncher
                 NativeMethods.SERVICE_START | NativeMethods.SERVICE_QUERY_STATUS);
             if (hSvc == IntPtr.Zero)
             {
-                Log($"Failed to open TrustedInstaller service. error={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                log?.Invoke($"Failed to open TrustedInstaller service. error={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 return;
             }
             try
             {
-                uint pid = WaitForServiceRunning(hSvc);
-                if (pid != 0) AcquireTokenFromProcess(pid);
+                uint pid = WaitForServiceRunning(hSvc, log);
+                if (pid != 0) AcquireTokenFromProcess(pid, log);
             }
             finally { NativeMethods.CloseHandle(hSvc); }
         }
         finally { NativeMethods.CloseHandle(hSCM); }
     }
 
-    private unsafe uint WaitForServiceRunning(IntPtr hSvc)
+    private unsafe uint WaitForServiceRunning(IntPtr hSvc, Action<string>? log = null)
     {
-        Log("Waiting for TrustedInstaller service...");
+        log?.Invoke("Waiting for TrustedInstaller service...");
         uint svcSize = (uint)sizeof(NativeMethods.SERVICE_STATUS_PROCESS);
         long deadline = Environment.TickCount64 + 30_000;
 
@@ -556,20 +564,20 @@ internal sealed class ElevationLauncher
         {
             if (Environment.TickCount64 > deadline)
             {
-                Log("Timed out waiting for TrustedInstaller service to run.");
+                log?.Invoke("Timed out waiting for TrustedInstaller service to run.");
                 return 0;
             }
 
             switch (st.dwCurrentState)
             {
                 case NativeMethods.ServiceState.Stopped:
-                    Log("Service stopped, starting...");
+                    log?.Invoke("Service stopped, starting...");
                     if (!NativeMethods.StartServiceW(hSvc, 0, IntPtr.Zero))
                     {
                         uint err = (uint)Marshal.GetLastWin32Error();
                         if (err != NativeMethods.ERROR_SERVICE_ALREADY_RUNNING)
                         {
-                            Log($"Error starting TrustedInstaller. error={GetErrorName(err)}");
+                            log?.Invoke($"Error starting TrustedInstaller. error={GetErrorName(err)}");
                             return 0;
                         }
                     }
@@ -578,29 +586,29 @@ internal sealed class ElevationLauncher
                 case NativeMethods.ServiceState.StartPending:
                 case NativeMethods.ServiceState.StopPending:
                     uint waitMs = Math.Clamp(st.dwWaitHint, 250u, 5_000u);
-                    Log($"Service pending, waiting {waitMs}ms...");
+                    log?.Invoke($"Service pending, waiting {waitMs}ms...");
                     NativeMethods.Sleep(waitMs);
                     break;
 
                 case NativeMethods.ServiceState.Running:
-                    Log($"TrustedInstaller running, pid={st.dwProcessId}.");
+                    log?.Invoke($"TrustedInstaller running, pid={st.dwProcessId}.");
                     return st.dwProcessId;
             }
         }
         return 0;
     }
 
-    private unsafe void AcquireTokenFromProcess(uint pid)
+    private unsafe void AcquireTokenFromProcess(uint pid, Action<string>? log = null)
     {
         uint tid = GetFirstThreadId(pid);
-        Log($"Elevated thread id={tid}");
-        if (tid == 0) { Log("Failed to get elevated thread id."); return; }
+        log?.Invoke($"Elevated thread id={tid}");
+        if (tid == 0) { log?.Invoke("Failed to get elevated thread id."); return; }
 
         IntPtr hThread = NativeMethods.OpenThread(
             NativeMethods.THREAD_DIRECT_IMPERSONATION, false, tid);
         if (hThread == IntPtr.Zero)
         {
-            Log($"Failed to open elevated thread. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            log?.Invoke($"Failed to open elevated thread. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
             return;
         }
         try
@@ -616,11 +624,11 @@ internal sealed class ElevationLauncher
 
             if (status != NativeMethods.STATUS_SUCCESS)
             {
-                Log($"NtImpersonateThread failed, NTSTATUS={GetNtStatusName(status)}");
+                log?.Invoke($"NtImpersonateThread failed, NTSTATUS={GetNtStatusName(status)}");
                 return;
             }
 
-            Log("NtImpersonateThread STATUS_SUCCESS. Opening thread token...");
+            log?.Invoke("NtImpersonateThread STATUS_SUCCESS. Opening thread token...");
             // Open into a local first: a volatile field cannot be passed as an
             // 'out' argument without losing its volatile semantics (CS0420).
             if (NativeMethods.OpenThreadToken(
@@ -629,10 +637,10 @@ internal sealed class ElevationLauncher
                     false, out IntPtr hToken))
             {
                 _hElevatedToken = hToken;
-                Log("Token acquired and cached.");
+                log?.Invoke("Token acquired and cached.");
             }
             else
-                Log($"OpenThreadToken failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                log?.Invoke($"OpenThreadToken failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
         }
         finally { NativeMethods.CloseHandle(hThread); }
     }
@@ -649,9 +657,10 @@ internal sealed class ElevationLauncher
         string? workingDirectory = null,
         int showWindow = NativeMethods.SW_SHOWNORMAL,
         uint? targetSessionId = null,
-        bool captureOutput = false)
+        bool captureOutput = false,
+        Action<string>? log = null)
     {
-        Log("Creating process...");
+        log?.Invoke("Creating process...");
 
         // Log the session topology: the service's own session (expected 0) and
         // the client/console session we will launch the process into.
@@ -661,7 +670,7 @@ internal sealed class ElevationLauncher
         // appears on the interactive desktop instead of the invisible Session 0.
         uint sessionId = targetSessionId ?? NativeMethods.WTSGetActiveConsoleSessionId();
         string sessionSource = targetSessionId.HasValue ? "requesting client" : "active console";
-        Log($"Launcher (service) session={svcSession}; target session={sessionId} ({sessionSource}).");
+        log?.Invoke($"Launcher (service) session={svcSession}; target session={sessionId} ({sessionSource}).");
         if (sessionId != uint.MaxValue)
         {
             if (!NativeMethods.SetTokenInformation(
@@ -670,12 +679,12 @@ internal sealed class ElevationLauncher
                     &sessionId,
                     sizeof(uint)))
             {
-                Log($"Warning: SetTokenInformation(TokenSessionId) failed. " +
+                log?.Invoke($"Warning: SetTokenInformation(TokenSessionId) failed. " +
                     $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
             }
             else
             {
-                Log($"Token session remapped to session {sessionId}.");
+                log?.Invoke($"Token session remapped to session {sessionId}.");
             }
         }
 
@@ -691,7 +700,7 @@ internal sealed class ElevationLauncher
             commandLine  = BuildHostCommand(host, app, args);
             args         = string.Empty;   // take the PATH-resolved (null app) branch
             consoleProbe = host;           // console state follows the host
-            Log($"Non-executable target — launching via {host}: {commandLine}");
+            log?.Invoke($"Non-executable target — launching via {host}: {commandLine}");
         }
 
         // Console-subsystem programs (cmd, powershell) launched from a service
@@ -702,20 +711,20 @@ internal sealed class ElevationLauncher
         if (captureOutput)
         {
             creationFlags |= NativeMethods.CREATE_NO_WINDOW;
-            Log("Output capture mode — no console window; stdout/stderr piped back to caller.");
+            log?.Invoke("Output capture mode — no console window; stdout/stderr piped back to caller.");
         }
         else if (IsConsoleSubsystem(consoleProbe))
         {
             creationFlags |= NativeMethods.CREATE_NEW_CONSOLE;
-            Log("Console application detected — allocating an interactive console window.");
+            log?.Invoke("Console application detected — allocating an interactive console window.");
         }
 
         // Working directory: empty = inherit; expand env vars (e.g. %USERPROFILE%).
         string? workDir = string.IsNullOrWhiteSpace(workingDirectory)
             ? null
             : (workingDirectory.Contains('%') ? ExpandEnvVars(workingDirectory) : workingDirectory);
-        if (workDir is not null) Log($"Working directory: {workDir}");
-        Log($"Window state (SW_*): {showWindow}");
+        if (workDir is not null) log?.Invoke($"Working directory: {workDir}");
+        log?.Invoke($"Window state (SW_*): {showWindow}");
 
         // Set up anonymous pipes for stdout/stderr when capture is requested.
         // The write end (hWritePipe) is inheritable and passed to the child via
@@ -734,7 +743,7 @@ internal sealed class ElevationLauncher
             };
             if (!NativeMethods.CreatePipe(out hReadPipe, out hWritePipe, &sa, 0))
             {
-                Log($"CreatePipe failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())} — falling back to fire-and-forget.");
+                log?.Invoke($"CreatePipe failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())} — falling back to fire-and-forget.");
                 captureOutput = false;
             }
             else
@@ -798,7 +807,7 @@ internal sealed class ElevationLauncher
                         {
                             if (app.Contains('%')) app = ExpandEnvVars(app);
                             string launchApp = ResolveExecutable(app) ?? app;
-                            Log($"Args detected — app={launchApp}  args={args}");
+                            log?.Invoke($"Args detected — app={launchApp}  args={args}");
                             callResult = NativeMethods.CreateProcessAsUserExW(
                                 hToken, launchApp, commandLine,
                                 IntPtr.Zero, IntPtr.Zero, true,
@@ -847,7 +856,7 @@ internal sealed class ElevationLauncher
                     // most other tools do not, so they failed with FILE_NOT_FOUND once
                     // arguments were present. Resolve to a full path via PATH first.
                     string launchApp = ResolveExecutable(app) ?? app;
-                    Log($"Args detected — app={launchApp}  args={args}");
+                    log?.Invoke($"Args detected — app={launchApp}  args={args}");
 
                     callResult = NativeMethods.CreateProcessAsUserW(
                         hToken, launchApp, commandLine,
@@ -859,7 +868,7 @@ internal sealed class ElevationLauncher
 
             if (!callResult)
             {
-                Log($"CreateProcessAsUser failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+                log?.Invoke($"CreateProcessAsUser failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 if (hWritePipe != IntPtr.Zero) NativeMethods.CloseHandle(hWritePipe);
                 if (hReadPipe  != IntPtr.Zero) NativeMethods.CloseHandle(hReadPipe);
                 return (0, IntPtr.Zero, null);
@@ -874,15 +883,17 @@ internal sealed class ElevationLauncher
                 // reaches EOF when the child exits (not when the service decides to).
                 NativeMethods.CloseHandle(hWritePipe);
 
-                // Wrap the read end in a FileStream the caller can drain asynchronously.
+                // Wrap the read end in a FileStream. Anonymous pipes from CreatePipe are
+                // synchronous (no FILE_FLAG_OVERLAPPED), so isAsync must be false.
+                // StreamReader.ReadLineAsync on a sync stream works fine from Task.Run.
                 var safeHandle = new Microsoft.Win32.SafeHandles.SafeFileHandle(hReadPipe, ownsHandle: true);
-                var stream = new System.IO.FileStream(safeHandle, System.IO.FileAccess.Read, bufferSize: 4096, isAsync: true);
-                Log($"Process created: PID={pi.dwProcessId} session={sessionId} desktop=WinSta0\\Default (capture mode).");
+                var stream = new System.IO.FileStream(safeHandle, System.IO.FileAccess.Read, bufferSize: 4096, isAsync: false);
+                log?.Invoke($"Process created: PID={pi.dwProcessId} session={sessionId} desktop=WinSta0\\Default (capture mode).");
                 return (pi.dwProcessId, pi.hProcess, stream);
             }
 
             NativeMethods.CloseHandle(pi.hProcess);
-            Log($"Process created: PID={pi.dwProcessId} session={sessionId} desktop=WinSta0\\Default.");
+            log?.Invoke($"Process created: PID={pi.dwProcessId} session={sessionId} desktop=WinSta0\\Default.");
             return (pi.dwProcessId, IntPtr.Zero, null);
         }
     }
