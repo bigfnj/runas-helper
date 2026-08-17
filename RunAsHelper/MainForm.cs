@@ -293,7 +293,16 @@ namespace RunAsHelper
             Task.Run(() =>
             {
                 bool available = NativeMethods.WaitNamedPipeW(@"\\.\pipe\RunAsHelper", 500);
-                BeginInvoke(() => ApplyServiceState(available));
+                // Runs on a thread-pool thread. If the form is torn down between the
+                // pipe check and here, BeginInvoke throws (ObjectDisposed/
+                // InvalidOperation) with no UI-thread handler to catch it — guard it.
+                try
+                {
+                    if (IsHandleCreated && !IsDisposed)
+                        BeginInvoke(() => ApplyServiceState(available));
+                }
+                catch (ObjectDisposedException)   { /* form closed mid-check */ }
+                catch (InvalidOperationException) { /* handle gone mid-check */ }
             });
         }
 
@@ -370,10 +379,15 @@ namespace RunAsHelper
 
         private void OnRunAsHelperEvent(object? sender, EventRecordWrittenEventArgs e)
         {
-            using var record = e.EventRecord;
-            if (record is null) return;
+            // Raised on an EventLogWatcher background thread. An exception that
+            // escapes here has no UI-thread handler and terminates the process, so
+            // the whole body — including EventRecord access and disposal — is
+            // guarded, not just the parsing.
             try
             {
+                using var record = e.EventRecord;
+                if (record is null) return;
+
                 // EventLog.WriteEntry stores the whole message as the first insertion
                 // string; read it directly (the source has no message DLL, so
                 // FormatDescription() is unreliable here).
@@ -384,7 +398,7 @@ namespace RunAsHelper
                     return;
 
                 string cmd = ExtractFirstQuoted(text);
-                if (IsHandleCreated)
+                if (IsHandleCreated && !IsDisposed)
                     BeginInvoke(() => ShowCliLaunchToast(cmd));
             }
             catch { /* never let a log-read failure disturb the tray */ }
