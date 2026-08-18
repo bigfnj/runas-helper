@@ -17,7 +17,8 @@ public sealed record LaunchRequest(
     string Account          = "ti",       // "ti" (TrustedInstaller) | "system"
     string Source           = "tray",     // "tray" | "cli" — gated by the service
     bool   CaptureOutput    = false,      // stream child stdout/stderr back through the pipe
-    int    TimeoutSeconds   = 0);         // 0 = wait forever; > 0 = hard ceiling before closing the output stream
+    int    TimeoutSeconds   = 0,          // 0 = wait forever; > 0 = hard ceiling before closing the output stream
+    int    GateMinutes      = 30);        // "setcli on": minutes before the CLI gate auto-closes (0 = no expiry)
 
 /// <summary>Sent by the service back to the client: either a streaming log line or the final result.</summary>
 public sealed record PipeMessage(string Type, string Content);

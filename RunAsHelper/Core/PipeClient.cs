@@ -71,9 +71,14 @@ internal sealed class PipeClient
     public Task<bool> ValidateSystemTokenAsync(CancellationToken ct = default)
         => SendAsync(new LaunchRequest(string.Empty, NativeMethods.NORMAL_PRIORITY_CLASS, "validate-system"), ct);
 
-    /// <summary>Tells the service whether to allow CLI-sourced launches (tray only).</summary>
-    public Task<bool> SetCommandLineAllowedAsync(bool allow, CancellationToken ct = default)
-        => SendAsync(new LaunchRequest(allow ? "on" : "off", NativeMethods.NORMAL_PRIORITY_CLASS, "setcli"), ct);
+    /// <summary>
+    /// Tells the service whether to allow CLI-sourced launches (tray only). When opening
+    /// the gate, <paramref name="gateMinutes"/> is how long the service will honour it
+    /// before auto-closing it (0 = no expiry); re-sending "on" restarts the countdown.
+    /// </summary>
+    public Task<bool> SetCommandLineAllowedAsync(bool allow, int gateMinutes = 30, CancellationToken ct = default)
+        => SendAsync(new LaunchRequest(allow ? "on" : "off", NativeMethods.NORMAL_PRIORITY_CLASS, "setcli",
+            GateMinutes: gateMinutes), ct);
 
     /// <summary>
     /// Lists the launches currently holding a slot, with "N/M" slot usage. Like

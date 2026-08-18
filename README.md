@@ -42,7 +42,8 @@ The named pipe ACL grants access to BUILTIN\Administrators, SYSTEM, and the inte
 The service enforces identity server-side, not via the client-supplied `Source` field:
 
 - **Tray control** (`setcli`, saving settings, validation): requires the client to be both the installed `RunAsHelper.exe` — identified by image path (the binary sitting next to the service), so unsigned local/CI builds still work — **and** running with an elevated token. Neither condition alone is sufficient. A caller's Authenticode signature is recorded for diagnostics; pinning it to a specific publisher is optional future hardening (see *Planned features*).
-- **CLI gate** (any other process): when the elevated tray opens the gate, **any** process that can reach the pipe gets elevated to TrustedInstaller — the pipe ACL is the boundary. The gate resets whenever the owning tray exits or crashes.
+- **CLI gate** (any other process): when the elevated tray opens the gate, **any** process that can reach the pipe gets elevated to TrustedInstaller — the pipe ACL is the boundary. The gate resets whenever the owning tray exits or crashes, and it **auto-closes after a configurable ceiling** (default 30 minutes) so an allowance cannot be left open indefinitely.
+- **Job control** (`jobs`, `killjob`): same requirement as tray control — the installed, elevated tray. Deliberately *not* reachable through an open CLI gate: being allowed to launch must not imply the right to enumerate or terminate other elevated jobs.
 
 Keep the pipe ACL and the install-path identity check intact if you modify the pipe security.
 
@@ -212,7 +213,10 @@ context (see the gate note below).
 > session) is the boundary, not per-caller elevation.
 >
 > **To use the CLI:** open the tray, click **Activate** (approve your OS/endpoint
-> elevation prompt), then toggle *Settings → "Allow command line"*. Only the
+> elevation prompt), then toggle *Settings → "Allow command line"*. That allowance
+> **expires on its own** after *Settings → "…auto-close it after"* minutes (default 30;
+> 0 disables the countdown). The service enforces it, so an allowance you forget about
+> closes itself; re-ticking the box starts a fresh countdown. Only the
 > elevated, installed tray can open the gate, and it closes again when the tray
 > exits — so re-enable it per session. An already-elevated tray launches without
 > needing the gate at all; the gate exists for *non-elevated* CLI callers.
@@ -333,6 +337,15 @@ reinstall in place (handy during development).
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
 
+## What's new in 1.7.1
+
+- **The CLI gate now expires.** "Allow command line" used to stay open for the whole tray
+  session, revoked only if the owning tray died. It now carries a countdown (default
+  **30 minutes**, configurable in Settings, 0 = never) that the **service** enforces, so an
+  allowance left on by accident closes itself. The tray mirrors the countdown, unticks the
+  setting when it lapses, and says so; re-enabling it starts a fresh countdown. An
+  expired-gate denial is audited distinctly from a never-opened one.
+
 ## What's new in 1.7.0
 
 - **Active Jobs** — *Tools → Active Jobs* lists every launch currently holding a service
@@ -439,10 +452,6 @@ Not done yet — tracked for future work:
   distribution, and wiring the pipe check to additionally require a valid
   signature from a pinned publisher (the service already records whether a caller
   is signed; today that is diagnostics only).
-- **CLI gate auto-expiry** — when "Allow command line" is enabled, start a
-  countdown (default 60 min) after which the service auto-closes the gate, so an
-  open gate isn't accidentally left enabled for a long-running tray session. The
-  service enforces the timeout; the tray mirrors it (auto-unchecks + toast).
 
 ## License
 
