@@ -37,6 +37,12 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     // tray is no longer alive (e.g. it crashed without sending "setcli off").
     private volatile uint _allowCliOwnerPid;
 
+    // When the open gate lapses, as UTC ticks (0 = no expiry). Checked lazily on the
+    // next request rather than from a timer: the gate only matters at the moment
+    // something tries to use it, and this keeps the service timer-free. Long ticks are
+    // read/written via Interlocked so a 64-bit value is never torn on a 32-bit read.
+    private long _allowCliExpiresUtcTicks;
+
     // In-flight launches, keyed by a monotonic job id, so the tray can show what is
     // currently holding a launch slot and terminate a job that is stuck. A launch is
     // registered once it holds a slot and removed in the same finally that releases
@@ -51,6 +57,15 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     {
         public required JobInfo Info { get; init; }
         public volatile uint LivePid;
+    }
+
+    // Clears every piece of gate state together, so a revoked gate can never leave a
+    // stale owner PID or deadline behind for the next check to reason about.
+    private void CloseCliGate()
+    {
+        _allowCli = false;
+        _allowCliOwnerPid = 0;
+        Interlocked.Exchange(ref _allowCliExpiresUtcTicks, 0);
     }
 
     /// <summary>Snapshot of in-flight launches, plus how many slots are in use.</summary>
@@ -285,8 +300,25 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     }
                     _allowCli = string.Equals(request.CommandLine, "on", StringComparison.OrdinalIgnoreCase);
                     _allowCliOwnerPid = _allowCli ? clientPid : 0;
-                    logger.LogInformation("CLI launches {State} (owner pid {Pid}).",
-                        _allowCli ? "ENABLED" : "disabled", _allowCliOwnerPid);
+
+                    // Opening (or re-opening) the gate starts a fresh countdown, so a tray
+                    // that re-asserts the setting extends it rather than letting a stale
+                    // deadline close the gate underneath it.
+                    long expiresTicks = 0;
+                    if (_allowCli && request.GateMinutes > 0)
+                        expiresTicks = DateTime.UtcNow.AddMinutes(request.GateMinutes).Ticks;
+                    Interlocked.Exchange(ref _allowCliExpiresUtcTicks, expiresTicks);
+
+                    logger.LogInformation("CLI launches {State} (owner pid {Pid}){Expiry}.",
+                        _allowCli ? "ENABLED" : "disabled", _allowCliOwnerPid,
+                        expiresTicks == 0
+                            ? (_allowCli ? " with no expiry" : "")
+                            : $" for {request.GateMinutes} minute(s)");
+
+                    // Report the effective deadline so the tray can mirror the countdown
+                    // rather than assume its own clock matches the enforcer's.
+                    await PipeProtocol.WriteAsync(pipe, new PipeMessage("gate",
+                        expiresTicks == 0 ? "0" : request.GateMinutes.ToString()), ct);
                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Success"), ct);
                     return;
                 }
@@ -358,18 +390,32 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                         logger.LogInformation(
                             "CLI gate owner (pid {Pid}) is gone — reverting to disabled.",
                             _allowCliOwnerPid);
-                        _allowCli = false;
-                        _allowCliOwnerPid = 0;
+                        CloseCliGate();
+                    }
+
+                    // ...and likewise once its countdown has lapsed, so an open gate is
+                    // not left usable for the whole life of a long-running tray session.
+                    // Remember which of the two closed it so the single denial below can
+                    // say why, rather than emitting a second event for the same request.
+                    string closedReason = "CLI gate closed";
+                    long expiresTicks = Interlocked.Read(ref _allowCliExpiresUtcTicks);
+                    if (_allowCli && expiresTicks != 0 && DateTime.UtcNow.Ticks >= expiresTicks)
+                    {
+                        logger.LogInformation("CLI gate expired — reverting to disabled.");
+                        closedReason = "CLI gate expired";
+                        CloseCliGate();
                     }
 
                     if (!_allowCli)
                     {
-                        logger.LogWarning("Blocked launch (CLI gate closed) from pid {Pid}: {CommandLine}",
-                            clientPid, request.CommandLine);
+                        logger.LogWarning("Blocked launch ({Reason}) from pid {Pid}: {CommandLine}",
+                            closedReason, clientPid, request.CommandLine);
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
-                            "Command line is disabled. Enable it in RunAS Helper > Settings > \"Allow command line\"."), ct);
+                            closedReason == "CLI gate expired"
+                                ? "Command line was enabled but the allowance expired. Re-enable it in RunAS Helper > Settings > \"Allow command line\"."
+                                : "Command line is disabled. Enable it in RunAS Helper > Settings > \"Allow command line\"."), ct);
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
-                        EventLogHelper.Denied(request.CommandLine, "CLI gate closed");
+                        EventLogHelper.Denied(request.CommandLine, closedReason);
                         return;
                     }
                 }

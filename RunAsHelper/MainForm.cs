@@ -24,6 +24,11 @@ namespace RunAsHelper
 
         private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 60_000 };
 
+        // Mirrors the service-enforced CLI gate countdown so the tray can untick the
+        // setting when it lapses. The service is the authority; this is display only.
+        private readonly System.Windows.Forms.Timer _cliGateTimer = new() { Interval = 15_000 };
+        private DateTime? _cliGateExpiresUtc;
+
         // Watches the service's structured events to flag CLI-sourced launches.
         private EventLogWatcher? _cliWatcher;
 
@@ -121,6 +126,10 @@ namespace RunAsHelper
             trayMenu.Opening       += (_, _) => { RebuildSavedAppsMenu(); RebuildRecentMenu(); };
             _client.LogMessage     += AppendLog;
             _statusTimer.Tick      += (_, _) => CheckServiceStatusAsync();
+            _cliGateTimer.Tick     += (_, _) =>
+            {
+                if (_cliGateExpiresUtc is { } due && DateTime.UtcNow >= due) OnCliGateExpired();
+            };
         }
 
         private void SetTrayIcon()
@@ -272,6 +281,7 @@ namespace RunAsHelper
                 return;
             }
             _statusTimer.Stop();
+            _cliGateTimer.Stop();
             notifyIcon.Visible = false;
             try { if (_cliWatcher is not null) { _cliWatcher.Enabled = false; _cliWatcher.Dispose(); } } catch { }
             // Reset the CLI gate to off on exit (best-effort), so the command line
@@ -469,7 +479,30 @@ namespace RunAsHelper
         private void PushCliAllowed()
         {
             if (_serviceOnline != true) return;
-            _ = _client.SetCommandLineAllowedAsync(_settings.AllowCommandLine);
+            _ = _client.SetCommandLineAllowedAsync(_settings.AllowCommandLine, _settings.CliGateMinutes);
+
+            // Mirror the service's countdown locally. The service is the authority — it
+            // re-checks the deadline on every request — so this only drives the UI.
+            _cliGateExpiresUtc = _settings.AllowCommandLine && _settings.CliGateMinutes > 0
+                ? DateTime.UtcNow.AddMinutes(_settings.CliGateMinutes)
+                : null;
+            _cliGateTimer.Enabled = _cliGateExpiresUtc is not null;
+        }
+
+        // Reflects the gate lapsing: untick the session setting so the tray agrees with
+        // the service, and say so, since the whole point is that it closed without the
+        // user doing anything.
+        private void OnCliGateExpired()
+        {
+            _cliGateTimer.Enabled = false;
+            _cliGateExpiresUtc    = null;
+            if (!_settings.AllowCommandLine) return;
+
+            _settings.AllowCommandLine = false;
+            AppendLog("Command line was automatically disabled (gate expired).");
+            if (_settings.ShowTrayNotifications)
+                notifyIcon.ShowBalloonTip(4000, "RunAS Helper",
+                    "\"Allow command line\" expired and is now off.", ToolTipIcon.Info);
         }
         private void MenuValidate_Click(object? sender, EventArgs e)
         {

@@ -62,7 +62,9 @@ COMMAND LINE
 
   SECURITY: the command line is DISABLED by default. Enable it per session in
   RunAS Helper > Settings > ""Allow command line"" (the tray must be running and
-  elevated; it resets to OFF on every tray launch and on exit).
+  elevated; it resets to OFF on every tray launch and on exit). The allowance also
+  expires on its own after Settings > ""...auto-close it after"" minutes (default
+  30, 0 = never); the service enforces that, and re-enabling restarts the clock.
 
 EXAMPLES
   RunAsHelper.exe cmd.exe

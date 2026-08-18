@@ -14,6 +14,7 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox      _chkShowNotifications = new();
     private readonly CheckBox      _chkEnableLogging     = new();
     private readonly CheckBox      _chkAllowCli          = new();
+    private readonly NumericUpDown _nudGateMinutes       = new();
     private readonly NumericUpDown _nudMaxMru            = new();
 
     public SettingsForm(AppSettings settings)
@@ -26,7 +27,7 @@ internal sealed class SettingsForm : Form
     private void BuildLayout()
     {
         Text            = "Settings";
-        ClientSize      = new Size(360, 308);
+        ClientSize      = new Size(360, 340);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox     = false;
         MinimizeBox     = false;
@@ -63,6 +64,20 @@ internal sealed class SettingsForm : Form
         _chkAllowCli.Text     = "Allow command line (resets to off each launch)";
         _chkAllowCli.Location = new Point(16, y);
         _chkAllowCli.AutoSize = true;
+        y += rowH;
+
+        // The service enforces this ceiling; the tray only mirrors it. 0 means the gate
+        // stays open until the tray closes it or exits, which is the pre-1.7.1 behaviour.
+        var lblGate = new Label
+        {
+            Text     = "…auto-close it after (minutes, 0 = never):",
+            Location = new Point(34, y + 3),
+            AutoSize = true,
+        };
+        _nudGateMinutes.Location = new Point(268, y);
+        _nudGateMinutes.Size     = new Size(58, 23);
+        _nudGateMinutes.Minimum  = 0;
+        _nudGateMinutes.Maximum  = 1440;
         y += rowH + 8;
 
         var lblMaxMru = new Label
@@ -102,6 +117,7 @@ internal sealed class SettingsForm : Form
         {
             _chkStartWithWindows, _chkStartMinimized, _chkMinimizeToTray, _chkShowNotifications,
             _chkEnableLogging, _chkAllowCli,
+            lblGate, _nudGateMinutes,
             lblMaxMru, _nudMaxMru,
             btnOk, btnCancel,
         });
@@ -115,6 +131,7 @@ internal sealed class SettingsForm : Form
         _chkShowNotifications.Checked = _settings.ShowTrayNotifications;
         _chkEnableLogging.Checked     = _settings.EnableLogging;
         _chkAllowCli.Checked          = _settings.AllowCommandLine;
+        _nudGateMinutes.Value         = Math.Clamp(_settings.CliGateMinutes, 0, 1440);
         _nudMaxMru.Value              = Math.Clamp(_settings.MaxMruEntries, 1, 50);
     }
 
@@ -126,6 +143,7 @@ internal sealed class SettingsForm : Form
         _settings.ShowTrayNotifications = _chkShowNotifications.Checked;
         _settings.EnableLogging         = _chkEnableLogging.Checked;
         _settings.AllowCommandLine      = _chkAllowCli.Checked;
+        _settings.CliGateMinutes        = (int)_nudGateMinutes.Value;
         _settings.MaxMruEntries         = (int)_nudMaxMru.Value;
         _settings.Save();
     }
