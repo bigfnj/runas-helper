@@ -20,6 +20,7 @@ namespace RunAsHelper
         private Icon? _greyIcon;
         private bool? _serviceOnline;
         private readonly bool _startHidden;
+        private readonly bool _postInstall;
         private bool  _firstShowHandled;
 
         private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 60_000 };
@@ -50,13 +51,14 @@ namespace RunAsHelper
             NativeMethods.REALTIME_PRIORITY_CLASS,
         };
 
-        public MainForm(bool startHidden = false)
+        public MainForm(bool startHidden = false, bool postInstall = false)
         {
             InitializeComponent();
             // Stamp the running version into the title bar so screenshots are
             // unambiguous about exactly which build is on screen.
             Text = $"RunAS Helper - {AppVersionString()}";
             _startHidden = startHidden || _settings.StartMinimized;
+            _postInstall = postInstall;
             // Set the window icon to power.ico before SetTrayIcon(), which derives
             // the tray icons (grey + colour) from this.Icon. Without this the form
             // falls back to the default WinForms icon.
@@ -232,9 +234,12 @@ namespace RunAsHelper
             // while the CLI gate is open are surfaced regardless).
             StartCliLaunchMonitor();
 
-            // First launch after an install: run the validation popup — but not on a
-            // tray-only (login) start, which would defeat the clean startup.
-            if (!_startHidden)
+            // Post-install validation runs ONLY when the installer itself started us
+            // (--postinstall). It is a one-time install-time check, not something to
+            // put in front of the user again on an ordinary window open or on the
+            // Activate hand-off — Tools -> Validate Installation covers a deliberate
+            // re-check. Also skipped on a tray-only (login) start.
+            if (_postInstall && !_startHidden)
                 BeginInvoke(TryShowPendingValidation);
 
             if (!NativeMethods.IsUserAnAdmin())
@@ -701,9 +706,11 @@ namespace RunAsHelper
                     ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
         }
 
-        // Shows the validation dialog once after a fresh install. The MSI writes
-        // HKLM\Software\RunAsHelper\PendingValidation = <version>; once validated
-        // we record that version in HKCU so the popup does not reappear every launch.
+        // Shows the validation dialog once, at install time, when the installer
+        // launched us with --postinstall. The MSI writes
+        // HKLM\Software\RunAsHelper\PendingValidation = <version>; we record that
+        // version in HKCU as soon as the dialog has been shown, so even a repeated
+        // --postinstall launch cannot put it up twice for the same install.
         private void TryShowPendingValidation()
         {
             try
@@ -719,30 +726,38 @@ namespace RunAsHelper
                         return;
                 }
 
-                // The two token checks go through the service's tray-control path, which
-                // only admits an *elevated* tray. On a standard-user box the tray starts
-                // non-elevated, so running the popup then reports two red "failed" rows
-                // that actually only mean "could not check". Leave it pending instead —
-                // it runs on the first launch that can genuinely validate, i.e. after
-                // Activate. Tools -> Validate Installation is always available manually.
+                // Only worth showing if it can actually validate. The two token checks
+                // need tray-control rights, i.e. the installed exe running *elevated*;
+                // without that they fail with "Command line is disabled" and the dialog
+                // becomes an alarming red wall that says nothing about the install. If
+                // the installer's launch was not elevated, consume the marker silently
+                // rather than deferring it — deferring is what turned this into a nag.
                 if (!NativeMethods.IsUserAnAdmin())
+                {
+                    StampValidated(pending);
                     return;
+                }
 
                 using var form = new ValidationForm(standalone: false);
                 form.ShowDialog(this);
 
                 // Record the version once the dialog has been *shown*, pass or fail.
-                // Stamping only on success meant any failure — including the
-                // not-elevated false alarm above — brought the popup back on every
-                // single launch, which is a nag, not a post-install check. It is a
+                // Stamping only on success meant any failure brought the popup back on
+                // the next launch, which is a nag, not a post-install check. It is a
                 // one-time-per-install notice; re-run it any time from the Tools menu.
-                using var key = Registry.CurrentUser.CreateSubKey(@"Software\RunAsHelper");
-                key?.SetValue("ValidatedVersion", pending);
+                StampValidated(pending);
             }
             catch
             {
                 // Registry access is best-effort; never block startup on it.
             }
+        }
+
+        // Marks this install's validation as done, so nothing re-opens the dialog for it.
+        private static void StampValidated(string pending)
+        {
+            using var key = Registry.CurrentUser.CreateSubKey(@"Software\RunAsHelper");
+            key?.SetValue("ValidatedVersion", pending);
         }
         private void MenuImport_Click(object? sender, EventArgs e)
         {
