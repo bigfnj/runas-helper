@@ -24,6 +24,10 @@ namespace RunAsHelper
             menuToolsSep1     = new ToolStripSeparator();
             menuValidate      = new ToolStripMenuItem();
             menuActiveJobs    = new ToolStripMenuItem();
+            statusStrip       = new StatusStrip();
+            statusService     = new ToolStripStatusLabel();
+            statusGate        = new ToolStripStatusLabel();
+            statusJobs        = new ToolStripStatusLabel();
             menuToolsSepV     = new ToolStripSeparator();
             menuToolsOpenPwsh = new ToolStripMenuItem();
             menuToolsSepP     = new ToolStripSeparator();
@@ -44,6 +48,8 @@ namespace RunAsHelper
             btnRunSystem  = new Button();
             btnActivate   = new Button();
             lblSaved      = new Label();
+            txtFilter     = new TextBox();
+            appIcons      = new ImageList();
             btnAddApp     = new Button();
             btnRunSaved   = new Button();
             btnEditApp    = new Button();
@@ -153,6 +159,15 @@ namespace RunAsHelper
             lblSaved.Font     = new System.Drawing.Font("Segoe UI", 9.5f, System.Drawing.FontStyle.Bold);
             lblSaved.Text     = "Saved applications";
 
+            // Filter box on the heading row. Anchored Top|Right so it tracks the panel
+            // width; PlaceholderText keeps the row free of an extra label.
+            txtFilter.Location        = new System.Drawing.Point(360, 84);
+            txtFilter.Size            = new System.Drawing.Size(200, 23);
+            txtFilter.Anchor          = AnchorStyles.Top | AnchorStyles.Right;
+            txtFilter.PlaceholderText = "Filter saved apps...";
+            // Placeholder text is not exposed to assistive tech, so name it explicitly.
+            txtFilter.AccessibleName   = "Filter saved apps";
+
             btnAddApp.Location  = new System.Drawing.Point(8, 110);
             btnAddApp.Size      = new System.Drawing.Size(130, 26);
             btnAddApp.Anchor    = AnchorStyles.Top | AnchorStyles.Left;
@@ -187,7 +202,7 @@ namespace RunAsHelper
             panelTop.Controls.AddRange(new Control[]
             {
                 lblQuick, comboPriority, comboPath, btnBrowse, btnRunTI, btnRunSystem,
-                lblSaved, btnAddApp, btnRunSaved, btnEditApp, btnRemoveApp, btnUpApp, btnDownApp,
+                lblSaved, txtFilter, btnAddApp, btnRunSaved, btnEditApp, btnRemoveApp, btnUpApp, btnDownApp,
             });
 
             // ── Saved-apps list ───────────────────────────────────────────────
@@ -197,6 +212,12 @@ namespace RunAsHelper
             lvApps.GridLines     = true;
             lvApps.MultiSelect   = false;
             lvApps.HideSelection = false;
+            lvApps.ShowItemToolTips = true;   // full path on hover (columns truncate)
+            // Small per-app icons make a long list scannable; drag-and-drop reorders it.
+            appIcons.ColorDepth = ColorDepth.Depth32Bit;
+            appIcons.ImageSize  = new System.Drawing.Size(16, 16);
+            lvApps.SmallImageList = appIcons;
+            lvApps.AllowDrop      = true;
             lvApps.Columns.Add("Name", 160);
             lvApps.Columns.Add("File Location", 330);
             lvApps.Columns.Add("Parameter", 150);
@@ -266,6 +287,25 @@ namespace RunAsHelper
             notifyIcon.ContextMenuStrip = trayMenu;
             notifyIcon.Visible          = true;
 
+            // ── Status bar ───────────────────────────────────────────────────
+            // Surfaces the three pieces of state that were previously only visible by
+            // opening a menu: whether the service is reachable, whether the CLI gate is
+            // open (and for how long), and how many launch slots are in use.
+            statusService.Spring    = true;
+            statusService.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            statusService.Text      = "Service: checking...";
+
+            statusGate.BorderSides  = ToolStripStatusLabelBorderSides.Left;
+            statusGate.BorderStyle  = Border3DStyle.Etched;
+            statusGate.Text         = "CLI: off";
+
+            statusJobs.BorderSides  = ToolStripStatusLabelBorderSides.Left;
+            statusJobs.BorderStyle  = Border3DStyle.Etched;
+            statusJobs.Text         = "Jobs: —";
+
+            statusStrip.SizingGrip = true;
+            statusStrip.Items.AddRange(new ToolStripItem[] { statusService, statusGate, statusJobs });
+
             // ── Form ─────────────────────────────────────────────────────────
             ClientSize          = new System.Drawing.Size(644, 520);
             MinimumSize         = new System.Drawing.Size(520, 420);
@@ -277,6 +317,7 @@ namespace RunAsHelper
 
             // Add order matters for docking: Fill first, then edges, outermost last.
             Controls.Add(lvApps);
+            Controls.Add(statusStrip);
             Controls.Add(panelBottom);
             Controls.Add(panelTop);
             Controls.Add(menuStrip);
@@ -292,6 +333,10 @@ namespace RunAsHelper
         private ToolStripSeparator   menuToolsSep1;
         private ToolStripMenuItem    menuValidate;
         private ToolStripMenuItem    menuActiveJobs;
+        private StatusStrip          statusStrip;
+        private ToolStripStatusLabel statusService;
+        private ToolStripStatusLabel statusGate;
+        private ToolStripStatusLabel statusJobs;
         private ToolStripSeparator   menuToolsSepV;
         private ToolStripMenuItem    menuToolsOpenPwsh;
         private ToolStripSeparator   menuToolsSepP;
@@ -312,6 +357,8 @@ namespace RunAsHelper
         private Button   btnRunSystem;
         private Button   btnActivate;
         private Label    lblSaved;
+        private TextBox  txtFilter;
+        private ImageList appIcons;
         private Button   btnAddApp;
         private Button   btnRunSaved;
         private Button   btnEditApp;

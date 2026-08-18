@@ -564,6 +564,22 @@ internal static partial class NativeMethods
     internal const uint OPEN_EXISTING          = 3;
     internal const uint FILE_ATTRIBUTE_NORMAL  = 0x00000080;
 
+    // Looks up the handler registered for a file type. Used to open documents: the
+    // shell's own "start"/ShellExecute path does not work from the service's SYSTEM
+    // token, so the handler is resolved here and launched directly as a normal PE.
+    internal const uint ASSOCF_NONE         = 0;
+    internal const uint ASSOCSTR_COMMAND    = 1;
+    internal const uint ASSOCSTR_EXECUTABLE = 2;
+
+    [LibraryImport("shlwapi.dll", EntryPoint = "AssocQueryStringW", StringMarshalling = StringMarshalling.Utf16)]
+    internal static unsafe partial int AssocQueryStringW(
+        uint    flags,
+        uint    str,
+        string  pszAssoc,
+        string? pszExtra,
+        char*   pszOut,
+        ref uint pcchOut);
+
     [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     internal static unsafe partial IntPtr CreateFileW(
         string                 lpFileName,

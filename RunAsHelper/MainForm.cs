@@ -29,6 +29,11 @@ namespace RunAsHelper
         private readonly System.Windows.Forms.Timer _cliGateTimer = new() { Interval = 15_000 };
         private DateTime? _cliGateExpiresUtc;
 
+        // Refreshes the status bar's job count. Only runs while the window is actually
+        // visible — polling the service from a tray-only session would be pure noise.
+        private readonly System.Windows.Forms.Timer _statusBarTimer = new() { Interval = 4_000 };
+        private bool _statusBarBusy;
+
         // Watches the service's structured events to flag CLI-sourced launches.
         private EventLogWatcher? _cliWatcher;
 
@@ -107,6 +112,10 @@ namespace RunAsHelper
             lvApps.DoubleClick     += async (_, _) => await RunSelectedAppAsync();
             lvApps.KeyDown         += LvApps_KeyDown;
             lvApps.Resize          += (_, _) => StretchAppColumns();
+            lvApps.ItemDrag        += LvApps_ItemDrag;
+            lvApps.DragOver        += LvApps_DragOver;
+            lvApps.DragDrop        += LvApps_DragDrop;
+            txtFilter.TextChanged  += (_, _) => { RefreshAppsList(); UpdateAppButtonStates(); };
             menuShow.Click         += (_, _) => ShowFromTray();
             menuExit.Click         += MenuExit_Click;
             menuStartService.Click += MenuStartService_Click;
@@ -129,7 +138,9 @@ namespace RunAsHelper
             _cliGateTimer.Tick     += (_, _) =>
             {
                 if (_cliGateExpiresUtc is { } due && DateTime.UtcNow >= due) OnCliGateExpired();
+                UpdateGateStatus();
             };
+            _statusBarTimer.Tick   += async (_, _) => await RefreshJobCountAsync();
         }
 
         private void SetTrayIcon()
@@ -213,6 +224,7 @@ namespace RunAsHelper
 
             NativeMethods.SendMessage(btnRunTI.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
             NativeMethods.SendMessage(btnRunSystem.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
+            UpdateGateStatus();
             AppendLog("Checking RunAS Helper service...");
             CheckServiceStatusAsync();
             _statusTimer.Start();
@@ -282,6 +294,7 @@ namespace RunAsHelper
             }
             _statusTimer.Stop();
             _cliGateTimer.Stop();
+            _statusBarTimer.Stop();
             notifyIcon.Visible = false;
             try { if (_cliWatcher is not null) { _cliWatcher.Enabled = false; _cliWatcher.Dispose(); } } catch { }
             // Reset the CLI gate to off on exit (best-effort), so the command line
@@ -295,6 +308,12 @@ namespace RunAsHelper
             base.OnResize(e);
             if (WindowState == FormWindowState.Minimized && _settings.MinimizeToTray)
                 HideToTray();
+        }
+
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            SetStatusPolling(Visible);
         }
 
         // ── Service status ───────────────────────────────────────────────────
@@ -323,6 +342,10 @@ namespace RunAsHelper
             _serviceOnline = available;
 
             menuStartService.Visible = !available;
+
+            statusService.Text = available ? "Service: running" : "Service: not running";
+            statusService.ForeColor = available ? SystemColors.ControlText : Color.FromArgb(170, 0, 0);
+            if (!available) statusJobs.Text = "Jobs: —";
 
             if (available)
             {
@@ -487,6 +510,67 @@ namespace RunAsHelper
                 ? DateTime.UtcNow.AddMinutes(_settings.CliGateMinutes)
                 : null;
             _cliGateTimer.Enabled = _cliGateExpiresUtc is not null;
+            UpdateGateStatus();
+        }
+
+        // ── Status bar ───────────────────────────────────────────────────────
+
+        // "CLI: off" / "CLI: open (23m left)" / "CLI: open (no expiry)". The countdown
+        // shown here is the tray's mirror; the service enforces the real deadline.
+        private void UpdateGateStatus()
+        {
+            if (!_settings.AllowCommandLine)
+            {
+                statusGate.Text = "CLI: off";
+                statusGate.ForeColor = SystemColors.ControlText;
+                return;
+            }
+
+            string detail = "no expiry";
+            if (_cliGateExpiresUtc is { } due)
+            {
+                var left = due - DateTime.UtcNow;
+                detail = left <= TimeSpan.Zero
+                    ? "expiring"
+                    : left.TotalMinutes >= 1
+                        ? $"{(int)left.TotalMinutes}m left"
+                        : $"{(int)left.TotalSeconds}s left";
+            }
+            statusGate.Text = $"CLI: open ({detail})";
+            statusGate.ForeColor = Color.FromArgb(150, 60, 0);   // open gate is worth noticing
+        }
+
+        // Job count comes from the same tray-only verb the Active Jobs view uses, so it
+        // is only meaningful once elevated; show a dash rather than a misleading zero.
+        private async Task RefreshJobCountAsync()
+        {
+            if (_statusBarBusy || _serviceOnline != true || !NativeMethods.IsUserAnAdmin()) return;
+            _statusBarBusy = true;
+            try
+            {
+                var (ok, jobs, slots) = await _client.ListJobsAsync();
+                if (IsDisposed || !IsHandleCreated) return;
+                statusJobs.Text = !ok
+                    ? "Jobs: —"
+                    : jobs.Count == 0 ? "Jobs: 0" : $"Jobs: {jobs.Count} ({slots})";
+            }
+            catch { /* status bar is best-effort */ }
+            finally { _statusBarBusy = false; }
+        }
+
+        // Only poll while the window is on screen; a tray-only session has nobody to
+        // read the status bar.
+        private void SetStatusPolling(bool on)
+        {
+            if (on && !_statusBarTimer.Enabled)
+            {
+                _statusBarTimer.Start();
+                _ = RefreshJobCountAsync();
+            }
+            else if (!on && _statusBarTimer.Enabled)
+            {
+                _statusBarTimer.Stop();
+            }
         }
 
         // Reflects the gate lapsing: untick the session setting so the tray agrees with
@@ -499,6 +583,7 @@ namespace RunAsHelper
             if (!_settings.AllowCommandLine) return;
 
             _settings.AllowCommandLine = false;
+            UpdateGateStatus();
             AppendLog("Command line was automatically disabled (gate expired).");
             if (_settings.ShowTrayNotifications)
                 notifyIcon.ShowBalloonTip(4000, "RunAS Helper",
@@ -794,13 +879,20 @@ namespace RunAsHelper
         private void RefreshAppsList()
         {
             int sel = SelectedAppIndex();
+            string filter = txtFilter.Text.Trim();
+
             lvApps.BeginUpdate();
             lvApps.Items.Clear();
             foreach (var app in _settings.SavedApplications)
             {
+                if (!MatchesFilter(app, filter)) continue;
                 var item = new ListViewItem(app.Name) { Tag = app };
                 item.SubItems.Add(app.Location);
                 item.SubItems.Add(app.Parameter);
+                item.ImageKey    = IconKeyFor(app);
+                item.ToolTipText = string.IsNullOrEmpty(app.Parameter)
+                    ? app.Location
+                    : $"{app.Location} {app.Parameter}";
                 lvApps.Items.Add(item);
             }
             lvApps.EndUpdate();
@@ -812,6 +904,76 @@ namespace RunAsHelper
             }
             StretchAppColumns();
             UpdateAppButtonStates();
+        }
+
+        // ── List quality-of-life: filter, icons, drag-to-reorder ─────────────
+
+        private static bool MatchesFilter(SavedApplication app, string filter)
+            => filter.Length == 0
+               || app.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)
+               || app.Location.Contains(filter, StringComparison.OrdinalIgnoreCase)
+               || (app.Parameter ?? string.Empty).Contains(filter, StringComparison.OrdinalIgnoreCase);
+
+        // Extracts the target's own icon, keyed by path so each executable is only read
+        // once per session. Falls back to no icon (rather than a broken one) when the
+        // path is unreadable — a saved entry may point at something not present now.
+        private string IconKeyFor(SavedApplication app)
+        {
+            string path = app.Location?.Trim().Trim('"') ?? string.Empty;
+            if (path.Length == 0) return string.Empty;
+
+            string key = path.ToLowerInvariant();
+            if (appIcons.Images.ContainsKey(key)) return key;
+
+            try
+            {
+                if (!File.Exists(path)) return string.Empty;
+                using var icon = System.Drawing.Icon.ExtractAssociatedIcon(path);
+                if (icon is null) return string.Empty;
+                // Hand the ImageList an independent Bitmap and keep it: the list defers
+                // building its native handle until the ListView creates one, so anything
+                // disposed in the meantime blows up in ImageList.CreateHandle. (Adding the
+                // Icon itself and disposing it here did exactly that.)
+                appIcons.Images.Add(key, icon.ToBitmap());
+                return key;
+            }
+            catch { return string.Empty; }
+        }
+
+        // Reordering a filtered view is ambiguous (the row above on screen is not the
+        // row above in the saved order), so dragging is only offered on the full list.
+        private bool IsFiltered => txtFilter.Text.Trim().Length > 0;
+
+        private void LvApps_ItemDrag(object? sender, ItemDragEventArgs e)
+        {
+            if (IsFiltered || e.Item is not ListViewItem item) return;
+            lvApps.DoDragDrop(item, DragDropEffects.Move);
+        }
+
+        private void LvApps_DragOver(object? sender, DragEventArgs e)
+            => e.Effect = !IsFiltered && e.Data?.GetDataPresent(typeof(ListViewItem)) == true
+                ? DragDropEffects.Move
+                : DragDropEffects.None;
+
+        private void LvApps_DragDrop(object? sender, DragEventArgs e)
+        {
+            if (IsFiltered || e.Data?.GetData(typeof(ListViewItem)) is not ListViewItem dragged) return;
+
+            var target = lvApps.HitTest(lvApps.PointToClient(new Point(e.X, e.Y))).Item;
+            int from = dragged.Index;
+            // Dropping past the last row parks the entry at the end.
+            int to   = target?.Index ?? lvApps.Items.Count - 1;
+            if (from == to || from < 0 || to < 0) return;
+
+            _settings.MoveSavedApp(from, to);
+            _settings.Save();
+            RefreshAppsList();
+            RebuildSavedAppsMenu();
+            if (to < lvApps.Items.Count)
+            {
+                lvApps.Items[to].Selected = true;
+                lvApps.Items[to].EnsureVisible();
+            }
         }
 
         // Stretch the "File Location" column to fill the list's free width.
@@ -830,8 +992,10 @@ namespace RunAsHelper
             btnRunSaved.Enabled  = has;
             btnEditApp.Enabled   = has;
             btnRemoveApp.Enabled = has;
-            btnUpApp.Enabled     = has && idx > 0;
-            btnDownApp.Enabled   = has && idx < lvApps.Items.Count - 1;
+            // While filtered, a row's position on screen is not its position in the
+            // saved order, so reordering by index would move the wrong entry.
+            btnUpApp.Enabled     = has && !IsFiltered && idx > 0;
+            btnDownApp.Enabled   = has && !IsFiltered && idx < lvApps.Items.Count - 1;
         }
 
         private SavedApplication? SelectedApp()
@@ -893,6 +1057,7 @@ namespace RunAsHelper
 
         private void MoveSelectedApp(int delta)
         {
+            if (IsFiltered) return;   // see UpdateAppButtonStates
             int idx = SelectedAppIndex();
             if (idx < 0) return;
             int newIdx = idx + delta;

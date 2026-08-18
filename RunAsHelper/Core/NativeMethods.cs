@@ -59,6 +59,90 @@ namespace RunAsHelper.Core
             string? lpPath, string lpFileName, string? lpExtension,
             uint nBufferLength, char* lpBuffer, IntPtr lpFilePart);
 
+        // ── Document associations ────────────────────────────────────────
+        //
+        // File associations are PER-USER: the default app lives under the user's hive
+        // (FileExts\<ext>\UserChoice). The service runs as SYSTEM, which has no such
+        // choice, so resolving there yields the OpenWith.exe "how do you want to open
+        // this?" fallback instead of the real handler. Resolution therefore happens
+        // here, in the client, which runs as the actual user.
+        internal const uint ASSOCF_NONE         = 0;
+        internal const uint ASSOCSTR_COMMAND    = 1;
+        internal const uint ASSOCSTR_EXECUTABLE = 2;
+
+        [LibraryImport("shlwapi.dll", EntryPoint = "AssocQueryStringW", StringMarshalling = StringMarshalling.Utf16)]
+        internal static unsafe partial int AssocQueryStringW(
+            uint     flags,
+            uint     str,
+            string   pszAssoc,
+            string?  pszExtra,
+            char*    pszOut,
+            ref uint pcchOut);
+
+        /// <summary>
+        /// The command that opens <paramref name="path"/> with its registered handler, or
+        /// null when the file type has no usable handler. Returns null for the OpenWith
+        /// picker too: launching that elevated would just show a chooser dialog running as
+        /// SYSTEM, which is worse than reporting that nothing is registered.
+        /// </summary>
+        internal static unsafe string? ResolveDocumentCommand(string path)
+        {
+            string ext = Path.GetExtension(path);
+            if (string.IsNullOrEmpty(ext)) return null;
+
+            string? command = AssocQuery(ASSOCSTR_COMMAND, ext);
+            if (!string.IsNullOrWhiteSpace(command) && !IsOpenWithPicker(command!))
+                return SubstituteShellArgs(command!, path);
+
+            string? exe = AssocQuery(ASSOCSTR_EXECUTABLE, ext);
+            if (!string.IsNullOrWhiteSpace(exe) && !IsOpenWithPicker(exe!))
+                return $"\"{exe}\" \"{path}\"";
+
+            return null;
+        }
+
+        private static bool IsOpenWithPicker(string command)
+            => command.Contains("OpenWith.exe", StringComparison.OrdinalIgnoreCase);
+
+        private static unsafe string? AssocQuery(uint what, string ext)
+        {
+            uint len = 0;
+            if (AssocQueryStringW(ASSOCF_NONE, what, ext, null, null, ref len) < 0 || len == 0 || len > 4096)
+                return null;
+
+            char* buf = stackalloc char[(int)len];
+            if (AssocQueryStringW(ASSOCF_NONE, what, ext, null, buf, ref len) != 0)
+                return null;
+
+            string s = new string(buf).TrimEnd('\0').Trim();
+            return s.Length == 0 ? null : s;
+        }
+
+        // Fills in a registered command's parameters: %1/%L become the file; the other
+        // shell placeholders are dropped rather than passed through literally.
+        private static string SubstituteShellArgs(string command, string path)
+        {
+            string quoted = $"\"{path}\"";
+            bool substituted = false;
+
+            foreach (string token in new[] { "\"%1\"", "\"%L\"", "\"%l\"", "%1", "%L", "%l" })
+            {
+                if (command.Contains(token, StringComparison.Ordinal))
+                {
+                    command = command.Replace(token, quoted, StringComparison.Ordinal);
+                    substituted = true;
+                    break;
+                }
+            }
+
+            foreach (string extra in new[] { "%*", "%2", "%3", "%4", "%5", "%6", "%7", "%8", "%9",
+                                             "\"%I\"", "%I", "\"%i\"", "%i", "%D", "%d", "%W", "%w", "%v", "%V" })
+                command = command.Replace(extra, string.Empty, StringComparison.Ordinal);
+
+            command = command.Trim();
+            return substituted ? command : $"{command} {quoted}";
+        }
+
         /// <summary>
         /// Resolves a file location the way a launch would find it: rooted/relative
         /// paths via existence, bare names via the PATH search order. Returns the

@@ -45,7 +45,8 @@ namespace RunAsHelper
             // for the CLI toggle, so this works from the installed exe when elevated.
             if (args.Length >= 1 &&
                 (args[0].Equals("/jobs", StringComparison.OrdinalIgnoreCase) ||
-                 args[0].StartsWith("/kill:", StringComparison.OrdinalIgnoreCase)))
+                 args[0].StartsWith("/kill:", StringComparison.OrdinalIgnoreCase) ||
+                 args[0].StartsWith("/joblog:", StringComparison.OrdinalIgnoreCase)))
             {
                 ShowConsole();
                 RunJobsCommand(args[0]);
@@ -152,6 +153,21 @@ namespace RunAsHelper
         {
             var client = new PipeClient();
             client.LogMessage += msg => Console.WriteLine(msg);
+
+            if (arg.StartsWith("/joblog:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!int.TryParse(arg[8..], out int logId))
+                {
+                    Console.Error.WriteLine("Usage: RunAsHelper.exe /joblog:<job id>   (see /jobs)");
+                    Environment.Exit(1);
+                    return;
+                }
+                var lines = client.JobOutputAsync(logId).GetAwaiter().GetResult();
+                foreach (string line in lines) Console.WriteLine(line);
+                if (lines.Count == 0) Console.WriteLine("(no output captured yet)");
+                Environment.Exit(0);
+                return;
+            }
 
             if (arg.StartsWith("/kill:", StringComparison.OrdinalIgnoreCase))
             {
