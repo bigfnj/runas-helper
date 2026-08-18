@@ -343,6 +343,15 @@ reinstall in place (handy during development).
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
 
+## What's new in 1.9.1
+
+- **Dark mode readability fixes.** 1.9.0's dark palette left the saved-apps list unreadable:
+  comctl32 draws ListView grid lines in a fixed light colour and keeps painting column
+  headers light no matter what, so the list came out as white headers over a harsh white
+  grid. Grid lines are now off in dark mode and the headers are owner-drawn. The palette
+  also moved to the same values the sibling desktopPet project uses, and inputs, spin
+  buttons, combo dropdowns and edit borders all follow properly now.
+
 ## What's new in 1.9.0
 
 - **Dark mode, following Windows by default.** *Settings → Theme* offers **Follow system**
