@@ -81,8 +81,15 @@ namespace RunAsHelper
             bool startTray = args.Length == 1 &&
                 args[0].Equals("--tray", StringComparison.OrdinalIgnoreCase);
 
+            // Installer hand-off: the MSI's "Launch RunAS Helper now" action starts us
+            // with this flag once, right after installing. It is the ONLY thing that
+            // triggers the post-install validation popup — an ordinary launch, the
+            // --activate hand-off and the login --tray start never do. Not a CLI launch.
+            bool postInstall = args.Length == 1 &&
+                args[0].Equals("--postinstall", StringComparison.OrdinalIgnoreCase);
+
             // CLI mode: RunAsHelper.exe [/p:N] [/as:account] <path> [args]
-            if (args.Length > 0 && !activateHandoff && !startTray)
+            if (args.Length > 0 && !activateHandoff && !startTray && !postInstall)
             {
                 RunCli(args);
                 return;
@@ -106,7 +113,7 @@ namespace RunAsHelper
                 }
             }
 
-            Application.Run(new MainForm(startHidden: startTray));
+            Application.Run(new MainForm(startHidden: startTray, postInstall: postInstall));
         }
 
         // Maps the saved Theme preference onto WinForms' color mode. Best-effort: theming

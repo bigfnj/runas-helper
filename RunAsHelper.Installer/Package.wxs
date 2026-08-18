@@ -159,15 +159,20 @@
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch RunAS Helper now" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
 
-    <!-- WixShellExec runs as the (impersonated) installing user, so the tray app
-         appears on that user's desktop. -->
-    <Property Id="WixShellExecTarget" Value="[#ClientExe]" />
+    <!-- Launch the tray as the (impersonated) installing user, so it appears on that
+         user's desktop, passing the postinstall switch (see ExeCommand below). That
+         switch is what triggers the one-time Installation Check popup: the tray shows
+         it ONLY when the installer started it this way, never on an ordinary open, the
+         elevation hand-off, or the login tray start. This is an exe custom action rather
+         than util's WixShellExec because WixShellExec ShellExecutes WixShellExecTarget
+         as a bare file and offers no way to pass arguments. Return is asyncNoWait so a
+         launch failure can never fail the install. -->
     <CustomAction Id="LaunchApplication"
-                  BinaryRef="Wix4UtilCA_X64"
-                  DllEntry="WixShellExec"
+                  FileRef="ClientExe"
+                  ExeCommand="--postinstall"
                   Execute="immediate"
                   Impersonate="yes"
-                  Return="check" />
+                  Return="asyncNoWait" />
 
     <!-- ── Optional: trust the self-signed code-signing certificate ─────────
       OFF by default. INSTALLCERT is left UNSET so the CertDlg checkbox renders

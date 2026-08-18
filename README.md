@@ -343,6 +343,20 @@ reinstall in place (handy during development).
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
 
+## What's new in 2.0.4
+
+- **The Installation Check popup is now install-time only.** 2.0.3 stopped it recurring on
+  an ordinary window open, but it still ran on the first launch that *could* validate —
+  which on this kind of machine means the first **Activate**, so it still appeared out of
+  nowhere. It is now triggered by exactly one thing: the installer launching the tray with
+  `--postinstall`. An ordinary open, the `--activate` elevation hand-off and the login
+  `--tray` start never show it, and the marker is consumed either way so it cannot come
+  back for that install. If the installer's launch is not elevated the popup is skipped
+  entirely rather than deferred — without tray-control rights its two token checks fail
+  with *"Command line is disabled"*, which is an alarming wall of red that says nothing
+  about the install.
+- Use *Tools → Validate Installation* whenever you want to re-check on purpose.
+
 ## What's new in 2.0.3
 
 - **The Installation Check popup no longer reappears on every launch.** It is meant to be a
