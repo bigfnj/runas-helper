@@ -59,6 +59,21 @@ namespace RunAsHelper.Core
             string? lpPath, string lpFileName, string? lpExtension,
             uint nBufferLength, char* lpBuffer, IntPtr lpFilePart);
 
+        // ── Theming ──────────────────────────────────────────────────────
+        // Dark title bar (Win10 1809+/Win11). 20 is the documented attribute on
+        // current builds; 19 was the pre-20H1 value, so both are attempted.
+        internal const int DWMWA_USE_IMMERSIVE_DARK_MODE            = 20;
+        internal const int DWMWA_USE_IMMERSIVE_DARK_MODE_PRE_20H1   = 19;
+
+        [LibraryImport("dwmapi.dll")]
+        internal static partial int DwmSetWindowAttribute(
+            IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        // Switches a control's visual style to the dark variant, which is what makes
+        // ListView headers and scrollbars follow the theme instead of staying light.
+        [LibraryImport("uxtheme.dll", EntryPoint = "SetWindowTheme", StringMarshalling = StringMarshalling.Utf16)]
+        internal static partial int SetWindowTheme(IntPtr hwnd, string? subAppName, string? subIdList);
+
         // ── Document associations ────────────────────────────────────────
         //
         // File associations are PER-USER: the default app lives under the user's hive

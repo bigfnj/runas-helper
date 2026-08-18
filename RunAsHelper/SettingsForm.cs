@@ -147,4 +147,10 @@ internal sealed class SettingsForm : Form
         _settings.MaxMruEntries         = (int)_nudMaxMru.Value;
         _settings.Save();
     }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Theme.Apply(this);   // match whatever palette the app is using
+    }
 }

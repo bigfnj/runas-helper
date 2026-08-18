@@ -119,6 +119,9 @@ difference is the TrustedInstaller group membership.
 `HKCU\…\Run` entry that opens the tray icon at login (window stays closed until
 you click it). There is **no scheduled task**.
 
+**Theme.** *Settings → Theme* selects **Follow system** (default), Light, or Dark. While
+following the system it repaints live when Windows switches.
+
 Settings are stored in `%AppData%\RunAsHelper\settings.json`.
 
 ### Command line
@@ -339,6 +342,14 @@ reinstall in place (handy during development).
 - **`/capture` without `/timeout` warning** — the service now emits a `[warning]`
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
+
+## What's new in 1.9.0
+
+- **Dark mode, following Windows by default.** *Settings → Theme* offers **Follow system**
+  (the default), Light, or Dark. Following the system tracks it live: flip Windows between
+  light and dark and the app repaints without a restart. The title bar is themed too, and
+  the saved-apps list gets dark headers and scrollbars rather than light ones stranded on a
+  dark window.
 
 ## What's new in 1.8.0
 

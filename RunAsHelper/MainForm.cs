@@ -61,6 +61,7 @@ namespace RunAsHelper
             // the tray icons (grey + colour) from this.Icon. Without this the form
             // falls back to the default WinForms icon.
             if (LoadAppIcon() is { } appIcon) Icon = appIcon;
+            Theme.Mode = (ThemeMode)Math.Clamp(_settings.Theme, 0, 2);
             WireEvents();
             SetTrayIcon();
             RebuildSavedAppsMenu();
@@ -184,6 +185,37 @@ namespace RunAsHelper
         }
 
         // ── Form lifecycle ───────────────────────────────────────────────────
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            ApplyTheme();
+        }
+
+        // Windows broadcasts WM_SETTINGCHANGE with "ImmersiveColorSet" when the user
+        // flips light/dark. Only meaningful while following the system.
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_SETTINGCHANGE = 0x001A;
+            base.WndProc(ref m);
+            if (m.Msg == WM_SETTINGCHANGE && Theme.Mode == ThemeMode.System &&
+                m.LParam != IntPtr.Zero &&
+                System.Runtime.InteropServices.Marshal.PtrToStringUni(m.LParam) == "ImmersiveColorSet")
+            {
+                ApplyTheme();
+            }
+        }
+
+        /// <summary>Repaints this window (and the tray menu) in the current palette.</summary>
+        internal void ApplyTheme()
+        {
+            Theme.Apply(this);
+            Theme.Apply2(trayMenu);
+            // Status colours are palette-dependent, so restate them after a switch.
+            UpdateGateStatus();
+            if (_serviceOnline is bool online)
+                statusService.ForeColor = online ? Theme.Fore : Theme.Danger;
+        }
 
         protected override void OnLoad(EventArgs e)
         {
@@ -344,7 +376,7 @@ namespace RunAsHelper
             menuStartService.Visible = !available;
 
             statusService.Text = available ? "Service: running" : "Service: not running";
-            statusService.ForeColor = available ? SystemColors.ControlText : Color.FromArgb(170, 0, 0);
+            statusService.ForeColor = available ? Theme.Fore : Theme.Danger;
             if (!available) statusJobs.Text = "Jobs: —";
 
             if (available)
@@ -494,6 +526,8 @@ namespace RunAsHelper
             {
                 PushCliAllowed();
                 ApplyStartupRegistration();
+                Theme.Mode = (ThemeMode)Math.Clamp(_settings.Theme, 0, 2);
+                ApplyTheme();
             }
         }
 
@@ -522,7 +556,7 @@ namespace RunAsHelper
             if (!_settings.AllowCommandLine)
             {
                 statusGate.Text = "CLI: off";
-                statusGate.ForeColor = SystemColors.ControlText;
+                statusGate.ForeColor = Theme.Fore;
                 return;
             }
 
@@ -537,7 +571,7 @@ namespace RunAsHelper
                         : $"{(int)left.TotalSeconds}s left";
             }
             statusGate.Text = $"CLI: open ({detail})";
-            statusGate.ForeColor = Color.FromArgb(150, 60, 0);   // open gate is worth noticing
+            statusGate.ForeColor = Theme.Warn;   // an open gate is worth noticing
         }
 
         // Job count comes from the same tray-only verb the Active Jobs view uses, so it

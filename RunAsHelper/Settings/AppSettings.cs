@@ -81,6 +81,10 @@ namespace RunAsHelper.Settings
         [JsonIgnore]
         public bool AllowCommandLine { get; set; }
 
+        // Colour theme: 0 = follow Windows, 1 = light, 2 = dark. Defaults to following
+        // the system so the app matches the desktop without anyone configuring it.
+        public int Theme { get; set; } = 0;
+
         // How long an opened CLI gate stays open before the service auto-closes it.
         // Persisted (it is a preference, not the gate itself). 0 = no expiry.
         public int CliGateMinutes { get; set; } = 30;
