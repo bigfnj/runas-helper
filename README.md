@@ -327,6 +327,15 @@ reinstall in place (handy during development).
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
 
+## What's new in 1.6.4
+
+- **`/timeout` now really does release you.** Previously the ceiling fired and the output
+  stream closed, but the caller stayed blocked until the child exited anyway — and the
+  launch slot stayed occupied with it, so the documented way to guard against a stuck
+  `/capture` job did not actually bound how long that job tied up the service. Capture now
+  runs over an asynchronous pipe, so a pending read is cancelled at the ceiling: the caller
+  returns immediately, the slot is freed, and the child keeps running as documented.
+
 ## What's new in 1.6.1
 
 - **Crash diagnostics** — the app now installs process-wide exception handlers

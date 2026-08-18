@@ -1,5 +1,8 @@
 using System;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Threading;
 
 namespace RunAsHelper.Service.Core;
@@ -726,31 +729,18 @@ internal sealed class ElevationLauncher
         if (workDir is not null) log?.Invoke($"Working directory: {workDir}");
         log?.Invoke($"Window state (SW_*): {showWindow}");
 
-        // Set up anonymous pipes for stdout/stderr when capture is requested.
+        // Set up the stdout/stderr capture pipe when capture is requested.
         // The write end (hWritePipe) is inheritable and passed to the child via
-        // STARTUPINFOEX; the read end (hReadPipe) stays in the service.
+        // STARTUPINFOEX; the read end stays in the service as an async-capable stream.
         // PROC_THREAD_ATTRIBUTE_HANDLE_LIST restricts inheritance to only hWritePipe
         // so no other service handles leak into the elevated child process.
-        IntPtr hReadPipe  = IntPtr.Zero;
+        NamedPipeServerStream? captureServer = null;
         IntPtr hWritePipe = IntPtr.Zero;
 
         if (captureOutput)
         {
-            var sa = new NativeMethods.SECURITY_ATTRIBUTES
-            {
-                nLength = (uint)sizeof(NativeMethods.SECURITY_ATTRIBUTES),
-                bInheritHandle = 1  // write end must be inheritable
-            };
-            if (!NativeMethods.CreatePipe(out hReadPipe, out hWritePipe, &sa, 0))
-            {
-                log?.Invoke($"CreatePipe failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())} — falling back to fire-and-forget.");
+            if (!TryCreateCapturePipe(out captureServer, out hWritePipe, log))
                 captureOutput = false;
-            }
-            else
-            {
-                // Clear the inherit flag on the read end; we don't want the child to hold it.
-                NativeMethods.SetHandleInformation(hReadPipe, NativeMethods.HANDLE_FLAG_INHERIT, 0);
-            }
         }
 
         fixed (char* pDesktop = "WinSta0\\Default")
@@ -870,26 +860,24 @@ internal sealed class ElevationLauncher
             {
                 log?.Invoke($"CreateProcessAsUser failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 if (hWritePipe != IntPtr.Zero) NativeMethods.CloseHandle(hWritePipe);
-                if (hReadPipe  != IntPtr.Zero) NativeMethods.CloseHandle(hReadPipe);
+                captureServer?.Dispose();
                 return (0, IntPtr.Zero, null);
             }
 
             NativeMethods.CloseHandle(pi.hThread);
 
-            if (captureOutput && hReadPipe != IntPtr.Zero)
+            if (captureOutput && captureServer is not null)
             {
                 // Service's copy of the write end is no longer needed — the child
                 // holds its own inherited copy. Closing ours here ensures the pipe
                 // reaches EOF when the child exits (not when the service decides to).
                 NativeMethods.CloseHandle(hWritePipe);
 
-                // Wrap the read end in a FileStream. Anonymous pipes from CreatePipe are
-                // synchronous (no FILE_FLAG_OVERLAPPED), so isAsync must be false.
-                // StreamReader.ReadLineAsync on a sync stream works fine from Task.Run.
-                var safeHandle = new Microsoft.Win32.SafeHandles.SafeFileHandle(hReadPipe, ownsHandle: true);
-                var stream = new System.IO.FileStream(safeHandle, System.IO.FileAccess.Read, bufferSize: 4096, isAsync: false);
+                // The read end is an asynchronous named-pipe stream, so the caller can
+                // cancel a pending read (that is what makes /timeout able to release the
+                // caller and its launch slot while the child keeps running).
                 log?.Invoke($"Process created: PID={pi.dwProcessId} session={sessionId} desktop=WinSta0\\Default (capture mode).");
-                return (pi.dwProcessId, pi.hProcess, stream);
+                return (pi.dwProcessId, pi.hProcess, captureServer);
             }
 
             NativeMethods.CloseHandle(pi.hProcess);
@@ -899,6 +887,93 @@ internal sealed class ElevationLauncher
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates the stdout/stderr capture pipe: an async-capable read end kept by the
+    /// service, and an inheritable write end handed to the child.
+    /// </summary>
+    /// <remarks>
+    /// This deliberately does <b>not</b> use <c>CreatePipe</c>. Anonymous pipes cannot be
+    /// opened for overlapped I/O, so every read on them is a blocking <c>ReadFile</c> that
+    /// neither cancellation nor <c>Dispose</c> can interrupt — it only returns at EOF, i.e.
+    /// when the child finally exits. That made <c>/timeout:N</c> ineffective: the ceiling
+    /// fired and the stream was closed, but the caller (and its launch slot) stayed blocked
+    /// for the child's full lifetime. A uniquely-named pipe can be created with
+    /// <see cref="PipeOptions.Asynchronous"/>, so reads are genuinely cancellable.
+    ///
+    /// Security: the child never opens this pipe by name — it receives the write end as an
+    /// inherited handle (restricted via PROC_THREAD_ATTRIBUTE_HANDLE_LIST), so the DACL only
+    /// has to admit this service. It grants LocalSystem alone, and the name carries a fresh
+    /// GUID, so another local process cannot reach the pipe or race us to it.
+    /// </remarks>
+    private unsafe bool TryCreateCapturePipe(
+        out NamedPipeServerStream? server, out IntPtr hWrite, Action<string>? log)
+    {
+        server = null;
+        hWrite = IntPtr.Zero;
+        string name = $"RunAsHelper-capture-{Guid.NewGuid():N}";
+
+        try
+        {
+            var security = new PipeSecurity();
+            security.AddAccessRule(new PipeAccessRule(
+                new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                PipeAccessRights.FullControl,
+                AccessControlType.Allow));
+
+            server = NamedPipeServerStreamAcl.Create(
+                name, PipeDirection.In, maxNumberOfServerInstances: 1,
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous,
+                inBufferSize: 4096, outBufferSize: 4096, security);
+
+            // Start listening before opening the write end, so the connection is
+            // established by our own CreateFileW below (no already-connected race).
+            var connect = server.WaitForConnectionAsync();
+
+            var sa = new NativeMethods.SECURITY_ATTRIBUTES
+            {
+                nLength        = (uint)sizeof(NativeMethods.SECURITY_ATTRIBUTES),
+                bInheritHandle = 1  // the child inherits this write end
+            };
+            hWrite = NativeMethods.CreateFileW(
+                $@"\\.\pipe\{name}",
+                NativeMethods.GENERIC_WRITE,
+                0,                                  // no sharing
+                &sa,
+                NativeMethods.OPEN_EXISTING,
+                NativeMethods.FILE_ATTRIBUTE_NORMAL, // synchronous: the child writes normally
+                IntPtr.Zero);
+
+            if (hWrite == NativeMethods.INVALID_HANDLE_VALUE)
+            {
+                hWrite = IntPtr.Zero;
+                log?.Invoke($"Capture pipe: opening the write end failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())} — falling back to fire-and-forget.");
+                server.Dispose();
+                server = null;
+                return false;
+            }
+
+            if (!connect.Wait(5_000))
+            {
+                log?.Invoke("Capture pipe: the write end did not connect within 5s — falling back to fire-and-forget.");
+                NativeMethods.CloseHandle(hWrite);
+                hWrite = IntPtr.Zero;
+                server.Dispose();
+                server = null;
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            log?.Invoke($"Capture pipe setup failed ({ex.GetType().Name}: {ex.Message}) — falling back to fire-and-forget.");
+            if (hWrite != IntPtr.Zero) { NativeMethods.CloseHandle(hWrite); hWrite = IntPtr.Zero; }
+            server?.Dispose();
+            server = null;
+            return false;
+        }
+    }
 
     private unsafe uint FindProcessByName(string name)
     {
