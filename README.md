@@ -343,6 +343,21 @@ reinstall in place (handy during development).
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
 
+## What's new in 2.0.0
+
+Feature-complete. 2.0.0 marks the end of the 1.6.x–1.9.x arc rather than adding anything
+new: the corporate-hardening backlog was reviewed and closed (see *Project status*), and
+the docs now describe what the tool actually does. Everything delivered along the way:
+
+- **`/timeout` really releases you** (1.6.4) — the ceiling used to fire while the caller,
+  and its launch slot, stayed blocked until the child exited anyway.
+- **Active Jobs** (1.7.0) — see what is holding a launch slot, and kill a stuck job; also
+  `/jobs` and `/kill:<id>`.
+- **CLI gate auto-expiry** (1.7.1) — an allowance you forget about now closes itself.
+- **Documents and `.reg`** (1.8.0) — open a TrustedInstaller-owned file in your normal
+  editor; plus the status bar, captured job output, and the saved-list quality-of-life set.
+- **Dark mode** (1.9.x) — following Windows by default.
+
 ## What's new in 1.9.2
 
 - **Dark mode now uses WinForms' own colour mode** (`Application.SetColorMode`, .NET 9+).
