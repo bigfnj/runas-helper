@@ -20,6 +20,17 @@ namespace RunAsHelper
             // recorded to %AppData%\RunAsHelper\crash.log first.
             CrashLogger.Install();
 
+            // WinForms' own initialisation has to come first, before *anything* that can
+            // create a window: SetCompatibleTextRenderingDefault (inside Initialize) throws
+            // once any IWin32Window exists. ApplyStartupColorMode below is one such thing —
+            // Application.SetColorMode creates a window handle when another instance of the
+            // app is already running — which crashed the elevated "Activate" hand-off every
+            // time, since that instance starts while its predecessor is still alive.
+            // Initialize() itself creates no window, so the color mode set straight after it
+            // still lands before the first form. (Deliberately unconditional: the CLI paths
+            // below only set flags, they never touch a form.)
+            ApplicationConfiguration.Initialize();
+
             // Turn on WinForms' own dark mode before any window exists. This is what makes
             // the *native* chrome follow the theme — scrollbars, combo drop-down buttons,
             // menu dropdowns, disabled text — none of which can be reached by setting
@@ -34,7 +45,6 @@ namespace RunAsHelper
                 (args[0].Equals("--revalidate", StringComparison.OrdinalIgnoreCase) ||
                  args[0].Equals("/validate", StringComparison.OrdinalIgnoreCase)))
             {
-                ApplicationConfiguration.Initialize();
                 Application.Run(new ValidationForm(standalone: true));
                 return;
             }
@@ -96,7 +106,6 @@ namespace RunAsHelper
                 }
             }
 
-            ApplicationConfiguration.Initialize();
             Application.Run(new MainForm(startHidden: startTray));
         }
 
