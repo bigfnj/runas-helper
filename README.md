@@ -343,6 +343,16 @@ reinstall in place (handy during development).
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
 
+## What's new in 2.0.1
+
+- **Help text brought up to date.** `--help` and *Tools → How to Use* had drifted: they
+  never mentioned Active Jobs, the status bar, the saved-list icons/drag/filter, or the
+  theme, and the examples predated `.reg`/document launching and `/jobs`, `/joblog`,
+  `/kill`. Added a **Scripting / automation** section as well, covering the two things that
+  actually trip callers driving this from a script: it is a GUI-subsystem binary, so
+  PowerShell's `&` neither waits for it nor captures its output; and an elevated call from
+  the *installed* exe counts as the tray, so it bypasses the CLI gate entirely.
+
 ## What's new in 2.0.0
 
 Feature-complete. 2.0.0 marks the end of the 1.6.x–1.9.x arc rather than adding anything
