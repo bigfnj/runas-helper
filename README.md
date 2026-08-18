@@ -41,7 +41,7 @@ The named pipe ACL grants access to BUILTIN\Administrators, SYSTEM, and the inte
 
 The service enforces identity server-side, not via the client-supplied `Source` field:
 
-- **Tray control** (`setcli`, saving settings, validation): requires the client to be both the installed `RunAsHelper.exe` — identified by image path (the binary sitting next to the service), so unsigned local/CI builds still work — **and** running with an elevated token. Neither condition alone is sufficient. A caller's Authenticode signature is recorded for diagnostics; pinning it to a specific publisher is optional future hardening (see *Planned features*).
+- **Tray control** (`setcli`, saving settings, validation): requires the client to be both the installed `RunAsHelper.exe` — identified by image path (the binary sitting next to the service), so unsigned local/CI builds still work — **and** running with an elevated token. Neither condition alone is sufficient. A caller's Authenticode signature is recorded for diagnostics; pinning it to a specific publisher was considered and closed (see *Project status*).
 - **CLI gate** (any other process): when the elevated tray opens the gate, **any** process that can reach the pipe gets elevated to TrustedInstaller — the pipe ACL is the boundary. The gate resets whenever the owning tray exits or crashes, and it **auto-closes after a configurable ceiling** (default 30 minutes) so an allowance cannot be left open indefinitely.
 - **Job control** (`jobs`, `killjob`): same requirement as tray control — the installed, elevated tray. Deliberately *not* reachable through an open CLI gate: being allowed to launch must not imply the right to enumerate or terminate other elevated jobs.
 
@@ -468,37 +468,32 @@ reinstall in place (handy during development).
 
 ## What's new in 1.4.1–1.4.2
 
-- **Install-path tray identity** (1.4.1) — the service identifies the tray by image path (the installed `RunAsHelper.exe` next to the service) instead of an Authenticode signature, so unsigned local/CI builds work again. A signature, when present, is recorded as diagnostics only (publisher pinning is tracked under *Planned features*).
+- **Install-path tray identity** (1.4.1) — the service identifies the tray by image path (the installed `RunAsHelper.exe` next to the service) instead of an Authenticode signature, so unsigned local/CI builds work again. A signature, when present, is recorded as diagnostics only (publisher pinning was later closed — see *Project status*).
 - **Launch-target PATH resolution** (1.4.2) — targets with arguments that live outside `System32` (e.g. `powershell.exe`) now resolve via PATH and launch correctly. Previously only `System32`-resident targets like `cmd.exe` worked once arguments were present.
 - **Git-tag auto-versioning** — a plain local `dotnet build` now stamps the current git tag (e.g. `1.4.2`) into the binaries and MSI instead of `1.0.0.0`, so a locally built MSI can upgrade an installed release.
 
 ## What's new in 1.4.0
 
 - **Window foreground fix** — launched processes now reliably appear in the foreground instead of opening behind existing windows. The service sends the new process's PID to the tray, which calls `AllowSetForegroundWindow` before acknowledging the launch.
-- **Install-path pipe gating** — the service identifies the tray by image path: the connecting binary must be `RunAsHelper.exe` installed alongside the service. (1.4.0 briefly required an Authenticode *signature* here; 1.4.1 replaced that so unsigned local/CI builds work — a signature, when present, is now optional diagnostics, with publisher pinning tracked under *Planned features*.) A renamed or relocated copy is rejected.
+- **Install-path pipe gating** — the service identifies the tray by image path: the connecting binary must be `RunAsHelper.exe` installed alongside the service. (1.4.0 briefly required an Authenticode *signature* here; 1.4.1 replaced that so unsigned local/CI builds work — a signature, when present, is now optional diagnostics, with publisher pinning later closed — see *Project status*.) A renamed or relocated copy is rejected.
 - **Structured Windows Event Log** — events 1001 (request received), 1002 (launched), 1003 (denied), 1004 (token failure), 1005 (service start/stop), and 1006 (job terminated by operator) are written to the Application log under the `RunAsHelper` source. Registered by the installer at install time.
 - **Binary versioning** — `FileVersion` and `AssemblyVersion` in both EXEs are now stamped from the release tag (was always `1.0.0.0`). Enterprise software-inventory tools will see the correct version.
 - **Code cleanup** — removed dead VB6 and twinBASIC legacy sources that were carried in the repo since the original port.
 
-## Planned features
+## Project status
 
-Not done yet — tracked for future work:
+**Feature-complete.** The corporate-hardening backlog was reviewed and closed on
+2026-08-18 — see [`PLAN.md`](PLAN.md) for the per-item reasoning. In short: publisher
+pinning is blocked on a purchased certificate (pinning the self-signed one would break
+unsigned official builds), AD-group pipe ACLs only pay off on a domain-joined machine,
+and a per-launch justification field earns its keep only when someone *other* than the
+operator reads the audit trail — events 1001–1006 already record who launched what,
+when, and from which source.
 
-- **Non-executable launch, round 2** — `.reg` files (via `regedit /s`) and
-  arbitrary documents (via shell association), beyond the current host-mapped
-  set (`.msc`/`.cpl`/`.bat`/`.ps1`).
-- **Per-app icons** in the saved-applications list (extract the target's icon).
-- **List quality-of-life** — drag-to-reorder, and a search/filter box for long
-  lists.
-- **Silent-install auto-start** — register the per-user login entry for
-  unattended (`/passive`, `/qn`) deployments, where there's no Finish dialog to
-  trigger the first run.
-- **Publisher pinning** — signing now exists (opt-in, self-signed *Serenity
-  Software*; see *Signed build*), but the pipe gate still identifies the tray by
-  image path only. Remaining work: a trusted/purchased cert for public
-  distribution, and wiring the pipe check to additionally require a valid
-  signature from a pinned publisher (the service already records whether a caller
-  is signed; today that is diagnostics only).
+One known issue is open and has no action available: a single unexplained
+`0xe0434352` crash from before v1.6.1, which has not recurred. Every build since ships a
+crash logger that writes the full stack to `%AppData%\RunAsHelper\crash.log` (and Event
+ID 1099), so it will identify itself if it ever comes back.
 
 ## License
 
