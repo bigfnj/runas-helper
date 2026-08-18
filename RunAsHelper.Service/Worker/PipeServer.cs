@@ -1,9 +1,11 @@
 using System;
 using System.IO;
 using System.IO.Pipes;
+using System.Linq;
 using System.Security.AccessControl;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -22,7 +24,8 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     // prevents runaway resource use while allowing multiple concurrent callers.
     // A 30-second wait timeout prevents new requests from queuing behind a stuck
     // job indefinitely — callers get a "service busy" error and can retry.
-    private readonly SemaphoreSlim _launchGate = new(10, 10);
+    private const int MaxConcurrentLaunches = 10;
+    private readonly SemaphoreSlim _launchGate = new(MaxConcurrentLaunches, MaxConcurrentLaunches);
 
     // Whether CLI-sourced launches are permitted. Defaults OFF and is controlled
     // by the (installed, elevated) tray via the "setcli" verb; the tray resets it
@@ -33,6 +36,44 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     // PID of the tray that enabled the gate. The gate is lazily revoked if that
     // tray is no longer alive (e.g. it crashed without sending "setcli off").
     private volatile uint _allowCliOwnerPid;
+
+    // In-flight launches, keyed by a monotonic job id, so the tray can show what is
+    // currently holding a launch slot and terminate a job that is stuck. A launch is
+    // registered once it holds a slot and removed in the same finally that releases
+    // it, so this set always mirrors slot occupancy.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, TrackedJob> _jobs = new();
+    private int _nextJobId;
+
+    // A tracked launch. hProcess is only retained for capture jobs (a fire-and-forget
+    // launch closes its handle immediately and finishes right away), so Kill applies
+    // to exactly the jobs that can actually get stuck.
+    private sealed class TrackedJob
+    {
+        public required JobInfo Info { get; init; }
+        public volatile uint LivePid;
+    }
+
+    /// <summary>Snapshot of in-flight launches, plus how many slots are in use.</summary>
+    private (JobInfo[] Jobs, int InUse) SnapshotJobs()
+    {
+        var jobs = _jobs.Values
+            .Select(j => j.Info with { Pid = j.LivePid })
+            .OrderBy(j => j.Id)
+            .ToArray();
+        return (jobs, jobs.Length);
+    }
+
+    // Terminates a launched child by PID. The service runs as LocalSystem, so it can
+    // open a TrustedInstaller/SYSTEM child. Opening by PID (rather than caching the
+    // handle) keeps this working for every tracked job, and the open itself fails
+    // harmlessly if the process has already exited.
+    private bool TerminateByPid(uint pid)
+    {
+        IntPtr hProc = NativeMethods.OpenProcess(NativeMethods.PROCESS_TERMINATE, false, pid);
+        if (hProc == IntPtr.Zero) return false;
+        try { return NativeMethods.TerminateProcess(hProc, 1); }
+        finally { NativeMethods.CloseHandle(hProc); }
+    }
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -250,6 +291,63 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     return;
                 }
 
+                // ── jobs / killjob: same gate as setcli (installed tray + elevated) ──
+                // Deliberately NOT reachable through the open CLI gate: listing exposes the
+                // command lines of elevated launches, and killing is destructive, so neither
+                // may be available to every process that can merely reach the pipe.
+                if (request.Verb is "jobs" or "killjob")
+                {
+                    if (!isTrayElevated)
+                    {
+                        string reason = !isTray ? "not the installed tray" : "tray is not elevated";
+                        logger.LogWarning("Rejected {Verb} — {Reason} (pid {Pid}).", request.Verb, reason, clientPid);
+                        EventLogHelper.Denied(request.Verb, $"pid {clientPid}: {reason}");
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
+                        return;
+                    }
+
+                    if (request.Verb == "jobs")
+                    {
+                        var (jobs, inUse) = SnapshotJobs();
+                        foreach (var job in jobs)
+                            await PipeProtocol.WriteAsync(pipe, new PipeMessage("job",
+                                JsonSerializer.Serialize(job, PipeJsonContext.Default.JobInfo)), ct);
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("slots",
+                            $"{inUse}/{MaxConcurrentLaunches}"), ct);
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Success"), ct);
+                        return;
+                    }
+
+                    // killjob: CommandLine carries the job id.
+                    bool killed = false;
+                    if (int.TryParse(request.CommandLine, out int killId) &&
+                        _jobs.TryGetValue(killId, out var target))
+                    {
+                        uint pid = target.LivePid;
+                        if (pid != 0)
+                        {
+                            killed = TerminateByPid(pid);
+                            logger.LogWarning("Kill job {Id} (pid {Pid}) requested by tray pid {Client}: {Result}.",
+                                killId, pid, clientPid, killed ? "terminated" : "failed");
+                            EventLogHelper.JobTerminated(killId, pid, target.Info.CommandLine, killed);
+                        }
+                        else
+                        {
+                            await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
+                                "That job has not started a process yet — try again in a moment."), ct);
+                        }
+                    }
+                    else
+                    {
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
+                            "No such job — it may have finished already."), ct);
+                    }
+
+                    await PipeProtocol.WriteAsync(pipe,
+                        new PipeMessage("result", killed ? "Success" : "Failed"), ct);
+                    return;
+                }
+
                 // ── launch / validate: elevated signed tray always allowed;
                 //    everyone else (any process, any elevation level) needs the CLI gate open ──
                 if (!isTrayElevated)
@@ -286,6 +384,26 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
                     return;
                 }
+                string sourceKind = isTrayElevated ? "tray" : "cli";
+                bool isValidate = request.Verb is "validate" or "validate-system";
+
+                // Track this launch for the lifetime of the slot it holds, so the tray's
+                // Active Jobs view mirrors slot occupancy exactly (registered here,
+                // removed in the same finally that releases the gate).
+                var tracked = new TrackedJob
+                {
+                    Info = new JobInfo(
+                        Id:             Interlocked.Increment(ref _nextJobId),
+                        CommandLine:    isValidate ? $"({request.Verb})" : request.CommandLine,
+                        Account:        request.Account,
+                        Source:         sourceKind,
+                        Pid:            0,
+                        StartedUnixMs:  DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        CaptureOutput:  request.CaptureOutput,
+                        TimeoutSeconds: request.TimeoutSeconds),
+                };
+                _jobs[tracked.Info.Id] = tracked;
+
                 try
                 {
                     var logChannel = Channel.CreateUnbounded<string>(
@@ -293,8 +411,6 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
 
                     void LogCallback(string msg) => logChannel.Writer.TryWrite(msg);
 
-                    string sourceKind = isTrayElevated ? "tray" : "cli";
-                    bool isValidate = request.Verb is "validate" or "validate-system";
                     if (!isValidate)
                         EventLogHelper.RequestReceived(request.CommandLine, clientPid, sourceKind);
 
@@ -339,6 +455,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("log", msg), ct);
 
                     var (result, launchedPid, hProcess, stdoutStream) = await launchTask;
+                    tracked.LivePid = launchedPid;
 
                     // When output capture is active, stream the child's stdout/stderr
                     // back to the caller as "stdout" messages and wait for the child to
@@ -410,7 +527,11 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     await PipeProtocol.WriteAsync(pipe,
                         new PipeMessage("result", result ? "Success" : "Failed"), ct);
                 }
-                finally { _launchGate.Release(); }
+                finally
+                {
+                    _jobs.TryRemove(tracked.Info.Id, out _);
+                    _launchGate.Release();
+                }
             }
             catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException) { }
             catch (Exception ex) { logger.LogWarning(ex, "Pipe handler error."); }

@@ -42,6 +42,15 @@ COMMAND LINE
                timeout the output stream closes but the child is left running.
   -h, --help, /?   Show this help.
   --revalidate     Re-run the post-install validation dialog.
+  /jobs            List the launches currently holding a service launch slot,
+                   with their job id, elapsed time, account, PID and command.
+  /kill:<id>       Terminate the process behind one of those jobs.
+
+  /jobs and /kill need the installed RunAsHelper.exe running elevated (the same
+  check that guards the CLI toggle), so they are not available to an arbitrary
+  process through an open CLI gate. Tools > Active Jobs is the tray equivalent.
+  In practice the jobs listed are /capture launches: a fire-and-forget launch
+  frees its slot as soon as the process starts.
 
   Non-executable targets are launched via their host automatically:
     .msc -> mmc.exe    .cpl -> control.exe    .bat/.cmd -> cmd /c    .ps1 -> powershell

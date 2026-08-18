@@ -23,6 +23,7 @@ namespace RunAsHelper
             menuSettings      = new ToolStripMenuItem();
             menuToolsSep1     = new ToolStripSeparator();
             menuValidate      = new ToolStripMenuItem();
+            menuActiveJobs    = new ToolStripMenuItem();
             menuToolsSepV     = new ToolStripSeparator();
             menuToolsOpenPwsh = new ToolStripMenuItem();
             menuToolsSepP     = new ToolStripSeparator();
@@ -77,6 +78,7 @@ namespace RunAsHelper
             // ── Tools menu ───────────────────────────────────────────────────
             menuSettings.Text      = "Settings...";
             menuValidate.Text      = "Validate Installation...";
+            menuActiveJobs.Text    = "Active Jobs...";
             menuToolsOpenPwsh.Text = "Open PowerShell (TrustedInstaller)";
             menuImport.Text        = "Import Saved Apps...";
             menuExport.Text        = "Export Saved Apps...";
@@ -87,7 +89,7 @@ namespace RunAsHelper
             menuTools.DropDownItems.AddRange(new ToolStripItem[]
             {
                 menuSettings, menuToolsSep1,
-                menuValidate, menuToolsSepV,
+                menuValidate, menuActiveJobs, menuToolsSepV,
                 menuToolsOpenPwsh, menuToolsSepP,
                 menuImport, menuExport,
                 menuToolsSep2, menuClearRecent,
@@ -289,6 +291,7 @@ namespace RunAsHelper
         private ToolStripMenuItem    menuSettings;
         private ToolStripSeparator   menuToolsSep1;
         private ToolStripMenuItem    menuValidate;
+        private ToolStripMenuItem    menuActiveJobs;
         private ToolStripSeparator   menuToolsSepV;
         private ToolStripMenuItem    menuToolsOpenPwsh;
         private ToolStripSeparator   menuToolsSepP;

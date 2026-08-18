@@ -33,6 +33,13 @@ internal static class EventLogHelper
         Write(EventLogEntryType.Warning, 1003,
             $"Launch denied: '{commandLine}'\nReason: {reason}");
 
+    // 1006 — an operator terminated an in-flight job from the tray's Active Jobs view.
+    // Distinct from 1003: this is a deliberate administrative action on an elevated
+    // process, not a blocked request, and a SIEM should be able to tell them apart.
+    internal static void JobTerminated(int jobId, uint pid, string commandLine, bool succeeded) =>
+        Write(EventLogEntryType.Warning, 1006,
+            $"Job {jobId} (PID {pid}) {(succeeded ? "terminated" : "could not be terminated")} by operator: '{commandLine}'");
+
     // 1004 — TrustedInstaller token could not be acquired at startup or on demand
     internal static void TokenFailed(string reason) =>
         Write(EventLogEntryType.Error, 1004,

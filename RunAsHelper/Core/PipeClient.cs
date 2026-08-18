@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using RunAsHelper.Shared.Protocol;
@@ -73,6 +75,36 @@ internal sealed class PipeClient
     public Task<bool> SetCommandLineAllowedAsync(bool allow, CancellationToken ct = default)
         => SendAsync(new LaunchRequest(allow ? "on" : "off", NativeMethods.NORMAL_PRIORITY_CLASS, "setcli"), ct);
 
+    /// <summary>
+    /// Lists the launches currently holding a slot, with "N/M" slot usage. Like
+    /// <see cref="SetCommandLineAllowedAsync"/> this is tray-only: the service requires
+    /// the installed, elevated tray, so it returns empty for any other caller.
+    /// </summary>
+    public async Task<(bool Ok, IReadOnlyList<JobInfo> Jobs, string Slots)> ListJobsAsync(CancellationToken ct = default)
+    {
+        var jobs  = new List<JobInfo>();
+        string slots = string.Empty;
+        bool ok = await SendAsync(new LaunchRequest(string.Empty, NativeMethods.NORMAL_PRIORITY_CLASS, "jobs"), ct,
+            onMessage: msg =>
+            {
+                switch (msg.Type)
+                {
+                    case "job":
+                        var job = JsonSerializer.Deserialize(msg.Content, PipeJsonContext.Default.JobInfo);
+                        if (job is not null) jobs.Add(job);
+                        break;
+                    case "slots":
+                        slots = msg.Content;
+                        break;
+                }
+            });
+        return (ok, jobs, slots);
+    }
+
+    /// <summary>Terminates the process behind an in-flight job (tray-only, like the listing).</summary>
+    public Task<bool> KillJobAsync(int jobId, CancellationToken ct = default)
+        => SendAsync(new LaunchRequest(jobId.ToString(), NativeMethods.NORMAL_PRIORITY_CLASS, "killjob"), ct);
+
     /// <summary>Launch from the command line (tagged Source="cli", gated by the service).</summary>
     public Task<bool> LaunchFromCliAsync(string commandLine, uint priority, string account, CancellationToken ct = default)
         => SendAsync(new LaunchRequest(commandLine, priority, "launch", "", 1, account, "cli"), ct);
@@ -88,7 +120,8 @@ internal sealed class PipeClient
         => SendAsync(new LaunchRequest(commandLine, priority, "launch", "", 1, account, "cli",
             CaptureOutput: captureOutput, TimeoutSeconds: timeoutSeconds), ct);
 
-    private async Task<bool> SendAsync(LaunchRequest request, CancellationToken ct)
+    private async Task<bool> SendAsync(LaunchRequest request, CancellationToken ct,
+        Action<PipeMessage>? onMessage = null)
     {
         using var pipe = new NamedPipeClientStream(
             ".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
@@ -116,6 +149,9 @@ internal sealed class PipeClient
             {
                 PipeMessage? msg = await PipeProtocol.ReadPipeMessageAsync(pipe, ct);
                 if (msg is null) break;
+
+                // Verb-specific messages (e.g. "job"/"slots" from the jobs listing).
+                onMessage?.Invoke(msg);
 
                 switch (msg.Type)
                 {
