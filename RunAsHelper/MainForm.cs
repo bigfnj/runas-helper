@@ -107,6 +107,7 @@ namespace RunAsHelper
             menuStartService.Click += MenuStartService_Click;
             menuSettings.Click     += MenuSettings_Click;
             menuValidate.Click     += MenuValidate_Click;
+            menuActiveJobs.Click   += MenuActiveJobs_Click;
             menuImport.Click       += MenuImport_Click;
             menuExport.Click       += MenuExport_Click;
             menuClearRecent.Click  += MenuClearRecent_Click;
@@ -473,6 +474,22 @@ namespace RunAsHelper
         private void MenuValidate_Click(object? sender, EventArgs e)
         {
             using var form = new ValidationForm(standalone: false);
+            form.ShowDialog(this);
+        }
+
+        // Shows what is currently holding a service launch slot. The service only
+        // answers this for the installed, elevated tray, so say why it would be empty
+        // rather than showing a blank window that looks broken.
+        private void MenuActiveJobs_Click(object? sender, EventArgs e)
+        {
+            if (!NativeMethods.IsUserAnAdmin())
+            {
+                MessageBox.Show(this,
+                    "Active Jobs needs an elevated tray — click Activate first.",
+                    "RunAS Helper", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            using var form = new JobsForm();
             form.ShowDialog(this);
         }
 

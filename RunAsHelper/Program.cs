@@ -40,6 +40,18 @@ namespace RunAsHelper
                 return;
             }
 
+            // Active-job diagnostics: list what is holding a service launch slot, or
+            // terminate a stuck job. The service applies the same tray-only gate it uses
+            // for the CLI toggle, so this works from the installed exe when elevated.
+            if (args.Length >= 1 &&
+                (args[0].Equals("/jobs", StringComparison.OrdinalIgnoreCase) ||
+                 args[0].StartsWith("/kill:", StringComparison.OrdinalIgnoreCase)))
+            {
+                ShowConsole();
+                RunJobsCommand(args[0]);
+                return;
+            }
+
             // Elevation hand-off: the non-elevated tray's "Activate" button
             // relaunches the exe elevated with this flag. It is NOT a CLI launch —
             // it opens the tray window, but waits briefly for the predecessor
@@ -132,6 +144,58 @@ namespace RunAsHelper
             bool ok = client.LaunchFromCliAsync(commandLine, priority, account, captureOutput, timeoutSecs)
                             .GetAwaiter().GetResult();
             Environment.Exit(ok ? 0 : 1);
+        }
+
+        // /jobs        — list the launches currently holding a slot
+        // /kill:<id>   — terminate the process behind one of them
+        private static void RunJobsCommand(string arg)
+        {
+            var client = new PipeClient();
+            client.LogMessage += msg => Console.WriteLine(msg);
+
+            if (arg.StartsWith("/kill:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!int.TryParse(arg[6..], out int id))
+                {
+                    Console.Error.WriteLine("Usage: RunAsHelper.exe /kill:<job id>   (see /jobs)");
+                    Environment.Exit(1);
+                    return;
+                }
+                bool killed = client.KillJobAsync(id).GetAwaiter().GetResult();
+                Console.WriteLine(killed ? $"Job {id} terminated." : $"Could not terminate job {id}.");
+                Environment.Exit(killed ? 0 : 1);
+                return;
+            }
+
+            var (ok, jobs, slots) = client.ListJobsAsync().GetAwaiter().GetResult();
+            if (!ok)
+            {
+                Console.Error.WriteLine(
+                    "Could not read active jobs. This needs the installed RunAsHelper.exe running elevated.");
+                Environment.Exit(1);
+                return;
+            }
+
+            Console.WriteLine($"Slots in use: {slots}");
+            if (jobs.Count == 0)
+            {
+                Console.WriteLine("No active jobs.");
+                Environment.Exit(0);
+                return;
+            }
+
+            Console.WriteLine($"{"JOB",-5} {"ELAPSED",-9} {"ACCOUNT",-16} {"SRC",-5} {"PID",-7} COMMAND");
+            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            foreach (var job in jobs)
+            {
+                var elapsed = TimeSpan.FromMilliseconds(Math.Max(0, nowMs - job.StartedUnixMs));
+                string account = job.Account == "system" ? "SYSTEM" : "TrustedInstaller";
+                string pid     = job.Pid == 0 ? "-" : job.Pid.ToString();
+                Console.WriteLine(
+                    $"{job.Id,-5} {(int)elapsed.TotalMinutes}:{elapsed.Seconds:00}      " +
+                    $"{account,-16} {job.Source,-5} {pid,-7} {job.CommandLine}");
+            }
+            Environment.Exit(0);
         }
 
         private static uint PriorityFromCode(char code) => code switch

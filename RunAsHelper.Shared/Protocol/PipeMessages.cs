@@ -22,6 +22,24 @@ public sealed record LaunchRequest(
 /// <summary>Sent by the service back to the client: either a streaming log line or the final result.</summary>
 public sealed record PipeMessage(string Type, string Content);
 
+/// <summary>
+/// One in-flight launch, reported by the <c>"jobs"</c> verb as a <c>"job"</c> message
+/// whose Content is this record as JSON. Only launches that outlive their request show
+/// up in practice: a fire-and-forget launch completes as soon as the process is created,
+/// whereas a <c>/capture</c> launch holds its slot until the child exits or its
+/// <c>/timeout</c> ceiling fires.
+/// </summary>
+public sealed record JobInfo(
+    int    Id,
+    string CommandLine,
+    string Account,
+    string Source,
+    uint   Pid,
+    long   StartedUnixMs,
+    bool   CaptureOutput,
+    int    TimeoutSeconds);
+
 [JsonSerializable(typeof(LaunchRequest))]
 [JsonSerializable(typeof(PipeMessage))]
+[JsonSerializable(typeof(JobInfo))]
 public sealed partial class PipeJsonContext : JsonSerializerContext { }

@@ -97,8 +97,10 @@ icon (see *Startup* below). The main window is a **saved-applications manager**:
 - **Quick run (one-off)** — launch a path once without saving it: pick a
   priority, type or **Browse…** to a path, then click **Run as TrustedInstaller**
   or **Run as SYSTEM** (the button you click chooses the account).
-- **Tools menu** — Settings, Validate Installation, Open PowerShell
+- **Tools menu** — Settings, Validate Installation, **Active Jobs**, Open PowerShell
   (TrustedInstaller), Import/Export saved apps, and **How to Use**.
+- **Active Jobs** — what is currently holding a service launch slot, with live slot
+  usage and a **Kill** button for a job that is stuck. Needs an elevated tray.
 
 **Elevation (Activate).** The tray runs **non-elevated** (greyed icon). The
 service's control pipe only admits elevated administrators, so click the
@@ -122,6 +124,8 @@ Settings are stored in `%AppData%\RunAsHelper\settings.json`.
 
 ```
 RunAsHelper.exe [/capture] [/timeout:N] [/p:N] [/as:ACCOUNT] <path> [args]
+RunAsHelper.exe /jobs                 :: list launches holding a slot
+RunAsHelper.exe /kill:<id>            :: terminate one of them
 RunAsHelper.exe -h | --help | /?      :: show full help
 ```
 
@@ -137,6 +141,8 @@ RunAsHelper.exe -h | --help | /?      :: show full help
 | `/as:system`  | Run as plain LocalSystem                                                       |
 | `/capture`    | Stream child stdout/stderr back through the pipe; CLI blocks until child exits |
 | `/timeout:N`  | Hard ceiling in seconds; on timeout the stream closes, child is left running   |
+| `/jobs`       | List launches holding a slot (id, elapsed, account, source, PID, command)      |
+| `/kill:<id>`  | Terminate the process behind an in-flight job                                  |
 
 Non-executable targets are launched via their host automatically (`.msc`→`mmc`,
 `.cpl`→`control`, `.bat`/`.cmd`→`cmd /c`, `.ps1`→`powershell`), and a bare name
@@ -327,6 +333,17 @@ reinstall in place (handy during development).
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
 
+## What's new in 1.7.0
+
+- **Active Jobs** — *Tools → Active Jobs* lists every launch currently holding a service
+  launch slot (job id, elapsed time, account, source, PID, command) with live slot usage,
+  and lets you terminate one that is stuck. Until now a stuck `/capture` job was invisible:
+  the service simply looked unresponsive. The same view is available from the command line
+  as `/jobs` and `/kill:<id>`.
+- Listing and killing are restricted to the installed, elevated tray — the same check that
+  guards the CLI toggle — so they are **not** reachable by an arbitrary process through an
+  open CLI gate. A terminate is audited as Event ID **1006**.
+
 ## What's new in 1.6.4
 
 - **`/timeout` now really does release you.** Previously the ceiling fired and the output
@@ -399,7 +416,7 @@ reinstall in place (handy during development).
 
 - **Window foreground fix** — launched processes now reliably appear in the foreground instead of opening behind existing windows. The service sends the new process's PID to the tray, which calls `AllowSetForegroundWindow` before acknowledging the launch.
 - **Install-path pipe gating** — the service identifies the tray by image path: the connecting binary must be `RunAsHelper.exe` installed alongside the service. (1.4.0 briefly required an Authenticode *signature* here; 1.4.1 replaced that so unsigned local/CI builds work — a signature, when present, is now optional diagnostics, with publisher pinning tracked under *Planned features*.) A renamed or relocated copy is rejected.
-- **Structured Windows Event Log** — events 1001 (request received), 1002 (launched), 1003 (denied), 1004 (token failure), and 1005 (service start/stop) are written to the Application log under the `RunAsHelper` source. Registered by the installer at install time.
+- **Structured Windows Event Log** — events 1001 (request received), 1002 (launched), 1003 (denied), 1004 (token failure), 1005 (service start/stop), and 1006 (job terminated by operator) are written to the Application log under the `RunAsHelper` source. Registered by the installer at install time.
 - **Binary versioning** — `FileVersion` and `AssemblyVersion` in both EXEs are now stamped from the release tag (was always `1.0.0.0`). Enterprise software-inventory tools will see the correct version.
 - **Code cleanup** — removed dead VB6 and twinBASIC legacy sources that were carried in the repo since the original port.
 

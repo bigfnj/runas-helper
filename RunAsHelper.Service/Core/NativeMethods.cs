@@ -304,6 +304,14 @@ internal static partial class NativeMethods
         [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle,
         uint dwProcessId);
 
+    // Used by the "killjob" verb to stop a launched child that is holding a launch
+    // slot. The service runs as LocalSystem, so it can open a TrustedInstaller child.
+    internal const uint PROCESS_TERMINATE = 0x0001;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool TerminateProcess(IntPtr hProcess, uint uExitCode);
+
     [LibraryImport("kernel32.dll", SetLastError = true)]
     internal static partial IntPtr OpenThread(
         uint dwDesiredAccess,
