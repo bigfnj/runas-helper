@@ -719,14 +719,25 @@ namespace RunAsHelper
                         return;
                 }
 
+                // The two token checks go through the service's tray-control path, which
+                // only admits an *elevated* tray. On a standard-user box the tray starts
+                // non-elevated, so running the popup then reports two red "failed" rows
+                // that actually only mean "could not check". Leave it pending instead —
+                // it runs on the first launch that can genuinely validate, i.e. after
+                // Activate. Tools -> Validate Installation is always available manually.
+                if (!NativeMethods.IsUserAnAdmin())
+                    return;
+
                 using var form = new ValidationForm(standalone: false);
                 form.ShowDialog(this);
 
-                if (form.AllPassed)
-                {
-                    using var key = Registry.CurrentUser.CreateSubKey(@"Software\RunAsHelper");
-                    key?.SetValue("ValidatedVersion", pending);
-                }
+                // Record the version once the dialog has been *shown*, pass or fail.
+                // Stamping only on success meant any failure — including the
+                // not-elevated false alarm above — brought the popup back on every
+                // single launch, which is a nag, not a post-install check. It is a
+                // one-time-per-install notice; re-run it any time from the Tools menu.
+                using var key = Registry.CurrentUser.CreateSubKey(@"Software\RunAsHelper");
+                key?.SetValue("ValidatedVersion", pending);
             }
             catch
             {

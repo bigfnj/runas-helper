@@ -343,6 +343,24 @@ reinstall in place (handy during development).
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
 
+## What's new in 2.0.3
+
+- **The Installation Check popup no longer reappears on every launch.** It is meant to be a
+  one-time post-install notice, but it came back every time the main window was opened.
+  Two causes, both fixed:
+  - Its two token checks go through the service's *tray-control* path, which only admits an
+    **elevated** tray. On a standard-user machine the tray starts non-elevated, so those
+    checks failed — reporting red "failed" rows that really only meant *could not check*.
+    The popup is now skipped entirely when the tray cannot validate, and stays pending
+    until a launch that can (i.e. after **Activate**).
+  - The "already validated" stamp (`HKCU\Software\RunAsHelper\ValidatedVersion`) was only
+    written when *every* check passed, so any failure — including that false alarm — meant
+    nothing was recorded and the popup returned on the next launch, indefinitely. The
+    version is now recorded once the dialog has been shown, pass or fail.
+
+  It therefore appears **at most once per install**. Re-run it any time from
+  *Tools → Validate Installation*.
+
 ## What's new in 2.0.2
 
 - **Activate no longer kills the app.** Clicking **Activate** approved the elevation prompt
