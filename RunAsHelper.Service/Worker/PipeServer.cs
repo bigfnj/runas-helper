@@ -350,21 +350,26 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                             : NativeMethods.INFINITE;
 
                         // Pump stdout on a background task so we don't block the
-                        // await below. Catches IOException/ObjectDisposedException that
-                        // occur when we close the stream after a timeout.
+                        // await below. The read end is an asynchronous pipe, so cancelling
+                        // pumpCts aborts a pending ReadLineAsync straight away — that is what
+                        // lets a /timeout release this caller (and its launch slot) while the
+                        // child keeps running. Disposing the stream cannot do that on its own:
+                        // a read on a synchronous handle only returns at EOF, i.e. when the
+                        // child finally exits.
+                        using var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                         var pumpTask = Task.Run(async () =>
                         {
                             try
                             {
                                 using var reader = new System.IO.StreamReader(stdoutStream);
                                 string? line;
-                                while ((line = await reader.ReadLineAsync(ct)) is not null)
+                                while ((line = await reader.ReadLineAsync(pumpCts.Token)) is not null)
                                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("stdout", line), ct);
                             }
                             catch (Exception ex)
                                 when (ex is System.IO.IOException or ObjectDisposedException
                                           or OperationCanceledException) { }
-                        }, ct);
+                        }, pumpCts.Token);
 
                         // Wait for the child process to exit (blocking, on a thread-pool thread).
                         uint waitResult = await Task.Run(
@@ -373,13 +378,14 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                         if (waitResult == NativeMethods.WAIT_TIMEOUT)
                         {
                             await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
-                                $"[timeout] Process did not exit within {request.TimeoutSeconds}s — closing output stream."), ct);
-                            // Dispose the stream to unblock the pump task's ReadLineAsync.
-                            await stdoutStream.DisposeAsync();
+                                $"[timeout] Process did not exit within {request.TimeoutSeconds}s — closing output stream (the process keeps running)."), ct);
+                            pumpCts.Cancel();
                         }
 
                         NativeMethods.CloseHandle(hProcess);
-                        await pumpTask;
+                        try { await pumpTask; }
+                        catch (OperationCanceledException) { /* expected on timeout */ }
+                        await stdoutStream.DisposeAsync();
                     }
                     else if (hProcess != IntPtr.Zero)
                     {

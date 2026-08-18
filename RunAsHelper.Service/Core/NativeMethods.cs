@@ -549,6 +549,23 @@ internal static partial class NativeMethods
         SECURITY_ATTRIBUTES*   lpPipeAttributes,
         uint                   nSize);
 
+    // Opens the client (write) end of the capture pipe. Anonymous pipes cannot be
+    // opened for overlapped I/O, so capture uses a uniquely-named pipe instead; this
+    // opens its write end as an *inheritable, synchronous* handle for the child.
+    internal const uint GENERIC_WRITE          = 0x40000000;
+    internal const uint OPEN_EXISTING          = 3;
+    internal const uint FILE_ATTRIBUTE_NORMAL  = 0x00000080;
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    internal static unsafe partial IntPtr CreateFileW(
+        string                 lpFileName,
+        uint                   dwDesiredAccess,
+        uint                   dwShareMode,
+        SECURITY_ATTRIBUTES*   lpSecurityAttributes,
+        uint                   dwCreationDisposition,
+        uint                   dwFlagsAndAttributes,
+        IntPtr                 hTemplateFile);
+
     // Controls handle attributes; used to clear HANDLE_FLAG_INHERIT on the
     // read end so only the write end reaches the child.
     [LibraryImport("kernel32.dll", SetLastError = true)]
