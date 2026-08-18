@@ -343,6 +343,20 @@ reinstall in place (handy during development).
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
 
+## What's new in 2.0.2
+
+- **Activate no longer kills the app.** Clicking **Activate** approved the elevation prompt
+  and then left you with *no tray at all* — the elevated instance died during startup with
+  `SetCompatibleTextRenderingDefault must be called before the first IWin32Window object is
+  created`, and the non-elevated predecessor had already exited to hand over the
+  single-instance mutex. Cause was an init-order bug dating from 1.9.2:
+  `Application.SetColorMode` was called before `ApplicationConfiguration.Initialize()`, and
+  it creates a window handle **when another instance of the app is already running** — after
+  which `Initialize()` throws. A first/only instance never trips it, so ordinary launches
+  always worked and only the hand-off (which by definition starts while its predecessor is
+  alive) failed — every time. `Initialize()` now runs first; the colour mode is applied
+  straight after, still before the first form, so theming is unchanged.
+
 ## What's new in 2.0.1
 
 - **Help text brought up to date.** `--help` and *Tools → How to Use* had drifted: they
