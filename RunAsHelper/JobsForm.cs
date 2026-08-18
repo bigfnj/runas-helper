@@ -214,5 +214,11 @@ namespace RunAsHelper
                     "RunAS Helper", MessageBoxButtons.OK, MessageBoxIcon.Information);
             await ReloadAsync();
         }
-    }
+    
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            Theme.Apply(this);   // match whatever palette the app is using
+        }
+}
 }

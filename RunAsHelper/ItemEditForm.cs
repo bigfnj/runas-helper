@@ -264,4 +264,10 @@ internal sealed class ItemEditForm : Form
 
     private static Button MakeBrowse(Point loc)
         => new() { Text = "...", Location = loc, Size = new Size(34, 25) };
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Theme.Apply(this);   // match whatever palette the app is using
+    }
 }

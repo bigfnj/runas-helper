@@ -1,3 +1,4 @@
+using System;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -42,5 +43,11 @@ internal sealed class HelpForm : Form
         Controls.Add(bottom);
         AcceptButton = btnClose;
         CancelButton = btnClose;
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Theme.Apply(this);   // match whatever palette the app is using
     }
 }
