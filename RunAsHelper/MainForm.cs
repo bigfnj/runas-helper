@@ -270,6 +270,9 @@ namespace RunAsHelper
         {
             base.OnShown(e);
             LayoutQuickRunPath();
+            // Re-apply now that every child control definitely has a handle: the native
+            // chrome (list scrollbars, edit borders) can only be themed once it does.
+            ApplyTheme();
         }
 
         // Sets the quick-run path box width so its right edge keeps a fixed, DPI-scaled
