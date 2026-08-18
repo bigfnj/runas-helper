@@ -343,6 +343,14 @@ reinstall in place (handy during development).
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
 
+## What's new in 1.9.2
+
+- **Dark mode now uses WinForms' own colour mode** (`Application.SetColorMode`, .NET 9+).
+  Hand-recolouring every control could never reach the *native* chrome, which is why 1.9.1
+  still had white scrollbars and a white combo drop-down button, near-black menu text and
+  disabled buttons that vanished into the background. The framework paints all of that; the
+  app now only adds what it leaves out — the title bar and the ListView grid/headers.
+
 ## What's new in 1.9.1
 
 - **Dark mode readability fixes.** 1.9.0's dark palette left the saved-apps list unreadable:
