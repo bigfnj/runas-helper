@@ -20,6 +20,13 @@ namespace RunAsHelper
             // recorded to %AppData%\RunAsHelper\crash.log first.
             CrashLogger.Install();
 
+            // Turn on WinForms' own dark mode before any window exists. This is what makes
+            // the *native* chrome follow the theme — scrollbars, combo drop-down buttons,
+            // menu dropdowns, disabled text — none of which can be reached by setting
+            // BackColor/ForeColor from managed code. Must run before the first window is
+            // created, so it reads the setting directly rather than waiting for a form.
+            ApplyStartupColorMode();
+
             // Post-install / on-demand validation: open the validation dialog
             // standalone (used by the "Restart as administrator" recovery path,
             // which relaunches this exe elevated).
@@ -91,6 +98,26 @@ namespace RunAsHelper
 
             ApplicationConfiguration.Initialize();
             Application.Run(new MainForm(startHidden: startTray));
+        }
+
+        // Maps the saved Theme preference onto WinForms' color mode. Best-effort: theming
+        // must never be the reason the app fails to start.
+        private static void ApplyStartupColorMode()
+        {
+            try
+            {
+                var settings = Settings.AppSettings.Load();
+                Theme.Mode = (ThemeMode)Math.Clamp(settings.Theme, 0, 2);
+#pragma warning disable WFO5001 // SetColorMode is still marked experimental in .NET 10
+                Application.SetColorMode(Theme.Mode switch
+                {
+                    ThemeMode.Light => SystemColorMode.Classic,
+                    ThemeMode.Dark  => SystemColorMode.Dark,
+                    _               => SystemColorMode.System,
+                });
+#pragma warning restore WFO5001
+            }
+            catch { /* fall back to the default light look */ }
         }
 
         private static bool IsHelpFlag(string a) =>
