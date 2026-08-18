@@ -127,6 +127,7 @@ Settings are stored in `%AppData%\RunAsHelper\settings.json`.
 RunAsHelper.exe [/capture] [/timeout:N] [/p:N] [/as:ACCOUNT] <path> [args]
 RunAsHelper.exe /jobs                 :: list launches holding a slot
 RunAsHelper.exe /kill:<id>            :: terminate one of them
+RunAsHelper.exe /joblog:<id>          :: show what one of them has printed
 RunAsHelper.exe -h | --help | /?      :: show full help
 ```
 
@@ -144,9 +145,11 @@ RunAsHelper.exe -h | --help | /?      :: show full help
 | `/timeout:N`  | Hard ceiling in seconds; on timeout the stream closes, child is left running   |
 | `/jobs`       | List launches holding a slot (id, elapsed, account, source, PID, command)      |
 | `/kill:<id>`  | Terminate the process behind an in-flight job                                  |
+| `/joblog:<id>`| Show the output an in-flight capture job has produced so far                   |
 
 Non-executable targets are launched via their host automatically (`.msc`→`mmc`,
-`.cpl`→`control`, `.bat`/`.cmd`→`cmd /c`, `.ps1`→`powershell`), and a bare name
+`.cpl`→`control`, `.bat`/`.cmd`→`cmd /c`, `.ps1`→`powershell`, `.reg`→`regedit /s`, and any
+other document via its registered handler), and a bare name
 (e.g. `notepad.exe`, `lusrmgr.msc`) is resolved on the PATH — including when
 arguments follow, so targets outside `System32` such as `powershell.exe` launch
 correctly too.
@@ -336,6 +339,22 @@ reinstall in place (handy during development).
 - **`/capture` without `/timeout` warning** — the service now emits a `[warning]`
   log line when `/capture` is used without a `/timeout:N` ceiling, so operators
   know an infinite wait is in effect.
+
+## What's new in 1.8.0
+
+- **Open documents and `.reg` files elevated.** `.reg` imports via `regedit /s`, and any
+  other document opens with its registered handler — so a TrustedInstaller-owned file can
+  be edited in your normal editor. Note the handler is resolved **client-side**: file
+  associations are per-user, and the service (running as SYSTEM) sees no default app, so
+  resolving there would land on the "how do you want to open this?" picker.
+- **Status bar** — service state, CLI-gate state with its countdown, and the number of
+  launch slots in use, all visible in the main window instead of behind a menu.
+- **Captured output in Active Jobs** — selecting a job shows what it has printed so far, so
+  a stuck job tells you *where* it is stuck rather than just what it was asked to run. Also
+  available as `/joblog:<id>`.
+- **Saved-list quality of life** — per-app icons, drag-to-reorder, a filter box, and
+  full-path tooltips. (Reordering is disabled while a filter is active, since a row's
+  position on screen is not its position in the saved order.)
 
 ## What's new in 1.7.1
 

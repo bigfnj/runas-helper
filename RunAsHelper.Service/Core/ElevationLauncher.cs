@@ -698,7 +698,21 @@ internal sealed class ElevationLauncher
         // resolved from PATH by passing a null lpApplicationName below.
         string consoleProbe = string.IsNullOrEmpty(args) ? commandLine : app;
         string? host = HostExe(app);
-        if (host is not null)
+        if (host == ShellOpenHost)
+        {
+            // Document: resolve the registered handler and launch it directly.
+            string? docCommand = ResolveDocumentCommand(app.Trim().Trim('"'), log);
+            if (docCommand is null)
+            {
+                log?.Invoke("Cannot open this file — no registered handler. Point at a program instead.");
+                return (0, IntPtr.Zero, null);
+            }
+            commandLine  = string.IsNullOrEmpty(args) ? docCommand : $"{docCommand} {args}";
+            args         = string.Empty;   // take the PATH-resolved (null app) branch
+            var (handlerExe, _) = ParseCommandLine(commandLine);
+            consoleProbe = handlerExe;     // console state follows the resolved handler
+        }
+        else if (host is not null)
         {
             commandLine  = BuildHostCommand(host, app, args);
             args         = string.Empty;   // take the PATH-resolved (null app) branch
@@ -1022,17 +1036,115 @@ internal sealed class ElevationLauncher
 
     // The host executable for a non-executable target, or null if the target is
     // itself runnable (.exe/.com). Lets saved .msc/.cpl/.bat/.ps1 entries launch.
+    // Sentinel host meaning "hand it to the shell to open with whatever is registered
+    // for that file type", used for documents that have no host of their own.
+    private const string ShellOpenHost = "@shell";
+
     private static string? HostExe(string app)
     {
-        string ext = System.IO.Path.GetExtension(app.Trim().Trim('"')).ToLowerInvariant();
+        string path = app.Trim().Trim('"');
+        string ext  = System.IO.Path.GetExtension(path).ToLowerInvariant();
         return ext switch
         {
             ".msc"           => "mmc.exe",
             ".cpl"           => "control.exe",
             ".bat" or ".cmd" => "cmd.exe",
             ".ps1"           => "powershell.exe",
-            _                => null,
+            ".reg"           => "regedit.exe",
+            // Directly runnable, or a bare name to be resolved on PATH — launch as-is.
+            ".exe" or ".com" or "" => null,
+            // Anything else is a document: no PE to CreateProcess, so let the shell
+            // pick the registered handler. That handler inherits the elevated token,
+            // which is the whole point (e.g. editing a TrustedInstaller-owned file).
+            _                => ShellOpenHost,
         };
+    }
+
+    /// <summary>
+    /// Builds a command line that opens <paramref name="path"/> with the handler registered
+    /// for its file type, or null if the type has no handler.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately resolves the association here and launches the handler as an ordinary
+    /// PE, rather than delegating to the shell with <c>cmd /c start</c>. ShellExecute does
+    /// not work from the service's SYSTEM token: it reports no error and simply never
+    /// launches anything, which would make a document launch look like a silent no-op. A
+    /// directly-launched handler behaves exactly like every other target this tool starts.
+    /// </remarks>
+    private unsafe string? ResolveDocumentCommand(string path, Action<string>? log)
+    {
+        string ext = System.IO.Path.GetExtension(path);
+        if (string.IsNullOrEmpty(ext)) return null;
+
+        // The full registered command first: handlers that need extra switches (or that
+        // take the file somewhere other than the first argument) only work this way.
+        string? command = AssocQuery(NativeMethods.ASSOCSTR_COMMAND, ext);
+        // As SYSTEM there is no per-user default, so the association often resolves to the
+        // OpenWith chooser. Launching that elevated would put a "how do you want to open
+        // this?" dialog on screen running as SYSTEM; report no handler instead. The client
+        // resolves documents in the user's own context before it gets this far.
+        if (!string.IsNullOrWhiteSpace(command) && command!.Contains("OpenWith.exe", StringComparison.OrdinalIgnoreCase))
+            command = null;
+        if (!string.IsNullOrWhiteSpace(command))
+        {
+            string built = SubstituteShellArgs(command!, path);
+            log?.Invoke($"Document type {ext} → registered command: {built}");
+            return built;
+        }
+
+        // Otherwise just the handler executable, with the file as its argument.
+        string? exe = AssocQuery(NativeMethods.ASSOCSTR_EXECUTABLE, ext);
+        if (!string.IsNullOrWhiteSpace(exe))
+        {
+            log?.Invoke($"Document type {ext} → handler: {exe}");
+            return $"\"{exe}\" \"{path}\"";
+        }
+
+        log?.Invoke($"No handler is registered for {ext} files.");
+        return null;
+    }
+
+    private static unsafe string? AssocQuery(uint what, string ext)
+    {
+        uint len = 0;
+        // First call sizes the buffer; a failure here just means "no association".
+        if (NativeMethods.AssocQueryStringW(NativeMethods.ASSOCF_NONE, what, ext, null, null, ref len) < 0
+            || len == 0 || len > 4096)
+            return null;
+
+        char* buf = stackalloc char[(int)len];
+        if (NativeMethods.AssocQueryStringW(NativeMethods.ASSOCF_NONE, what, ext, null, buf, ref len) != 0)
+            return null;
+
+        string s = new string(buf).TrimEnd('\0').Trim();
+        return s.Length == 0 ? null : s;
+    }
+
+    // Fills in a registered command's parameters: %1/%L (and the quoted forms) become the
+    // file, and the remaining shell placeholders are dropped rather than passed through
+    // literally. If the command names no file parameter at all, append the file.
+    private static string SubstituteShellArgs(string command, string path)
+    {
+        string quoted = $"\"{path}\"";
+        bool substituted = false;
+
+        foreach (string token in new[] { "\"%1\"", "\"%L\"", "\"%l\"", "%1", "%L", "%l" })
+        {
+            if (command.Contains(token, StringComparison.Ordinal))
+            {
+                command = command.Replace(token, quoted, StringComparison.Ordinal);
+                substituted = true;
+                break;
+            }
+        }
+
+        // Shell-only extras (item id lists, hotkeys, show-command) mean nothing to us.
+        foreach (string extra in new[] { "%*", "%2", "%3", "%4", "%5", "%6", "%7", "%8", "%9",
+                                         "\"%I\"", "%I", "\"%i\"", "%i", "%D", "%d", "%W", "%w", "%v", "%V" })
+            command = command.Replace(extra, string.Empty, StringComparison.Ordinal);
+
+        command = command.Trim();
+        return substituted ? command : $"{command} {quoted}";
     }
 
     private static string BuildHostCommand(string host, string app, string args)
@@ -1043,6 +1155,11 @@ internal sealed class ElevationLauncher
             "cmd.exe"        => $"cmd.exe /c {quoted}",
             "powershell.exe" => $"powershell.exe -ExecutionPolicy Bypass -File {quoted}",
             "control.exe"    => $"control.exe {quoted}",
+            // /s imports without the "are you sure" prompt. The caller already chose to
+            // run this elevated, and a prompt on the interactive desktop would be the
+            // only thing standing between them and a silent TrustedInstaller import
+            // either way — so honour the request rather than half-asking.
+            "regedit.exe"    => $"regedit.exe /s {quoted}",
             _                => $"mmc.exe {quoted}",
         };
         return string.IsNullOrEmpty(args) ? head : $"{head} {args}";

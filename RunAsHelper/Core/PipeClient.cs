@@ -110,6 +110,22 @@ internal sealed class PipeClient
     public Task<bool> KillJobAsync(int jobId, CancellationToken ct = default)
         => SendAsync(new LaunchRequest(jobId.ToString(), NativeMethods.NORMAL_PRIORITY_CLASS, "killjob"), ct);
 
+    /// <summary>
+    /// The output a capture job has produced so far (a bounded tail kept by the service),
+    /// so the tray can show what a job is doing rather than only what it was asked to run.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> JobOutputAsync(int jobId, CancellationToken ct = default)
+    {
+        var lines = new List<string>();
+        // logStdout: false — these lines are being collected for the caller to render.
+        // Without it they would ALSO go out through LogMessage, and a CLI that prints
+        // both the stream and the returned list shows every line twice.
+        await SendAsync(new LaunchRequest(jobId.ToString(), NativeMethods.NORMAL_PRIORITY_CLASS, "joblog"), ct,
+            onMessage: msg => { if (msg.Type == "stdout") lines.Add(msg.Content); },
+            logStdout: false);
+        return lines;
+    }
+
     /// <summary>Launch from the command line (tagged Source="cli", gated by the service).</summary>
     public Task<bool> LaunchFromCliAsync(string commandLine, uint priority, string account, CancellationToken ct = default)
         => SendAsync(new LaunchRequest(commandLine, priority, "launch", "", 1, account, "cli"), ct);
@@ -125,9 +141,53 @@ internal sealed class PipeClient
         => SendAsync(new LaunchRequest(commandLine, priority, "launch", "", 1, account, "cli",
             CaptureOutput: captureOutput, TimeoutSeconds: timeoutSeconds), ct);
 
-    private async Task<bool> SendAsync(LaunchRequest request, CancellationToken ct,
-        Action<PipeMessage>? onMessage = null)
+    // Extensions the service already knows how to host, plus the directly-runnable ones.
+    // Anything else with an extension is a document and needs its handler resolved here.
+    private static readonly string[] ServiceHandledExtensions =
+        [".exe", ".com", ".msc", ".cpl", ".bat", ".cmd", ".ps1", ".reg"];
+
+    /// <summary>
+    /// Rewrites a document target into an explicit "handler + file" command line.
+    /// </summary>
+    /// <remarks>
+    /// Done client-side on purpose: file associations are per-user, and the service runs
+    /// as SYSTEM, where the user's default-app choice does not exist. Resolving in the
+    /// service picks the OpenWith.exe chooser instead of the real handler, so the launch
+    /// looks like it did nothing. Left untouched when the type has no handler, so the
+    /// service still reports a proper failure.
+    /// </remarks>
+    private static string ResolveDocumentTarget(string commandLine)
     {
+        if (string.IsNullOrWhiteSpace(commandLine)) return commandLine;
+
+        // Only the bare target is a document candidate; anything with arguments already
+        // names a program to run.
+        string trimmed = commandLine.Trim();
+        string path    = trimmed.StartsWith('"') && trimmed.IndexOf('"', 1) > 0
+            ? trimmed[1..trimmed.IndexOf('"', 1)]
+            : trimmed;
+        if (path.Length != trimmed.Length && !trimmed.EndsWith('"')) return commandLine; // has args
+        if (path.Contains(' ') && path == trimmed) return commandLine;                   // unquoted args
+
+        string ext = System.IO.Path.GetExtension(path);
+        if (ext.Length == 0 ||
+            Array.Exists(ServiceHandledExtensions, e => e.Equals(ext, StringComparison.OrdinalIgnoreCase)))
+            return commandLine;
+
+        return NativeMethods.ResolveDocumentCommand(path) ?? commandLine;
+    }
+
+    private async Task<bool> SendAsync(LaunchRequest request, CancellationToken ct,
+        Action<PipeMessage>? onMessage = null, bool logStdout = true)
+    {
+        // Single choke point: every launch, from the tray or the CLI, passes through here.
+        if (request.Verb == "launch")
+        {
+            string resolved = ResolveDocumentTarget(request.CommandLine);
+            if (!ReferenceEquals(resolved, request.CommandLine))
+                request = request with { CommandLine = resolved };
+        }
+
         using var pipe = new NamedPipeClientStream(
             ".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 
@@ -166,7 +226,8 @@ internal sealed class PipeClient
                     case "stdout":
                         // Child process output — route through the same LogMessage event so
                         // it appears in the tray log area and the CLI caller's console.
-                        Log(msg.Content);
+                        // Suppressed when the caller is collecting these lines itself.
+                        if (logStdout) Log(msg.Content);
                         break;
                     case "pid":
                         // Grant the launched process the right to bring itself to

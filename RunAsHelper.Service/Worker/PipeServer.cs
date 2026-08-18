@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
@@ -57,6 +58,27 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     {
         public required JobInfo Info { get; init; }
         public volatile uint LivePid;
+
+        // Rolling tail of the child's captured output, so the tray can show what a job
+        // is actually doing rather than just its command line. Bounded: a chatty job
+        // must not grow the service's memory without limit, and only the recent lines
+        // are useful for "why is this stuck?".
+        private const int MaxLines = 200;
+        private readonly Queue<string> _output = new();
+
+        public void AddOutput(string line)
+        {
+            lock (_output)
+            {
+                _output.Enqueue(line);
+                while (_output.Count > MaxLines) _output.Dequeue();
+            }
+        }
+
+        public string[] OutputTail()
+        {
+            lock (_output) return _output.ToArray();
+        }
     }
 
     // Clears every piece of gate state together, so a revoked gate can never leave a
@@ -327,7 +349,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                 // Deliberately NOT reachable through the open CLI gate: listing exposes the
                 // command lines of elevated launches, and killing is destructive, so neither
                 // may be available to every process that can merely reach the pipe.
-                if (request.Verb is "jobs" or "killjob")
+                if (request.Verb is "jobs" or "killjob" or "joblog")
                 {
                     if (!isTrayElevated)
                     {
@@ -335,6 +357,26 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                         logger.LogWarning("Rejected {Verb} — {Reason} (pid {Pid}).", request.Verb, reason, clientPid);
                         EventLogHelper.Denied(request.Verb, $"pid {clientPid}: {reason}");
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
+                        return;
+                    }
+
+                    // joblog: the captured output a job has produced so far. Same gate as
+                    // the listing — this is the child's output from an elevated launch.
+                    if (request.Verb == "joblog")
+                    {
+                        if (int.TryParse(request.CommandLine, out int logId) &&
+                            _jobs.TryGetValue(logId, out var logJob))
+                        {
+                            foreach (string line in logJob.OutputTail())
+                                await PipeProtocol.WriteAsync(pipe, new PipeMessage("stdout", line), ct);
+                            await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Success"), ct);
+                        }
+                        else
+                        {
+                            await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
+                                "No such job — it may have finished already."), ct);
+                            await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
+                        }
                         return;
                     }
 
@@ -527,7 +569,10 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                                 using var reader = new System.IO.StreamReader(stdoutStream);
                                 string? line;
                                 while ((line = await reader.ReadLineAsync(pumpCts.Token)) is not null)
+                                {
+                                    tracked.AddOutput(line);
                                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("stdout", line), ct);
+                                }
                             }
                             catch (Exception ex)
                                 when (ex is System.IO.IOException or ObjectDisposedException

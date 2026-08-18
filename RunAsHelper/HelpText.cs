@@ -45,6 +45,7 @@ COMMAND LINE
   /jobs            List the launches currently holding a service launch slot,
                    with their job id, elapsed time, account, PID and command.
   /kill:<id>       Terminate the process behind one of those jobs.
+  /joblog:<id>     Show the output an in-flight capture job has produced so far.
 
   /jobs and /kill need the installed RunAsHelper.exe running elevated (the same
   check that guards the CLI toggle), so they are not available to an arbitrary
@@ -54,6 +55,7 @@ COMMAND LINE
 
   Non-executable targets are launched via their host automatically:
     .msc -> mmc.exe    .cpl -> control.exe    .bat/.cmd -> cmd /c    .ps1 -> powershell
+    .reg -> regedit /s     any other document -> its registered handler
 
   A bare name (e.g. notepad.exe, lusrmgr.msc) is resolved on the PATH. The CLI
   streams the service log to stdout and exits 0 on success, 1 on failure. With
