@@ -273,10 +273,26 @@ namespace RunAsHelper
         // When stdout is already redirected (piped shell, VSCode extension), the
         // handles are already wired — skip AttachConsole which would replace them
         // with the parent's console (which may not exist in that context).
+        // Makes CLI output land somewhere a caller can see it. This app is a WinExe, so
+        // it has no console of its own and starts with no standard handles at all unless
+        // the caller gave it some.
+        //
+        // The decision has to be made on the *handle*, not on Console.IsOutputRedirected.
+        // A null stdout has file type FILE_TYPE_UNKNOWN, which that property reports as
+        // "redirected" — so keying off it skipped the attach in exactly the case that
+        // needs it (an interactive terminal), and every CLI message, --help included,
+        // went into TextWriter.Null and the process exited 0 in silence. Piped and
+        // file-redirected callers keep their own handle (FILE_TYPE_PIPE / _DISK) and are
+        // left alone, which is what v1.6.3 set out to fix.
+        //
+        // Console.Out is bound lazily on first write, so it picks up the handle the
+        // attach installs; no Console.SetOut is needed. Note the shell does not wait for
+        // a WinExe, so in an interactive terminal the text can arrive after the next
+        // prompt is drawn — 'start /wait' or piping fixes the ordering, caller-side.
         private static void ShowConsole()
         {
-            if (!Console.IsOutputRedirected)
-                try { NativeMethods.AttachConsole(NativeMethods.ATTACH_PARENT_PROCESS); } catch { }
+            if (NativeMethods.HasUsableStdOut()) return;
+            try { NativeMethods.AttachConsole(NativeMethods.ATTACH_PARENT_PROCESS); } catch { }
         }
     }
 }

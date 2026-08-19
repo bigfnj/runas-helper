@@ -48,6 +48,29 @@ namespace RunAsHelper.Core
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool AttachConsole(uint dwProcessId);
 
+        // Whether this process already owns a usable stdout. A WinExe starts with no
+        // standard handles unless the caller supplied some (a pipe, a file, or an
+        // inherited console), and GetFileType reports FILE_TYPE_UNKNOWN for a null or
+        // invalid one. Console.IsOutputRedirected cannot answer this: it reports that
+        // same null handle as *redirected*, which is the opposite of what a caller needs
+        // to decide whether to attach to the parent console.
+        internal const int  STD_OUTPUT_HANDLE = -11;
+        internal const uint FILE_TYPE_UNKNOWN = 0x0000;
+
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        internal static partial IntPtr GetStdHandle(int nStdHandle);
+
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        internal static partial uint GetFileType(IntPtr hFile);
+
+        internal static bool HasUsableStdOut()
+        {
+            IntPtr h = GetStdHandle(STD_OUTPUT_HANDLE);
+            return h != IntPtr.Zero
+                   && h != new IntPtr(-1)                 // INVALID_HANDLE_VALUE
+                   && GetFileType(h) != FILE_TYPE_UNKNOWN;
+        }
+
         [LibraryImport("user32.dll", EntryPoint = "SendMessageW")]
         internal static partial IntPtr SendMessage(
             IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);

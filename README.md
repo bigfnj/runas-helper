@@ -308,6 +308,25 @@ Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
 
+## What's new in 2.1.1
+
+- **CLI output is visible in an interactive terminal again.** `--help` — and every other CLI
+  message, including `/jobs`, `/joblog:<id>` and the launch log — printed nothing when run
+  from a normal console: the process exited 0 in silence. Only redirected callers (a pipe,
+  `> file`, a script capturing output) ever saw anything, which is why it looked
+  inconsistent.
+- **Cause:** this app is a WinExe, so it has no console of its own and starts with *no*
+  standard handles unless the caller supplied some. `ShowConsole()` decided whether to
+  attach to the parent console using `Console.IsOutputRedirected`, and .NET reports a null
+  stdout handle (`FILE_TYPE_UNKNOWN`) as *redirected* — so the attach was skipped in exactly
+  the case that needs it, and `Console.Out` stayed `TextWriter.Null`. It now decides on the
+  handle itself (`GetStdHandle` + `GetFileType`), so a caller that owns stdout keeps it
+  (preserving the 1.6.3 fix for piped shells) and a caller that does not gets the parent
+  console.
+- Note the shell does not wait for a WinExe, so in an interactive terminal the output can
+  arrive after the next prompt is drawn. That is caller-side: `start /wait RunAsHelper.exe
+  --help` in cmd, or pipe it (`RunAsHelper.exe --help | more`) in PowerShell.
+
 ## What's new in 2.1.0
 
 - **Active Jobs is now a pane in the main window, not a dialog.** Clicking the status bar's
