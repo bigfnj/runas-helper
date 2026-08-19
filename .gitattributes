@@ -1,1 +1,7 @@
-*.twin linguist-language=vb6
+# Normalise text line endings: LF in the repository, native on checkout. The
+# tracked binaries are marked explicitly so no conversion can ever touch them.
+* text=auto
+
+*.ico binary
+*.png binary
+*.cer binary
