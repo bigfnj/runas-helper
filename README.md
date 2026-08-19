@@ -100,8 +100,11 @@ icon (see *Startup* below). The main window is a **saved-applications manager**:
   or **Run as SYSTEM** (the button you click chooses the account).
 - **Tools menu** — Settings, Validate Installation, **Active Jobs**, Open PowerShell
   (TrustedInstaller), Import/Export saved apps, and **How to Use**.
-- **Active Jobs** — what is currently holding a service launch slot, with live slot
-  usage and a **Kill** button for a job that is stuck. Needs an elevated tray.
+- **Active Jobs** — a collapsible pane on the right of the main window: what is currently
+  holding a service launch slot, with live slot usage, each job's captured output, and a
+  **Kill** button for one that is stuck. Click the status bar's **Jobs:** count (or *Tools →
+  Active Jobs*) to expand it, and again to collapse it. Needs an elevated tray to list
+  anything.
 
 **Elevation (Activate).** The tray runs **non-elevated** (greyed icon). The
 service's control pipe only admits elevated administrators, so click the
@@ -304,6 +307,26 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
 Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
+
+## What's new in 2.1.0
+
+- **Active Jobs is now a pane in the main window, not a dialog.** Clicking the status bar's
+  **Jobs:** count expands it along the right-hand side; clicking again collapses it. It
+  starts collapsed on every launch, so nothing changes for anyone who does not want it.
+  *Tools → Active Jobs* toggles the same pane (and shows a tick while it is open), so there
+  is one Active Jobs surface rather than two.
+- **Expanding grows the window instead of shrinking what is already there.** The window
+  widens to the right by the pane's width and hands that width back when the pane closes,
+  so the saved-apps list keeps the size you gave it. A window that would run off the
+  monitor slides left instead, and one that still cannot fit is capped at the work area.
+  Maximized windows are left alone — the pane takes its space from the client area.
+- **The divider is draggable and the width is remembered** (in `settings.json`, as
+  `JobsPaneWidth`); the pane's own visibility deliberately is not, so a wide pane never
+  decides how big the window opens. Collapsing returns exactly the width expanding took,
+  so widening the pane does not eat into the left-hand column when you close it.
+- **The pane only polls the service while it is on screen** — collapsed, or with the window
+  hidden to the tray, it stops. Not elevated, it says so in place of the slot count instead
+  of showing a blank list.
 
 ## What's new in 1.6.3
 

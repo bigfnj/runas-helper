@@ -85,6 +85,11 @@ namespace RunAsHelper.Settings
         // the system so the app matches the desktop without anyone configuring it.
         public int Theme { get; set; } = 0;
 
+        // Width of the main window's Active Jobs pane, in pixels. Only the width is
+        // persisted: the pane itself always starts collapsed, so a wide pane never
+        // decides how big the window opens.
+        public int JobsPaneWidth { get; set; } = 560;
+
         // How long an opened CLI gate stays open before the service auto-closes it.
         // Persisted (it is a preference, not the gate itself). 0 = no expiry.
         public int CliGateMinutes { get; set; } = 30;

@@ -60,6 +60,10 @@ namespace RunAsHelper
             // ── Saved-apps list (fills) ───────────────────────────────────────
             lvApps = new ListView();
 
+            // ── Active Jobs pane (right, collapsed) ───────────────────────────
+            splitJobs = new Splitter();
+            jobsPanel = new JobsPanel();
+
             // ── Bottom panel (log + status) ───────────────────────────────────
             panelBottom = new Panel();
             txtLog      = new TextBox();
@@ -84,7 +88,7 @@ namespace RunAsHelper
             // ── Tools menu ───────────────────────────────────────────────────
             menuSettings.Text      = "Settings...";
             menuValidate.Text      = "Validate Installation...";
-            menuActiveJobs.Text    = "Active Jobs...";
+            menuActiveJobs.Text    = "Active Jobs";   // toggles the pane, not a dialog
             menuToolsOpenPwsh.Text = "Open PowerShell (TrustedInstaller)";
             menuImport.Text        = "Import Saved Apps...";
             menuExport.Text        = "Export Saved Apps...";
@@ -222,6 +226,23 @@ namespace RunAsHelper
             lvApps.Columns.Add("File Location", 330);
             lvApps.Columns.Add("Parameter", 150);
 
+            // ── Active Jobs pane ──────────────────────────────────────────────
+            // Collapsed by default and expanded in place (the window grows to the right)
+            // rather than opening a dialog — see MainForm.SetJobsPaneVisible. Hidden
+            // Dock=Right controls take no space, so a collapsed pane costs no layout.
+            jobsPanel.Dock    = DockStyle.Right;
+            jobsPanel.Width   = 560;
+            jobsPanel.Visible = false;
+
+            splitJobs.Dock    = DockStyle.Right;
+            splitJobs.Width   = 6;
+            splitJobs.MinSize  = 380;  // narrowest the pane can be dragged...
+            splitJobs.MinExtra = 420;  // ...and the width the left-hand column keeps,
+                                       // near the window's own 520 minimum so a drag
+                                       // cannot squeeze the saved-apps list narrower
+                                       // than resizing the window ever could
+            splitJobs.Visible = false;
+
             // ── Bottom panel ──────────────────────────────────────────────────
             panelBottom.Dock   = DockStyle.Bottom;
             panelBottom.Height  = 116;
@@ -302,6 +323,9 @@ namespace RunAsHelper
             statusJobs.BorderSides  = ToolStripStatusLabelBorderSides.Left;
             statusJobs.BorderStyle  = Border3DStyle.Etched;
             statusJobs.Text         = "Jobs: —";
+            // The count is also the pane's toggle (MainForm.StatusJobs_Click).
+            statusJobs.ToolTipText  = "Click to show Active Jobs";
+            statusJobs.AccessibleName = "Active jobs — click to show or hide the Active Jobs pane";
 
             statusStrip.SizingGrip = true;
             statusStrip.Items.AddRange(new ToolStripItem[] { statusService, statusGate, statusJobs });
@@ -316,10 +340,15 @@ namespace RunAsHelper
             MainMenuStrip       = menuStrip;
 
             // Add order matters for docking: Fill first, then edges, outermost last.
+            // The jobs pane is added just before the menu strip so it docks second and
+            // becomes a full-height right-hand column — the quick-run panel, status bar
+            // and log then live in the column to its left, as in a two-pane window.
             Controls.Add(lvApps);
             Controls.Add(statusStrip);
             Controls.Add(panelBottom);
             Controls.Add(panelTop);
+            Controls.Add(splitJobs);
+            Controls.Add(jobsPanel);
             Controls.Add(menuStrip);
 
             ResumeLayout(false);
@@ -368,6 +397,10 @@ namespace RunAsHelper
 
         // ── Saved-apps list ─────────────────────────────────────────────────────
         private ListView lvApps;
+
+        // ── Active Jobs pane ─────────────────────────────────────────────────────
+        private Splitter  splitJobs;
+        private JobsPanel jobsPanel;
 
         // ── Bottom panel ─────────────────────────────────────────────────────────
         private Panel   panelBottom;

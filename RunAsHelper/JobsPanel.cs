@@ -8,44 +8,56 @@ using RunAsHelper.Shared.Protocol;
 namespace RunAsHelper
 {
     /// <summary>
-    /// Shows the launches currently holding a service launch slot, and lets an operator
-    /// terminate one that is stuck.
+    /// The Active Jobs view: which launches are currently holding a service launch slot,
+    /// what they have printed so far, and a way to terminate one that is stuck.
     ///
     /// Context: the service allows a bounded number of concurrent launches. A
     /// fire-and-forget launch releases its slot as soon as the process is created, so in
     /// practice the jobs listed here are <c>/capture</c> launches, which hold their slot
     /// until the child exits or the <c>/timeout</c> ceiling fires. Before this view a
     /// stuck capture job was invisible — the service simply looked unresponsive.
+    ///
+    /// This lives in the main window as a collapsible right-hand pane (toggled by the
+    /// status bar's "Jobs:" label or Tools → Active Jobs) rather than in a dialog, so the
+    /// count you clicked and the jobs behind it are on screen together. Polling follows
+    /// <see cref="Control.Visible"/>, which is false both while the pane is collapsed and
+    /// while the whole window is hidden to the tray — neither state has a reader.
     /// </summary>
-    internal sealed class JobsForm : Form
+    internal sealed class JobsPanel : UserControl
     {
-        private readonly PipeClient _client = new();
-        private readonly ListView   _list   = new();
-        private readonly Label      _slots  = new();
+        private readonly PipeClient _client      = new();
+        private readonly Label      _header      = new();
+        private readonly ListView   _list        = new();
+        private readonly Panel      _outputBox   = new();
         private readonly Label      _outputLabel = new();
-        private readonly TextBox    _output = new();
-        private int _outputForJob = -1;
-        private readonly Button     _kill   = new();
-        private readonly Button     _close  = new();
-        private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 2_000 };
+        private readonly TextBox    _output      = new();
+        private readonly Panel      _footer      = new();
+        private readonly Label      _slots       = new();
+        private readonly Button     _kill        = new();
+        private readonly Button     _close       = new();
+        private int  _outputForJob = -1;
         private bool _busy;
+        private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 2_000 };
 
-        public JobsForm()
+        /// <summary>Raised by the pane's Close button; the host collapses the pane.</summary>
+        public event EventHandler? CloseRequested;
+
+        public JobsPanel()
         {
-            Text            = "Active Jobs";
-            StartPosition   = FormStartPosition.CenterParent;
-            FormBorderStyle = FormBorderStyle.SizableToolWindow;
-            MinimizeBox     = false;
-            MaximizeBox     = false;
-            ClientSize      = new Size(820, 520);
-            MinimumSize     = new Size(620, 420);
+            Padding = new Padding(8, 4, 8, 8);
 
-            _list.SetBounds(12, 12, ClientSize.Width - 24, ClientSize.Height - 244);
+            _header.Dock      = DockStyle.Top;
+            _header.Height    = 22;
+            _header.Font      = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            _header.TextAlign = ContentAlignment.MiddleLeft;
+            _header.Text      = "Active Jobs";
+
+            _list.Dock          = DockStyle.Fill;
             _list.View          = View.Details;
             _list.FullRowSelect = true;
             _list.MultiSelect   = false;
             _list.HideSelection = false;
-            _list.Anchor        = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+            _list.ShowItemToolTips = true;
             _list.Columns.Add("Job", 46);
             _list.Columns.Add("Elapsed", 70);
             _list.Columns.Add("Account", 110);
@@ -53,58 +65,121 @@ namespace RunAsHelper
             _list.Columns.Add("PID", 60);
             _list.Columns.Add("Command", 300);
             _list.SelectedIndexChanged += async (_, _) => { UpdateButtons(); await LoadOutputAsync(); };
+            _list.Resize += (_, _) => StretchCommandColumn();
 
-            // Output pane: what the selected job has actually printed so far. A command
+            // Output box: what the selected job has actually printed so far. A command
             // line tells you what was asked for; this tells you where it got stuck.
-            _outputLabel.SetBounds(12, ClientSize.Height - 228, 300, 16);
-            _outputLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            _outputLabel.Text   = "Captured output (select a job):";
+            _outputLabel.Dock      = DockStyle.Top;
+            _outputLabel.Height    = 18;
+            _outputLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _outputLabel.Text      = "Captured output (select a job):";
 
-            _output.SetBounds(12, ClientSize.Height - 208, ClientSize.Width - 24, 140);
-            _output.Anchor     = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            _output.Dock       = DockStyle.Fill;
             _output.Multiline  = true;
             _output.ReadOnly   = true;
             _output.ScrollBars = ScrollBars.Vertical;
             _output.WordWrap   = false;
             _output.Font       = new Font(FontFamily.GenericMonospace, 8.5f);
 
-            _slots.SetBounds(12, ClientSize.Height - 64, 320, 20);
-            _slots.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            _slots.Text   = "Slots in use: —";
+            _outputBox.Dock    = DockStyle.Bottom;
+            _outputBox.Height  = 168;
+            _outputBox.Padding = new Padding(0, 6, 0, 0);
+            _outputBox.Controls.Add(_output);        // Fill first...
+            _outputBox.Controls.Add(_outputLabel);   // ...edge last
 
-            _kill.SetBounds(ClientSize.Width - 200, ClientSize.Height - 68, 90, 28);
-            _kill.Anchor  = AnchorStyles.Bottom | AnchorStyles.Right;
+            _slots.Dock      = DockStyle.Left;
+            _slots.Width     = 250;
+            _slots.TextAlign = ContentAlignment.MiddleLeft;
+            _slots.Text      = "Slots in use: —";
+
+            _kill.Size    = new Size(90, 28);
             _kill.Text    = "Kill";
             _kill.Enabled = false;
             _kill.Click  += async (_, _) => await KillSelectedAsync();
 
-            _close.SetBounds(ClientSize.Width - 102, ClientSize.Height - 68, 90, 28);
-            _close.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            _close.Size   = new Size(90, 28);
             _close.Text   = "Close";
-            _close.Click += (_, _) => Close();
+            _close.Click += (_, _) => CloseRequested?.Invoke(this, EventArgs.Empty);
 
-            Controls.AddRange([_list, _outputLabel, _output, _slots, _kill, _close]);
-            CancelButton = _close;
+            _footer.Dock    = DockStyle.Bottom;
+            _footer.Height  = 36;
+            _footer.Padding = new Padding(0, 6, 0, 0);
+            _footer.Controls.AddRange([_slots, _kill, _close]);
+            _footer.SizeChanged += (_, _) => LayoutFooter();
+
+            Controls.Add(_list);        // Fill first...
+            Controls.Add(_outputBox);
+            Controls.Add(_footer);
+            Controls.Add(_header);      // ...edges outermost last
 
             _refresh.Tick += async (_, _) => await ReloadAsync();
         }
 
-        protected override async void OnShown(EventArgs e)
+        // The command line is the one open-ended column, so it absorbs the leftover
+        // width — the pane is narrow enough that fixed columns would otherwise leave a
+        // horizontal scrollbar under the list at every size.
+        private void StretchCommandColumn()
         {
-            base.OnShown(e);
-            await ReloadAsync();
-            _refresh.Start();
+            if (_list.Columns.Count < 6) return;
+            int fixedW = 0;
+            for (int i = 0; i < _list.Columns.Count - 1; i++) fixedW += _list.Columns[i].Width;
+            _list.Columns[^1].Width = Math.Max(LogicalToDeviceUnits(120),
+                                               _list.ClientSize.Width - fixedW - 4);
         }
 
-        protected override void OnFormClosed(FormClosedEventArgs e)
+        // Places the two buttons at the footer's right edge. Driven explicitly rather
+        // than by a Top|Right anchor for the same reason as MainForm's quick-run path
+        // box: under AutoScaleMode.Font the anchored right margin did not hold, and
+        // this panel is resized twice over — by the window and by the pane splitter.
+        private void LayoutFooter()
         {
-            _refresh.Stop();
-            _refresh.Dispose();
-            base.OnFormClosed(e);
+            int top = _footer.Padding.Top;
+            _close.Location = new Point(_footer.ClientSize.Width - _close.Width, top);
+            _kill.Location  = new Point(_close.Left - _kill.Width - LogicalToDeviceUnits(8), top);
+        }
+
+        // Polling follows effective visibility: collapsing the pane or hiding the window
+        // to the tray both stop it, and re-showing reloads at once rather than leaving a
+        // stale snapshot up for a whole refresh interval.
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            if (Visible)
+            {
+                LayoutFooter();
+                StretchCommandColumn();
+                _refresh.Start();
+                _ = ReloadAsync();
+            }
+            else
+            {
+                _refresh.Stop();
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _refresh.Stop();
+                _refresh.Dispose();
+            }
+            base.Dispose(disposing);
         }
 
         private async Task ReloadAsync()
         {
+            // The service only answers the job verbs for the installed, elevated tray,
+            // so say why the pane is empty instead of showing a blank list that looks
+            // broken — and skip a round-trip that would fail anyway.
+            if (!NativeMethods.IsUserAnAdmin())
+            {
+                _list.Items.Clear();
+                _slots.Text = "Needs an elevated tray — click Activate.";
+                UpdateButtons();
+                return;
+            }
+
             // Overlapping refreshes would fight over the list; skip a tick if the
             // previous round-trip has not finished.
             if (_busy) return;
@@ -214,11 +289,5 @@ namespace RunAsHelper
                     "RunAS Helper", MessageBoxButtons.OK, MessageBoxIcon.Information);
             await ReloadAsync();
         }
-    
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e);
-            Theme.Apply(this);   // match whatever palette the app is using
-        }
-}
+    }
 }
