@@ -100,6 +100,11 @@ icon (see *Startup* below). The main window is a **saved-applications manager**:
   or **Run as SYSTEM** (the button you click chooses the account).
 - **Tools menu** — Settings, Validate Installation, **Active Jobs**, Open PowerShell
   (TrustedInstaller), Import/Export saved apps, and **How to Use**.
+- **Status bar** — three live indicators along the bottom: the **service** state, the
+  **CLI gate** (`CLI: off`, or `CLI: open` with the time left), and the **Jobs:** slot count.
+  The last two are clickable: the gate label opens the gate for the configured duration, and
+  the job count expands the Active Jobs pane. It only polls the service while the window is
+  on screen.
 - **Active Jobs** — a collapsible pane on the right of the main window: what is currently
   holding a service launch slot, with live slot usage, each job's captured output, and a
   **Kill** button for one that is stuck. Click the status bar's **Jobs:** count (or *Tools →
@@ -347,43 +352,14 @@ reinstall in place (handy during development).
   hidden to the tray, it stops. Not elevated, it says so in place of the slot count instead
   of showing a blank list.
 
-## What's new in 1.6.3
+## What's new in 2.0.5
 
-- **`/capture` output visible in piped shells** — `RunAsHelper.exe` is a WinExe
-  with no console of its own. Previously it always called `AttachConsole` to
-  attach to the parent's console window, which failed silently in non-interactive
-  shells (CI pipelines, IDE extension runners, PowerShell jobs) and discarded all
-  output. Now `AttachConsole` is only called when stdout is *not* already
-  redirected; when it is (piped shells), `Console.Out` is already wired and output
-  flows correctly without it.
-- **`/capture` mode fixed** — anonymous pipe handles created by `CreatePipe` are
-  synchronous (no `FILE_FLAG_OVERLAPPED`). The `FileStream` wrapping the read end
-  was constructed with `isAsync: true`, which throws
-  `"Handle does not support asynchronous operations"` and aborted every capture
-  launch. Changed to `isAsync: false`; `StreamReader.ReadLineAsync` on a sync
-  stream works correctly from `Task.Run`.
-
-## What's new in 1.6.2
-
-- **Concurrent launches** — the service previously serialized *all* pipe connections
-  through a single `SemaphoreSlim(1,1)` gate to avoid interleaved log output. This
-  caused a critical stuck-gate failure: one long-running `/capture` launch (or a
-  hung child process) blocked every subsequent CLI call indefinitely. The gate is
-  now `SemaphoreSlim(10,10)` — up to ten concurrent launches run in parallel, each
-  routed to its own `Channel<string>` log stream.
-- **30-second busy timeout** — if all ten slots are occupied, new requests fail
-  fast with a "service busy" message rather than queueing behind stuck jobs.
-- **Log-channel deadlock fix** — if `LaunchElevated` threw before writing to the
-  log channel, the `await foreach` drain loop on the pipe would hang forever
-  because `Writer.Complete()` was never called. Now wrapped in `try/finally` so the
-  channel is always completed, even on exception.
-- **Thread-safe token initialization** — `ElevationLauncher.Initialize()` is now
-  guarded by a lock so concurrent `ValidateToken` calls can't race on the token
-  chain. Log messages are routed per-call via an `Action<string>? log` parameter
-  instead of a shared event, eliminating the last shared-state coupling.
-- **`/capture` without `/timeout` warning** — the service now emits a `[warning]`
-  log line when `/capture` is used without a `/timeout:N` ceiling, so operators
-  know an infinite wait is in effect.
+- **The status bar's `CLI: off` label is now a one-click gate opener.** Clicking it opens the
+  command-line gate for the configured `CliGateMinutes` without a trip through *Settings*,
+  logs that it was opened from the status bar, and shows the countdown in place. The label
+  only acts as a button when opening the gate could actually work — an elevated tray with the
+  service reachable — and its tooltip and hover cursor say which of the two it is, rather
+  than offering a click that would fail.
 
 ## What's new in 2.0.4
 
@@ -526,6 +502,44 @@ the docs now describe what the tool actually does. Everything delivered along th
   runs over an asynchronous pipe, so a pending read is cancelled at the ceiling: the caller
   returns immediately, the slot is freed, and the child keeps running as documented.
 
+## What's new in 1.6.3
+
+- **`/capture` output visible in piped shells** — `RunAsHelper.exe` is a WinExe
+  with no console of its own. Previously it always called `AttachConsole` to
+  attach to the parent's console window, which failed silently in non-interactive
+  shells (CI pipelines, IDE extension runners, PowerShell jobs) and discarded all
+  output. Now `AttachConsole` is only called when stdout is *not* already
+  redirected; when it is (piped shells), `Console.Out` is already wired and output
+  flows correctly without it.
+- **`/capture` mode fixed** — anonymous pipe handles created by `CreatePipe` are
+  synchronous (no `FILE_FLAG_OVERLAPPED`). The `FileStream` wrapping the read end
+  was constructed with `isAsync: true`, which throws
+  `"Handle does not support asynchronous operations"` and aborted every capture
+  launch. Changed to `isAsync: false`; `StreamReader.ReadLineAsync` on a sync
+  stream works correctly from `Task.Run`.
+
+## What's new in 1.6.2
+
+- **Concurrent launches** — the service previously serialized *all* pipe connections
+  through a single `SemaphoreSlim(1,1)` gate to avoid interleaved log output. This
+  caused a critical stuck-gate failure: one long-running `/capture` launch (or a
+  hung child process) blocked every subsequent CLI call indefinitely. The gate is
+  now `SemaphoreSlim(10,10)` — up to ten concurrent launches run in parallel, each
+  routed to its own `Channel<string>` log stream.
+- **30-second busy timeout** — if all ten slots are occupied, new requests fail
+  fast with a "service busy" message rather than queueing behind stuck jobs.
+- **Log-channel deadlock fix** — if `LaunchElevated` threw before writing to the
+  log channel, the `await foreach` drain loop on the pipe would hang forever
+  because `Writer.Complete()` was never called. Now wrapped in `try/finally` so the
+  channel is always completed, even on exception.
+- **Thread-safe token initialization** — `ElevationLauncher.Initialize()` is now
+  guarded by a lock so concurrent `ValidateToken` calls can't race on the token
+  chain. Log messages are routed per-call via an `Action<string>? log` parameter
+  instead of a shared event, eliminating the last shared-state coupling.
+- **`/capture` without `/timeout` warning** — the service now emits a `[warning]`
+  log line when `/capture` is used without a `/timeout:N` ceiling, so operators
+  know an infinite wait is in effect.
+
 ## What's new in 1.6.1
 
 - **Crash diagnostics** — the app now installs process-wide exception handlers
@@ -595,7 +609,7 @@ the docs now describe what the tool actually does. Everything delivered along th
 
 ## Project status
 
-**Feature-complete.** The corporate-hardening backlog was reviewed and closed on
+**Feature-complete, at v2.1.1.** The corporate-hardening backlog was reviewed and closed on
 2026-08-18 — see [`PLAN.md`](PLAN.md) for the per-item reasoning. In short: publisher
 pinning is blocked on a purchased certificate (pinning the self-signed one would break
 unsigned official builds), AD-group pipe ACLs only pay off on a domain-joined machine,
@@ -603,10 +617,22 @@ and a per-launch justification field earns its keep only when someone *other* th
 operator reads the audit trail — events 1001–1006 already record who launched what,
 when, and from which source.
 
-One known issue is open and has no action available: a single unexplained
-`0xe0434352` crash from before v1.6.1, which has not recurred. Every build since ships a
-crash logger that writes the full stack to `%AppData%\RunAsHelper\crash.log` (and Event
-ID 1099), so it will identify itself if it ever comes back.
+"Feature-complete" means the backlog is closed, not that nothing needed fixing: three bug
+reports and two UX changes followed it in 2.0.2 → 2.1.1 (the Activate hand-off crash, the
+Installation Check nag, invisible CLI output, the one-click CLI gate, and Active Jobs as a
+pane). Fixes and small UX work still land; new capability is not planned.
+
+Two things are open, neither with action pending:
+
+- A single unexplained `0xe0434352` crash from before v1.6.1, which has not recurred. Every
+  build since ships a crash logger that writes the full stack to
+  `%AppData%\RunAsHelper\crash.log` (and Event ID 1099), so it will identify itself if it
+  ever comes back.
+- **Activate does not confirm the elevated copy started.** `ActivateElevation()` exits the
+  non-elevated instance to hand over the single-instance mutex without waiting for its
+  replacement to come up. That is what turned the 2.0.2 startup crash into "the app
+  vanished" rather than "it is still not elevated"; the crash is fixed, but the hand-off is
+  still unguarded.
 
 ## License
 
