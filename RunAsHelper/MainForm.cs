@@ -144,6 +144,9 @@ namespace RunAsHelper
                 UpdateGateStatus();
             };
             _statusBarTimer.Tick   += async (_, _) => await RefreshJobCountAsync();
+            statusGate.Click       += StatusGate_Click;
+            statusGate.MouseEnter  += (_, _) => UpdateGateCursor();
+            statusGate.MouseLeave  += (_, _) => statusStrip.Cursor = Cursors.Default;
         }
 
         private void SetTrayIcon()
@@ -559,12 +562,18 @@ namespace RunAsHelper
 
         // "CLI: off" / "CLI: open (23m left)" / "CLI: open (no expiry)". The countdown
         // shown here is the tray's mirror; the service enforces the real deadline.
+        // When off and clickable (elevated + service running), the label acts as a
+        // one-click gate opener for the configured CliGateMinutes duration.
         private void UpdateGateStatus()
         {
             if (!_settings.AllowCommandLine)
             {
                 statusGate.Text = "CLI: off";
                 statusGate.ForeColor = Theme.Fore;
+                bool canOpen = NativeMethods.IsUserAnAdmin() && _serviceOnline == true;
+                statusGate.ToolTipText = canOpen
+                    ? $"Click to open CLI gate for {_settings.CliGateMinutes} minute(s)"
+                    : "CLI gate is closed";
                 return;
             }
 
@@ -578,8 +587,45 @@ namespace RunAsHelper
                         ? $"{(int)left.TotalMinutes}m left"
                         : $"{(int)left.TotalSeconds}s left";
             }
-            statusGate.Text = $"CLI: open ({detail})";
-            statusGate.ForeColor = Theme.Warn;   // an open gate is worth noticing
+            statusGate.Text        = $"CLI: open ({detail})";
+            statusGate.ForeColor   = Theme.Warn;   // an open gate is worth noticing
+            statusGate.ToolTipText = "CLI gate is open";
+        }
+
+        // Changes the status strip's cursor to a hand while hovering over the gate
+        // label — but only when the gate is actually clickable (elevated + service up).
+        private void UpdateGateCursor()
+        {
+            bool clickable = !_settings.AllowCommandLine
+                             && NativeMethods.IsUserAnAdmin()
+                             && _serviceOnline == true;
+            statusStrip.Cursor = clickable ? Cursors.Hand : Cursors.Default;
+        }
+
+        // One-click gate opener: clicking "CLI: off" opens the gate for the
+        // configured CliGateMinutes without needing to open the Settings dialog.
+        private void StatusGate_Click(object? sender, EventArgs e)
+        {
+            if (_settings.AllowCommandLine) return;   // already open
+
+            if (!NativeMethods.IsUserAnAdmin())
+            {
+                AppendLog("Cannot open CLI gate — not elevated. Click Activate first.");
+                return;
+            }
+            if (_serviceOnline != true)
+            {
+                AppendLog("Cannot open CLI gate — service is not running.");
+                return;
+            }
+
+            _settings.AllowCommandLine = true;
+            PushCliAllowed();
+            AppendLog($"CLI gate opened for {_settings.CliGateMinutes} minute(s) via status bar.");
+            if (_settings.ShowTrayNotifications)
+                notifyIcon.ShowBalloonTip(3000, "RunAS Helper",
+                    $"CLI gate open for {_settings.CliGateMinutes} minute(s).",
+                    ToolTipIcon.Info);
         }
 
         // Job count comes from the same tray-only verb the Active Jobs view uses, so it
