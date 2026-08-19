@@ -147,6 +147,10 @@ namespace RunAsHelper
             statusGate.Click       += StatusGate_Click;
             statusGate.MouseEnter  += (_, _) => UpdateGateCursor();
             statusGate.MouseLeave  += (_, _) => statusStrip.Cursor = Cursors.Default;
+            statusJobs.Click       += (_, _) => ToggleJobsPane();
+            statusJobs.MouseEnter  += (_, _) => statusStrip.Cursor = Cursors.Hand;
+            statusJobs.MouseLeave  += (_, _) => statusStrip.Cursor = Cursors.Default;
+            jobsPanel.CloseRequested += (_, _) => SetJobsPaneVisible(false);
         }
 
         private void SetTrayIcon()
@@ -228,6 +232,10 @@ namespace RunAsHelper
 
             comboPriority.SelectedIndex = Math.Clamp(_settings.PriorityIndex, 0, comboPriority.Items.Count - 1);
             RefreshMruCombo();
+
+            // Pane width only — the pane itself always starts collapsed.
+            jobsPanel.Width = Math.Clamp(_settings.JobsPaneWidth,
+                                         splitJobs.MinSize, LogicalToDeviceUnits(1400));
 
             // Register/unregister the login auto-start (HKCU Run → "exe" --tray).
             ApplyStartupRegistration();
@@ -335,6 +343,7 @@ namespace RunAsHelper
                 HideToTray();
                 return;
             }
+            RememberJobsPaneWidth();
             _statusTimer.Stop();
             _cliGateTimer.Stop();
             _statusBarTimer.Stop();
@@ -646,6 +655,87 @@ namespace RunAsHelper
             finally { _statusBarBusy = false; }
         }
 
+        // ── Active Jobs pane ─────────────────────────────────────────────────
+
+        // The form's MinimumSize width with the pane collapsed. Captured on the first
+        // toggle, by which point AutoScaleMode.Font has already scaled the designer
+        // value, so the restored floor matches the current DPI.
+        private int _baseMinWidth;
+
+        // How much width expanding the pane actually added to the window. Collapsing
+        // gives back exactly this, which is not the same as the pane's current width: a
+        // splitter drag moves the boundary *inside* the window, so subtracting a pane
+        // the user had widened would steal that width from the left-hand column.
+        private int _paneGrewBy;
+
+        private void ToggleJobsPane() => SetJobsPaneVisible(!jobsPanel.Visible);
+
+        /// <summary>
+        /// Expands or collapses the right-hand Active Jobs pane — the status bar's job
+        /// count and Tools → Active Jobs both land here. Expanding grows the window to
+        /// the right by the pane's width rather than squeezing the saved-apps list, so
+        /// the left column keeps the size the user chose; collapsing hands that width
+        /// back. The pane starts collapsed on every launch (its width is remembered,
+        /// its visibility deliberately is not).
+        /// </summary>
+        private void SetJobsPaneVisible(bool show)
+        {
+            if (jobsPanel.Visible == show) return;
+            if (_baseMinWidth == 0) _baseMinWidth = MinimumSize.Width;
+
+            int extra = jobsPanel.Width + splitJobs.Width;
+
+            SuspendLayout();
+            if (show)
+            {
+                jobsPanel.Visible = splitJobs.Visible = true;
+                // Widen first, then raise the minimum width so the pane cannot be
+                // crushed: MinimumSize is enforced the moment it is set, which would
+                // otherwise fight the work-area clamp in GrowForPane. Never raise it
+                // above the width actually achieved, or a window that could not grow
+                // (small screen) would be forced off the monitor.
+                int widthBefore = Width;
+                if (WindowState == FormWindowState.Normal) GrowForPane(extra);
+                _paneGrewBy = Width - widthBefore;
+                MinimumSize = new Size(Math.Min(_baseMinWidth + extra, Width), MinimumSize.Height);
+            }
+            else
+            {
+                RememberJobsPaneWidth();
+                MinimumSize = new Size(_baseMinWidth, MinimumSize.Height);
+                jobsPanel.Visible = splitJobs.Visible = false;
+                if (WindowState == FormWindowState.Normal && _paneGrewBy > 0)
+                    Width = Math.Max(_baseMinWidth, Width - _paneGrewBy);
+                _paneGrewBy = 0;
+            }
+            ResumeLayout(true);
+
+            menuActiveJobs.Checked = show;
+            statusJobs.ToolTipText = show ? "Click to hide Active Jobs" : "Click to show Active Jobs";
+            // The pane's native chrome (list headers, scrollbars, edit border) can only
+            // be themed once its handles exist — which is the first time it is shown.
+            if (show) ApplyTheme();
+        }
+
+        // Grows the window rightwards by the pane width, keeping it on the monitor it is
+        // already on: slide left when the right edge would leave the work area, and cap
+        // at the work area width when the pane cannot fit at all.
+        private void GrowForPane(int extra)
+        {
+            var work  = Screen.FromControl(this).WorkingArea;
+            int width = Math.Min(Width + extra, work.Width);
+            int left  = (Left + width > work.Right) ? Math.Max(work.Left, work.Right - width) : Left;
+            SetBounds(left, Top, width, Height);
+        }
+
+        // A splitter drag is a preference, so it outlives the session.
+        private void RememberJobsPaneWidth()
+        {
+            if (!jobsPanel.Visible || jobsPanel.Width == _settings.JobsPaneWidth) return;
+            _settings.JobsPaneWidth = jobsPanel.Width;
+            _settings.Save();
+        }
+
         // Only poll while the window is on screen; a tray-only session has nobody to
         // read the status bar.
         private void SetStatusPolling(bool on)
@@ -683,21 +773,9 @@ namespace RunAsHelper
             form.ShowDialog(this);
         }
 
-        // Shows what is currently holding a service launch slot. The service only
-        // answers this for the installed, elevated tray, so say why it would be empty
-        // rather than showing a blank window that looks broken.
-        private void MenuActiveJobs_Click(object? sender, EventArgs e)
-        {
-            if (!NativeMethods.IsUserAnAdmin())
-            {
-                MessageBox.Show(this,
-                    "Active Jobs needs an elevated tray — click Activate first.",
-                    "RunAS Helper", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-            using var form = new JobsForm();
-            form.ShowDialog(this);
-        }
+        // Shows what is currently holding a service launch slot. Same pane the status
+        // bar's job count toggles — the menu is just the other way in.
+        private void MenuActiveJobs_Click(object? sender, EventArgs e) => ToggleJobsPane();
 
         // Relaunches this app elevated via Avecto/UAC (the "runas" verb). On this
         // standard-user, Avecto-managed machine the tray starts non-elevated; this

@@ -49,8 +49,8 @@ COMMAND LINE
 
   /jobs, /kill and /joblog need the installed RunAsHelper.exe running elevated
   (the same check that guards the CLI toggle), so they are not available to an
-  arbitrary process through an open CLI gate. Tools > Active Jobs is the tray
-  equivalent. In practice the jobs listed are /capture launches: a fire-and-forget
+  arbitrary process through an open CLI gate. The tray equivalent is the Active
+  Jobs pane (click the status bar's Jobs count, or Tools > Active Jobs). In practice the jobs listed are /capture launches: a fire-and-forget
   launch frees its slot as soon as the process starts.
 
   Non-executable targets are launched via their host automatically:
@@ -113,13 +113,21 @@ TRAY APP
                         a filter is active, reordering is disabled -- a row's
                         position on screen is not its position in the saved
                         order.) Hover a row for its full path.
-  Active Jobs:          Tools > Active Jobs shows what is currently holding a
-                        service launch slot, with slot usage, the output each
-                        job has produced so far, and a Kill button for one that
-                        is stuck. Needs an elevated tray.
+  Active Jobs:          A pane on the right of the window showing what is
+                        currently holding a service launch slot, with slot usage,
+                        the output each job has produced so far, and a Kill
+                        button for one that is stuck. Click the status bar's
+                        Jobs count (or Tools > Active Jobs) to expand it, and
+                        again to collapse it; the window grows to the right
+                        rather than squeezing the saved-apps list, and hands that
+                        width back when the pane closes. Drag the divider to
+                        resize it (the width is remembered). It starts collapsed
+                        on every launch. Needs an elevated tray to list anything.
   Status bar:           Bottom of the window -- service state, whether the CLI
                         gate is open (and how long it has left), and how many
-                        launch slots are in use.
+                        launch slots are in use. The gate and jobs labels are
+                        clickable: CLI: off opens the gate, and the jobs count
+                        shows or hides the Active Jobs pane.
   Tools menu:           Settings, Validate Installation, Active Jobs, Open
                         PowerShell (TrustedInstaller), Import/Export saved apps,
                         Clear Recent History, How to Use.
