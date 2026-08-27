@@ -51,10 +51,133 @@ jobs:
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Building RunAS Helper $v"
 
+      # ── Code signing ───────────────────────────────────────────────────────
+      # Two imports, for two different reasons.
+      #
+      # The PFX goes into CurrentUser\My because that is the store signtool
+      # searches for /sha1 <thumbprint> unless it is given /sm. It is imported
+      # without -Exportable: the runner signs with the key, it never needs to hand
+      # it back out.
+      #
+      # The public certificate also goes into LocalMachine\Root, so the signature
+      # this job just produced can be validated on the machine that produced it.
+      # Without it the chain does not build and Get-AuthenticodeSignature reports
+      # NotTrusted for a perfectly good signature, which would make the
+      # verification step below useless. That import needs admin, which a GitHub
+      # runner has, and the runner is destroyed afterwards.
+      #
+      # No secret means an unsigned build rather than a failed one, so a fork or a
+      # branch without access still produces an installer.
+      - name: Import signing certificate
+        id: signing
+        shell: pwsh
+        env:
+          PFX_BASE64:   ${{ secrets.SIGNING_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PFX_BASE64)) {
+            Write-Host '::warning::No SIGNING_PFX_BASE64 secret; this build will be UNSIGNED.'
+            "thumbprint=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            exit 0
+          }
+
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+
+          try {
+            $pw   = ConvertTo-SecureString -String $env:PFX_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+          }
+          finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+
+          if (-not $cert.HasPrivateKey) { Write-Error 'Imported certificate has no private key.'; exit 1 }
+
+          # Public half into the machine root, so the verify step can validate.
+          Import-Certificate -FilePath 'signing\serenity-software.cer' `
+                             -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+
+          "thumbprint=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Signing as $($cert.Subject) [$($cert.Thumbprint)]"
+
+      - name: Resolve signtool
+        id: signtool
+        if: steps.signing.outputs.thumbprint != ''
+        shell: pwsh
+        run: |
+          $st = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
+                Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+                Select-Object -First 1
+          if (-not $st) { Write-Error 'signtool.exe not found on the runner.'; exit 1 }
+          "path=$($st.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "signtool: $($st.FullName)"
+
       - name: Build MSI
         # The installer project restores the WiX SDK via NuGet and publishes both
         # apps self-contained, so no separate WiX install is needed on the runner.
-        run: dotnet build RunAsHelper.sln -c Release -p:ProductVersion=${{ steps.ver.outputs.version }}
+        #
+        # The three signing properties are what switch the installer project's
+        # sign targets on: the published EXEs are signed before WiX packs them and
+        # the MSI is signed after link. Omitting them produces an unsigned build,
+        # which is what happens when there is no secret.
+        shell: pwsh
+        run: |
+          $props = @('-c', 'Release', "-p:ProductVersion=${{ steps.ver.outputs.version }}")
+
+          if ('${{ steps.signing.outputs.thumbprint }}') {
+            $props += "-p:SigningCertThumbprint=${{ steps.signing.outputs.thumbprint }}"
+            $props += "-p:SignToolPath=${{ steps.signtool.outputs.path }}"
+            $props += '-p:SignTimestampUrl=http://timestamp.digicert.com'
+          }
+
+          Write-Host "dotnet build RunAsHelper.sln $($props -join ' ')"
+          dotnet build RunAsHelper.sln @props
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify signature
+        if: steps.signing.outputs.thumbprint != ''
+        shell: pwsh
+        run: |
+          $targets = @(
+            'RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi',
+            'RunAsHelper.Installer\publish\client\RunAsHelper.exe',
+            'RunAsHelper.Installer\publish\service\RunAsHelper.Service.exe'
+          )
+
+          $failed = $false
+          foreach ($t in $targets) {
+            if (-not (Test-Path $t)) { Write-Error "Missing: $t"; $failed = $true; continue }
+
+            $sig = Get-AuthenticodeSignature $t
+            Write-Host "$([IO.Path]::GetFileName($t)): $($sig.Status) / $($sig.SignerCertificate.Subject)"
+
+            if ($sig.Status -ne 'Valid') {
+              Write-Error "$t signature status is $($sig.Status)"; $failed = $true
+            }
+            if ($sig.SignerCertificate.Thumbprint -ne '${{ steps.signing.outputs.thumbprint }}') {
+              Write-Error "$t was signed by an unexpected certificate"; $failed = $true
+            }
+            if (-not $sig.TimeStamperCertificate) {
+              # A self-signed certificate expires in 2036; without a timestamp the
+              # signature dies with it rather than remaining valid for what it
+              # signed at the time.
+              Write-Error "$t signature is not timestamped"; $failed = $true
+            }
+          }
+
+          if ($failed) { exit 1 }
+
+      - name: Remove signing certificate from the runner
+        if: always() && steps.signing.outputs.thumbprint != ''
+        shell: pwsh
+        run: |
+          # The runner is discarded anyway; this is so a self-hosted one would not
+          # keep the key or the trust behind.
+          Get-ChildItem Cert:\CurrentUser\My, Cert:\LocalMachine\Root -ErrorAction SilentlyContinue |
+            Where-Object { $_.Thumbprint -eq '${{ steps.signing.outputs.thumbprint }}' } |
+            ForEach-Object { Remove-Item $_.PSPath -Force -ErrorAction SilentlyContinue }
+          Write-Host 'Signing certificate removed from the runner stores.'
 
       - name: Stage versioned artifact
         shell: pwsh
