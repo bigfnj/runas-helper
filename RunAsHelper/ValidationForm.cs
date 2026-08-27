@@ -428,20 +428,34 @@ namespace RunAsHelper
                     Text      = "•",
                     ForeColor = Color.Gray,
                 };
+                // UseMnemonic off on both: these are status texts, not clickable
+                // labels, so an "&" in one is a literal ampersand rather than an
+                // accelerator. With it left on, "token acquired & released"
+                // rendered as "token acquired _released", because WinForms
+                // swallowed the ampersand and underlined the next character.
                 _title = new Label
                 {
-                    AutoSize = false,
-                    Size     = new Size(420, 18),
-                    Font     = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-                    Text     = title,
+                    AutoSize     = false,
+                    Size         = new Size(470, 18),
+                    Font         = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                    Text         = title,
+                    UseMnemonic  = false,
                 };
+
+                // AutoEllipsis because these details are service prose of
+                // unpredictable length: at 420 wide the SYSTEM row read
+                // "...carries the NT" and simply stopped, which looks like the
+                // check itself was cut short. An ellipsis says "there is more",
+                // and the full text is in the Details log below regardless.
                 _detail = new Label
                 {
-                    AutoSize  = false,
-                    Size      = new Size(420, 18),
-                    Font      = new Font("Segoe UI", 8.5f),
-                    ForeColor = Color.DimGray,
-                    Text      = "Pending",
+                    AutoSize     = false,
+                    Size         = new Size(470, 18),
+                    Font         = new Font("Segoe UI", 8.5f),
+                    ForeColor    = Color.DimGray,
+                    Text         = "Pending",
+                    UseMnemonic  = false,
+                    AutoEllipsis = true,
                 };
             }
 
