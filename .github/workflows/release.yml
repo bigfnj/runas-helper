@@ -189,7 +189,17 @@ jobs:
           "asset=$dst" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         id: stage
 
+      # Only for a dry run. A tag build attaches the MSI to the Release itself, so
+      # uploading a second copy as a workflow artifact just consumes storage.
+      #
+      # continue-on-error because this step is not allowed to decide whether a
+      # release happens. It has already done so once: the account's artifact
+      # storage quota was full, CreateArtifact failed, and because this step sits
+      # ahead of the publish step the Release never happened either. The artifact
+      # is a convenience; the Release is the point.
       - name: Upload workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: RunAsHelper-Setup
