@@ -148,6 +148,26 @@
     <ui:WixUI Id="WixUI_Minimal" />
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
 
+    <!-- Replace WiX's default artwork, which was a dark red panel and a white
+         square holding a disc glyph.
+
+         dialog.bmp (493x312) is the side panel. WixUI_Minimal covers all but the
+         leftmost ~165px of it with the licence control, so it is cropped around
+         the shield rather than being the whole wide composition scaled down,
+         which would have shown only its left edge. The hidden remainder carries
+         the artwork's own background colour so nothing seams if a dialog shows
+         more of it.
+
+         banner.bmp (493x58) is the strip on the progress page. WixUI draws the
+         dialog title over its left side in dark text, so the background stays
+         light and only the icon sits on the right, where the disc glyph was.
+
+         Both are 24-bit BMP: WixUI's Bitmap controls do not take PNG. Source
+         artwork is RunAsHelper.Shared\security-image.png and power.png; the BMPs
+         are generated, not hand-edited. -->
+    <WixVariable Id="WixUIDialogBmp" Value="dialog.bmp" />
+    <WixVariable Id="WixUIBannerBmp" Value="banner.bmp" />
+
     <!-- Exit-dialog "Launch RunAS Helper" checkbox. CHECKED by default: it starts
          the tray (non-elevated, in the installing user's session) right after
          install. That first run also registers the login auto-start (an HKCU Run
@@ -205,18 +225,36 @@
               Condition="INSTALLCERT=1 AND NOT Installed" />
     </InstallExecuteSequence>
 
+    <!-- ── Where the certificate page appears ────────────────────────────────
+      CertDlg is SCHEDULED here rather than chained off the welcome page's button,
+      and that distinction is the whole bug this replaced.
+
+      It used to be published as a NewDialog on WelcomeEulaDlg's Install button at
+      Order="10". MSI runs a control's events in Ordering order and stops at the
+      first one that closes the dialog, and WixUI_Minimal already publishes
+      "EndDialog Return" on that same button at Ordering=2. So the install always
+      began at order 2 and the page at order 10 was unreachable. Verified against
+      the shipped 2.1.1 MSI's ControlEvent table, which is why no released build
+      has ever shown it.
+
+      1294 is free: the surrounding InstallUISequence entries are
+      MigrateFeatureStates (1200), WelcomeDlg (1295, patch-only), WelcomeEulaDlg
+      (1296), ProgressDlg (1299). Sitting before the licence page keeps the button
+      labels honest, Next here and Install there, and means nothing has been
+      decided by the time the question is asked.
+
+      A dialog's "EndDialog Return" returns control to this sequence rather than
+      ending it, which is how ProgressDlg still follows the licence page. -->
+    <InstallUISequence>
+      <Show Dialog="CertDlg" Sequence="1294" Condition="NOT Installed" />
+    </InstallUISequence>
+
     <UI>
       <Publish Dialog="ExitDialog"
                Control="Finish"
                Event="DoAction"
                Value="LaunchApplication"
                Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
-
-      <!-- Insert an optional certificate-trust page between the welcome/EULA and the
-           install. WelcomeEulaDlg's Install button advances to CertDlg once the
-           licence is accepted; CertDlg's Install begins the installation. -->
-      <Publish Dialog="WelcomeEulaDlg" Control="Install" Event="NewDialog" Value="CertDlg"
-               Order="10" Condition="LicenseAccepted = &quot;1&quot;" />
 
       <Dialog Id="CertDlg" Width="370" Height="270" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="15" Y="15" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
@@ -227,10 +265,11 @@
                  Property="INSTALLCERT" CheckBoxValue="1"
                  Text="Trust the Serenity Software certificate on this machine" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
-        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
-          <Publish Event="NewDialog" Value="WelcomeEulaDlg" />
-        </Control>
-        <Control Id="Install" Type="PushButton" ElevationShield="yes" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Install">
+        <!-- No Back button: this is the first page of the sequence, and a sequenced
+             dialog cannot NewDialog its way back to one. Next returns control to
+             the UI sequence, which then shows the licence page. No elevation shield
+             here, because nothing is installed until the page after this one. -->
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
