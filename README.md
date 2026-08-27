@@ -4,6 +4,15 @@ Launch any program as **TrustedInstaller** — the highest privilege level on Wi
 
 [![Release](https://github.com/bigfnj/runas-helper/actions/workflows/release.yml/badge.svg)](https://github.com/bigfnj/runas-helper/actions/workflows/release.yml)
 
+![The RunAS Helper tray app, with the Active Jobs pane open](docs/images/tray-app.png)
+
+Quick run takes a one-off path and launches it as TrustedInstaller or SYSTEM.
+Saved applications keep the things you run often. The Active Jobs pane on the
+right lists what is currently running, with its account, source, PID and captured
+output, and can kill any of it. The status bar shows whether the service is up,
+whether the command-line gate is open and for how long, and how many of the ten
+launch slots are in use. Dark mode follows the system theme.
+
 ---
 
 ## Why
@@ -65,16 +74,40 @@ The tray runs **non-elevated** and registers its own per-user login auto-start
 (an `HKCU\…\Run` entry that opens just the tray icon). Click the tray's
 **Activate** button to elevate on demand (no standing scheduled task).
 
-The installer bundles the app's public code-signing certificate and offers an
-**optional, off-by-default** step to trust it on the machine (a checkbox during
-setup). When enabled, the certificate is imported into `LocalMachine\Root` so
-Windows shows *Serenity Software* as a verified publisher for the app's signature
-instead of "Unknown publisher". It trusts anything signed by that certificate on
-that computer and is **not** removed on uninstall. To enable it silently:
+### Publisher and the optional trust step
+
+Released builds are **Authenticode-signed** by a self-signed *Serenity Software*
+certificate, RFC3161-timestamped, and the release workflow fails rather than
+publishing if the MSI or either EXE comes back unsigned, wrongly signed or
+untimestamped.
+
+Self-signed means Windows will not recognise the publisher until the certificate
+is trusted on that machine. The installer bundles the public half and asks, on its
+first page:
+
+![The installer's optional certificate page](docs/images/installer-certificate.png)
+
+Leave it unticked and everything installs and works, with Windows reporting an
+unknown publisher for the signature. Tick it and the certificate is imported into
+`LocalMachine\Root`, so the app's signature reads as a verified *Serenity
+Software* publisher. That is a machine-wide trust change: it applies to anything
+that certificate signs, not just this app, and it is deliberately **not** removed
+on uninstall. Hence a question rather than a default.
+
+The same thing silently:
 
 ```
 msiexec /i RunAsHelper-Setup-<version>.msi /qn INSTALLCERT=1
 ```
+
+This is not a substitute for a CA-issued certificate. It earns no SmartScreen
+reputation and means nothing on a machine that has not imported the root.
+
+> **History, since it is easy to misread the older releases:** builds before
+> 2.1.2 were unsigned, and the certificate page, added in 1.5.7, never actually
+> appeared. It was published as a control event ordered after WixUI's own
+> `EndDialog`, so the install always began before the page was reached. Both are
+> fixed; if you looked for that checkbox and never found it, that is why.
 
 ### Uninstall
 
@@ -129,6 +162,17 @@ you click it). There is **no scheduled task**.
 
 **Theme.** *Settings → Theme* selects **Follow system** (default), Light, or Dark. While
 following the system it repaints live when Windows switches.
+
+![The Settings dialog](docs/images/settings.png)
+
+**After installing.** The installer starts the tray once with `--postinstall`,
+which runs an installation check: service reachable over the pipe, tray running,
+and both a TrustedInstaller and a SYSTEM token actually acquired and released. It
+shows once per installed version, and *Tools → Validate Installation* runs it
+again on demand. The token checks need an elevated tray; from a non-elevated one
+they report that they could not be checked rather than that they failed.
+
+![The post-install installation check](docs/images/installation-check.png)
 
 Settings are stored in `%AppData%\RunAsHelper\settings.json`.
 
@@ -259,11 +303,21 @@ To stamp a specific version into the MSI **and** the EXE `FileVersion`/`Assembly
 dotnet build RunAsHelper.sln -c Release -p:ProductVersion=1.2.3
 ```
 
-### Signed build (optional)
+### Signing
 
-A plain build is **unsigned** — that is fully supported (the service trusts the
-tray by install path, not by signature). To produce Authenticode-signed EXEs and
-MSI, use the helper scripts in [`signing/`](signing):
+Signing is opt-in at the MSBuild level. The installer's sign targets fire only
+when `-p:SigningCertThumbprint` and `-p:SignToolPath` are supplied, so a plain
+`dotnet build` is **unsigned** and fully supported: the service trusts the tray by
+install path, not by signature.
+
+**Released builds are signed by CI.** The release workflow imports the signing key
+from repository secrets, signs both published EXEs before WiX packs them and the
+MSI after link, then verifies all three came back valid, correctly signed and
+timestamped before publishing anything. A build with no signing secret available
+produces an unsigned installer and a warning rather than failing, so a fork still
+works.
+
+To sign locally, use the scripts in [`signing/`](signing):
 
 ```powershell
 # One-time: create a self-signed code-signing cert (CN=Serenity Software) in your
@@ -275,13 +329,25 @@ MSI, use the helper scripts in [`signing/`](signing):
 .\signing\Build-Signed.ps1 -Version 1.6.3
 ```
 
-Signing is opt-in at the MSBuild level: the installer's sign targets fire only
-when `-p:SigningCertThumbprint` and `-p:SignToolPath` are supplied (the wrapper
-does this). A **self-signed** cert is trusted only where its public certificate
-has been imported into Trusted Root — it is not a substitute for a CA/EV cert for
-public distribution, and does not earn SmartScreen reputation. The public
-certificate is committed at `signing/serenity-software.cer`; private keys
-(`*.pfx`/`*.p12`) are git-ignored and never leave your certificate store.
+The public certificate is committed at `signing/serenity-software.cer`. Private
+keys (`*.pfx`/`*.p12`) are git-ignored and are never committed.
+
+Be clear-eyed about what this certificate is: a self-signed root with a
+code-signing EKU. Whoever holds its private key can sign anything and have it
+appear as verified *Serenity Software* on every machine that ticked the
+installer's trust box. Signing in CI means the Actions environment holds that key
+too, which is a reasonable trade for a private repository and a poor one for a
+public project handing out the same guarantee.
+
+### Installer artwork
+
+`dialog.bmp` and `banner.bmp` in `RunAsHelper.Installer` are committed because WiX
+needs them at build time and CI has no image tooling. Regenerate them from the
+source artwork with
+[`RunAsHelper.Installer/New-InstallerArt.ps1`](RunAsHelper.Installer/New-InstallerArt.ps1)
+rather than editing them by hand; it needs ImageMagick.
+
+![The installer, mid-install](docs/images/installer-progress.png)
 
 Give each installed build a **distinct** version — Windows Installer can't tell
 two builds apart if they share a `ProductVersion`, so a same-version reinstall
@@ -331,6 +397,26 @@ reinstall in place (handy during development).
 - Note the shell does not wait for a WinExe, so in an interactive terminal the output can
   arrive after the next prompt is drawn. That is caller-side: `start /wait RunAsHelper.exe
   --help` in cmd, or pipe it (`RunAsHelper.exe --help | more`) in PowerShell.
+
+## What's new in 2.1.2
+
+- **Released builds are signed.** The release workflow now signs both EXEs and the
+  MSI with the *Serenity Software* certificate, RFC3161-timestamped, and refuses to
+  publish unless all three verify as valid, correctly signed and timestamped.
+  Everything up to 2.1.1 shipped unsigned: signing existed only as a local opt-in,
+  so the certificate this project carries had never signed anything anyone
+  downloaded.
+- **The installer's certificate page actually appears.** It was added in 1.5.7 and
+  has never been shown. It was published as a control event on the licence page's
+  Install button ordered *after* WixUI's own `EndDialog`, and MSI stops processing a
+  control's events at the first one that closes the dialog, so the install always
+  began before the page was reached. It is now scheduled in the UI sequence instead
+  and is the first thing setup asks. Still off by default.
+- **New installer artwork**, replacing WiX's stock red panel and disc glyph.
+- **Installation Check readability.** "token acquired & released" rendered as
+  "token acquired _released", because a WinForms label treats `&` as an accelerator;
+  mnemonics are off on those labels now. The detail lines were also clipping
+  mid-sentence at 420px, so they are wider and ellipsised rather than silently cut.
 
 ## What's new in 2.1.0
 
@@ -609,7 +695,7 @@ the docs now describe what the tool actually does. Everything delivered along th
 
 ## Project status
 
-**Feature-complete, at v2.1.1.** The corporate-hardening backlog was reviewed and closed on
+**Feature-complete, at v2.1.2.** The corporate-hardening backlog was reviewed and closed on
 2026-08-18 — see [`PLAN.md`](PLAN.md) for the per-item reasoning. In short: publisher
 pinning is blocked on a purchased certificate (pinning the self-signed one would break
 unsigned official builds), AD-group pipe ACLs only pay off on a domain-joined machine,
@@ -620,7 +706,13 @@ when, and from which source.
 "Feature-complete" means the backlog is closed, not that nothing needed fixing: three bug
 reports and two UX changes followed it in 2.0.2 → 2.1.1 (the Activate hand-off crash, the
 Installation Check nag, invisible CLI output, the one-click CLI gate, and Active Jobs as a
-pane). Fixes and small UX work still land; new capability is not planned.
+pane), and 2.1.2 fixed a certificate page that had never once been displayed. Fixes and
+small UX work still land; new capability is not planned.
+
+Note that publisher pinning is *still* blocked even though releases are signed now. The
+certificate is self-signed, so pinning it would reject any build made without the signing
+key: a local `dotnet build`, a fork, or a CI run with no access to the secret. The service
+identifies the tray by install path for exactly that reason.
 
 Two things are open, neither with action pending:
 
