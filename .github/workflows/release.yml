@@ -205,6 +205,14 @@ jobs:
           name: RunAsHelper-Setup
           path: ${{ steps.stage.outputs.asset }}
           if-no-files-found: error
+          # The MSI is ~65MB and this copy exists only so a dry run can be
+          # downloaded. GitHub's default retention is 90 days, and an artifact's
+          # expiry is fixed when it is created, so lowering the repository setting
+          # later does not shorten anything already uploaded: ten dry runs from
+          # June were still holding 649MB in late August, which is what filled the
+          # account's artifact quota and blocked a release. Seven days is longer
+          # than anyone needs a dry-run build.
+          retention-days: 7
 
       - name: Publish GitHub Release
         if: github.event_name == 'push'
