@@ -1,6 +1,13 @@
 MIT License
 
-Copyright (c) 2022 fafalone
+Copyright (c) 2022 Jon Johnson (fafalone)
+Copyright (c) 2026 BigFN'j (Serenity Software)
+
+RunAS Helper is a C# port of RunAsTrustedInstaller by Jon Johnson (fafalone),
+https://github.com/fafalone/RunAsTrustedInstaller, used under the MIT license.
+The first notice above covers the ported elevation core; the second covers the
+service, pipe protocol, tray, CLI, installer and auditing built around it. See
+THIRD_PARTY_NOTICES.md.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -37,11 +37,21 @@ jobs:
       - name: Resolve version
         id: ver
         shell: pwsh
+        # The dispatch input and the ref name arrive through env, never through
+        # ${{ }} interpolation into this script. Interpolation happens before the
+        # shell parses the line, so a quote in the input would close the string
+        # and run whatever follows it as PowerShell, in the job that holds the
+        # signing secrets. The regex below cannot help: it runs on the next line,
+        # after the injected code has already executed.
+        env:
+          EVENT_NAME:   ${{ github.event_name }}
+          INPUT_VER:    ${{ github.event.inputs.version }}
+          REF_NAME:     ${{ github.ref_name }}
         run: |
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            $v = '${{ github.event.inputs.version }}'
+          if ($env:EVENT_NAME -eq 'workflow_dispatch') {
+            $v = $env:INPUT_VER
           } else {
-            $v = '${{ github.ref_name }}' -replace '^v', ''
+            $v = $env:REF_NAME -replace '^v', ''
           }
           # Windows Installer ProductVersion must be numeric: major.minor.build[.rev]
           if ($v -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {

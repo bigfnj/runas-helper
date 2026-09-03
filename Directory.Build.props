@@ -26,7 +26,7 @@
     <Company>Serenity Software</Company>
     <Authors>BigFN'j</Authors>
     <Product>RunAS Helper</Product>
-    <Copyright>Copyright © 2026 BigFN'j (Serenity Software)</Copyright>
+    <Copyright>Copyright © 2026 BigFN'j (Serenity Software). Portions © 2022 Jon Johnson (fafalone), MIT.</Copyright>
   </PropertyGroup>
 
   <!--

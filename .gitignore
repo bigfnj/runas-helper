@@ -43,3 +43,8 @@ AGENTS.md
 .cursorrules
 .windsurfrules
 SESSION_*
+
+# Maintainer's working journal. Deliberately untracked: it is a dev log of
+# machine-specific state and dead ends, not documentation. Keep your own copy
+# backed up somewhere, because the repo no longer does it for you.
+PLAN.md
