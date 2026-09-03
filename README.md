@@ -4,7 +4,7 @@ Launch any program as **TrustedInstaller** — the highest privilege level on Wi
 
 [![Release](https://github.com/bigfnj/runas-helper/actions/workflows/release.yml/badge.svg)](https://github.com/bigfnj/runas-helper/actions/workflows/release.yml)
 
-![The RunAS Helper tray app, with the Active Jobs pane open](docs/images/tray-app.png)
+![The RunAS Helper tray app, with the Active Jobs pane open](docs/images/snapshot02.png)
 
 Quick run takes a one-off path and launches it as TrustedInstaller or SYSTEM.
 Saved applications keep the things you run often. The Active Jobs pane on the
@@ -168,6 +168,18 @@ icon (see *Startup* below). The main window is a **saved-applications manager**:
   Active Jobs*) to expand it, and again to collapse it. Needs an elevated tray to list
   anything.
 
+![The main window with saved applications and a quick-run path](docs/images/snapshot04.png)
+
+Collapsed, which is how it starts, the window is just the list and the log:
+
+![The main window with the Active Jobs pane collapsed](docs/images/snapshot01.png)
+
+**From the tray.** Right-click the tray icon to run a saved application or a
+recent one without opening the window, or to open a TrustedInstaller PowerShell
+directly:
+
+![The tray icon's context menu](docs/images/snapshot05.png)
+
 **Elevation (Activate).** The tray runs **non-elevated** (greyed icon). The
 service's control pipe only admits elevated administrators, so click the
 **Activate** bar to relaunch elevated (via your OS/endpoint elevation prompt);
@@ -187,7 +199,7 @@ you click it). There is **no scheduled task**.
 **Theme.** *Settings → Theme* selects **Follow system** (default), Light, or Dark. While
 following the system it repaints live when Windows switches.
 
-![The Settings dialog](docs/images/settings.png)
+![The Settings dialog](docs/images/snapshot03.png)
 
 **After installing.** The installer starts the tray once with `--postinstall`,
 which runs an installation check: service reachable over the pipe, tray running,
@@ -195,8 +207,6 @@ and both a TrustedInstaller and a SYSTEM token actually acquired and released. I
 shows once per installed version, and *Tools → Validate Installation* runs it
 again on demand. The token checks need an elevated tray; from a non-elevated one
 they report that they could not be checked rather than that they failed.
-
-![The post-install installation check](docs/images/installation-check.png)
 
 Settings are stored in `%AppData%\RunAsHelper\settings.json`.
 
@@ -377,7 +387,10 @@ source artwork with
 [`RunAsHelper.Installer/New-InstallerArt.ps1`](RunAsHelper.Installer/New-InstallerArt.ps1)
 rather than editing them by hand; it needs ImageMagick.
 
-![The installer, mid-install](docs/images/installer-progress.png)
+Keep the area outside the 165px artwork strip light. ExitDialog draws its heading
+onto it in dark text and the optional launch checkbox paints an opaque white
+rectangle over it, so a dark fill there produces unreadable headings with a white
+box through them. That was the 2.1.4 fix.
 
 Give each installed build a **distinct** version — Windows Installer can't tell
 two builds apart if they share a `ProductVersion`, so a same-version reinstall
@@ -484,10 +497,8 @@ reinstall in place (handy during development).
   control's events at the first one that closes the dialog, so the install always
   began before the page was reached. It is now scheduled in the UI sequence instead
   and is the first thing setup asks. Still off by default.
-  **Retired in 2.1.3** ([why](#publisher)), so 2.1.2 is the only build
-  that ever displayed it:
-
-  ![The retired certificate page, as it appeared in 2.1.2](docs/images/installer-certificate.png)
+  **Retired in 2.1.3** ([why](#publisher)), which makes 2.1.2 the only build that
+  ever displayed it.
 - **New installer artwork**, replacing WiX's stock red panel and disc glyph.
 - **Installation Check readability.** "token acquired & released" rendered as
   "token acquired _released", because a WinForms label treats `&` as an accelerator;
