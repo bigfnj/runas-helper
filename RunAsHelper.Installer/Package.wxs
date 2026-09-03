@@ -94,12 +94,15 @@
           </RegistryKey>
         </Component>
 
-        <!-- The public code-signing certificate, installed next to the app so the
-             optional trust step can import it and so it stays available for a manual
-             import later. Public key only — safe to ship. -->
+        <!-- RETIRED, kept for re-instatement. See the InstallCertFeature note in
+             the Optional trust block below. The public code-signing certificate,
+             installed next to the app so the optional trust step could import it.
+             Public key only, safe to ship; it simply no longer ships. -->
+        <?ifdef InstallCertFeature ?>
         <Component Id="CertFileComponent" Guid="4D5E6F70-8192-A3B4-C5D6-E7F8091A2B3C">
           <File Id="SerenityCer" Source="..\signing\serenity-software.cer" KeyPath="yes" />
         </Component>
+        <?endif?>
 
       </Directory>
     </StandardDirectory>
@@ -135,7 +138,9 @@
       <ComponentRef Id="StartMenuComponent" />
       <ComponentRef Id="ValidationFlagComponent" />
       <ComponentRef Id="EventSourceComponent" />
+      <?ifdef InstallCertFeature ?>
       <ComponentRef Id="CertFileComponent" />
+      <?endif?>
     </Feature>
 
     <!-- ── User interface ────────────────────────────────────────────────
@@ -194,7 +199,25 @@
                   Impersonate="yes"
                   Return="asyncNoWait" />
 
-    <!-- ── Optional: trust the self-signed code-signing certificate ─────────
+    <!-- ── RETIRED: trust the self-signed code-signing certificate ──────────
+      This whole feature is compiled OUT by default and no longer ships in a
+      release. Asking a stranger to add a root CA to their machine is not a thing
+      a public download should do, and the private half of that root lives in this
+      repository's Actions secrets, so anyone holding it could sign anything and
+      have it validate as "Serenity Software" on every machine that ticked the box.
+      Retired ahead of the repo going public; a purchased certificate replaces it.
+
+      Nothing was deleted. Build with the preprocessor variable defined to get it
+      back verbatim:
+
+          dotnet build RunAsHelper.sln -c Release -p:DefineConstants=InstallCertFeature=1
+
+      Four blocks are gated on InstallCertFeature: CertFileComponent and its
+      ComponentRef above, the property and actions below, the InstallUISequence
+      Show, and the CertDlg dialog. Re-instating means defining the variable, not
+      editing the markup.
+
+      Original behaviour, for whoever turns it back on:
       OFF by default. INSTALLCERT is left UNSET so the CertDlg checkbox renders
       unchecked — an MSI checkbox is checked whenever its bound property is non-empty,
       so a default of "0" would (wrongly) show as ticked. Opt in via the checkbox
@@ -205,6 +228,7 @@
       machine. Best-effort (Return="ignore") so a certutil failure never fails the
       install; not undone on uninstall. The command reaches the deferred action as
       CustomActionData because the SetProperty Id matches the deferred action's Id. -->
+    <?ifdef InstallCertFeature ?>
     <Property Id="INSTALLCERT" Secure="yes" />
 
     <SetProperty Id="ImportSerenityCert"
@@ -224,6 +248,7 @@
       <Custom Action="ImportSerenityCert" After="InstallFiles"
               Condition="INSTALLCERT=1 AND NOT Installed" />
     </InstallExecuteSequence>
+    <?endif?>
 
     <!-- ── Where the certificate page appears ────────────────────────────────
       CertDlg is SCHEDULED here rather than chained off the welcome page's button,
@@ -245,9 +270,11 @@
 
       A dialog's "EndDialog Return" returns control to this sequence rather than
       ending it, which is how ProgressDlg still follows the licence page. -->
+    <?ifdef InstallCertFeature ?>
     <InstallUISequence>
       <Show Dialog="CertDlg" Sequence="1294" Condition="NOT Installed" />
     </InstallUISequence>
+    <?endif?>
 
     <UI>
       <Publish Dialog="ExitDialog"
@@ -256,6 +283,7 @@
                Value="LaunchApplication"
                Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
 
+      <?ifdef InstallCertFeature ?>
       <Dialog Id="CertDlg" Width="370" Height="270" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="15" Y="15" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
                  Text="{\WixUI_Font_Title}Trust the app's certificate (optional)" />
@@ -276,6 +304,7 @@
           <Publish Event="SpawnDialog" Value="CancelDlg" />
         </Control>
       </Dialog>
+      <?endif?>
     </UI>
 
   </Package>

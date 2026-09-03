@@ -270,6 +270,15 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         // Allow any interactively logged-on user to connect so that CLI launches
         // can reach the pipe when the gate is open. The gate itself is controlled
         // by the elevated signed tray, and the pipe ACL remains the outer boundary.
+        //
+        // Be clear about the scope of this rule: INTERACTIVE covers every process
+        // in the interactive session, non-elevated ones and standard (non-admin)
+        // users included. So an open CLI gate is a SESSION-WIDE grant of
+        // TrustedInstaller, not a grant to one caller. That is deliberate -- the
+        // gate exists precisely so unelevated scripts can use the service -- and it
+        // is why the gate is off by default, is revoked when its owning tray dies,
+        // and expires after AppSettings.CliGateMinutes. To make it per-user instead,
+        // replace InteractiveSid with the tray owner's user SID.
         security.AddAccessRule(new PipeAccessRule(
             new SecurityIdentifier(WellKnownSidType.InteractiveSid, null),
             PipeAccessRights.ReadWrite,

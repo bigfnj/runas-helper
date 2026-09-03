@@ -52,6 +52,21 @@ The service enforces identity server-side, not via the client-supplied `Source` 
 
 - **Tray control** (`setcli`, saving settings, validation): requires the client to be both the installed `RunAsHelper.exe` — identified by image path (the binary sitting next to the service), so unsigned local/CI builds still work — **and** running with an elevated token. Neither condition alone is sufficient. A caller's Authenticode signature is recorded for diagnostics; pinning it to a specific publisher was considered and closed (see *Project status*).
 - **CLI gate** (any other process): when the elevated tray opens the gate, **any** process that can reach the pipe gets elevated to TrustedInstaller — the pipe ACL is the boundary. The gate resets whenever the owning tray exits or crashes, and it **auto-closes after a configurable ceiling** (default 30 minutes) so an allowance cannot be left open indefinitely.
+
+> **The CLI gate is a session-wide grant, by design.** The pipe ACL includes the
+> `INTERACTIVE` SID, so while the gate is open, *any* process in the interactive
+> session can launch as TrustedInstaller — including a non-elevated one, and
+> including one belonging to a standard user who is not an administrator. That is
+> the intended behaviour, not an oversight: the gate exists so that scripts and
+> non-elevated automation can use the service without each caller needing its own
+> elevation. An administrator opens it deliberately, it is off by default, and it
+> closes itself after `CliGateMinutes`.
+>
+> The consequence is worth stating plainly: **on a machine with users you do not
+> trust, do not open the gate.** Treat opening it as equivalent to handing the
+> whole interactive session SYSTEM rights for that window. If you need a tighter
+> boundary, narrow the `INTERACTIVE` rule in `PipeServer.CreatePipe()` to the SID
+> of the user who owns the tray.
 - **Job control** (`jobs`, `killjob`): same requirement as tray control — the installed, elevated tray. Deliberately *not* reachable through an open CLI gate: being allowed to launch must not imply the right to enumerate or terminate other elevated jobs.
 
 Keep the pipe ACL and the install-path identity check intact if you modify the pipe security.
@@ -74,40 +89,40 @@ The tray runs **non-elevated** and registers its own per-user login auto-start
 (an `HKCU\…\Run` entry that opens just the tray icon). Click the tray's
 **Activate** button to elevate on demand (no standing scheduled task).
 
-### Publisher and the optional trust step
+### Publisher
 
 Released builds are **Authenticode-signed** by a self-signed *Serenity Software*
 certificate, RFC3161-timestamped, and the release workflow fails rather than
 publishing if the MSI or either EXE comes back unsigned, wrongly signed or
 untimestamped.
 
-Self-signed means Windows will not recognise the publisher until the certificate
-is trusted on that machine. The installer bundles the public half and asks, on its
-first page:
+Self-signed means **Windows will report an unknown publisher**, and there is
+nothing you need to do about that. Everything installs and runs normally. Expect
+a SmartScreen prompt on first download and a UAC dialog without a publisher name.
 
-![The installer's optional certificate page](docs/images/installer-certificate.png)
-
-Leave it unticked and everything installs and works, with Windows reporting an
-unknown publisher for the signature. Tick it and the certificate is imported into
-`LocalMachine\Root`, so the app's signature reads as a verified *Serenity
-Software* publisher. That is a machine-wide trust change: it applies to anything
-that certificate signs, not just this app, and it is deliberately **not** removed
-on uninstall. Hence a question rather than a default.
-
-The same thing silently:
+**The installer will never ask you to trust a certificate.** Releases up to and
+including 2.1.2 offered an off-by-default checkbox that imported the public half
+of that self-signed root into `LocalMachine\Root`. That was retired: a public
+download has no business asking a stranger to add a root CA, because trusting it
+trusts *anything* signed with that key rather than just this app, and it was never
+removed on uninstall. If you ticked that box on an older build, the certificate is
+still in your Trusted Root store and you may want to remove it:
 
 ```
-msiexec /i RunAsHelper-Setup-<version>.msi /qn INSTALLCERT=1
+certutil -delstore Root 0EEBB64DCE430D98D2CA19DC3DC715DB9999BAD5
 ```
 
-This is not a substitute for a CA-issued certificate. It earns no SmartScreen
-reputation and means nothing on a machine that has not imported the root.
+A properly issued certificate is the actual fix and is the plan. The code is still
+in the tree behind a build flag, described in
+[`Package.wxs`](RunAsHelper.Installer/Package.wxs), so the history is auditable
+rather than quietly rewritten.
 
 > **History, since it is easy to misread the older releases:** builds before
 > 2.1.2 were unsigned, and the certificate page, added in 1.5.7, never actually
 > appeared. It was published as a control event ordered after WixUI's own
-> `EndDialog`, so the install always began before the page was reached. Both are
-> fixed; if you looked for that checkbox and never found it, that is why.
+> `EndDialog`, so the install always began before the page was reached. 2.1.2
+> fixed the ordering, which meant the page appeared in exactly one release before
+> being retired for the reasons above.
 
 ### Uninstall
 
@@ -333,11 +348,17 @@ The public certificate is committed at `signing/serenity-software.cer`. Private
 keys (`*.pfx`/`*.p12`) are git-ignored and are never committed.
 
 Be clear-eyed about what this certificate is: a self-signed root with a
-code-signing EKU. Whoever holds its private key can sign anything and have it
-appear as verified *Serenity Software* on every machine that ticked the
-installer's trust box. Signing in CI means the Actions environment holds that key
-too, which is a reasonable trade for a private repository and a poor one for a
-public project handing out the same guarantee.
+code-signing EKU, which nobody's machine trusts by default and which earns no
+SmartScreen reputation. Its only real function now is proving a release came from
+this pipeline unmodified. Signing in CI means the Actions environment holds the
+private key, so treat a leak of `SIGNING_PFX_BASE64` as needing a new key rather
+than as a non-event.
+
+What made that key genuinely dangerous was the retired installer trust step,
+because anyone holding the key could then sign anything and have it validate as
+*Serenity Software* on every machine that had ticked the box. With that gone the
+blast radius is this repository's own releases. It is still the wrong long-term
+answer, and a purchased certificate replaces both the key and this section.
 
 ### Installer artwork
 
@@ -379,6 +400,65 @@ Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
 
+## What's new in 2.1.3
+
+- **The installer no longer offers to trust a certificate.** The off-by-default
+  checkbox that imported the self-signed *Serenity Software* root into
+  `LocalMachine\Root` is gone, and the bundled `.cer` no longer ships. A public
+  download has no business asking anyone to add a root CA: trusting it trusts
+  everything signed with that key rather than just this app, and it was never
+  undone on uninstall. 2.1.2 was the only release in which that page ever
+  appeared, so if you opted in there, clear it with
+  `certutil -delstore Root 0EEBB64DCE430D98D2CA19DC3DC715DB9999BAD5`. The code is
+  gated behind a build flag rather than deleted, so the decision stays auditable.
+  Releases are still signed and still verified in CI; only the prompt is gone.
+- **Credits and licensing corrected.** RunAS Helper is a C# port of
+  [RunAsTrustedInstaller](https://github.com/fafalone/RunAsTrustedInstaller) by
+  Jon Johnson (fafalone) and had never said so anywhere. `LICENSE` now carries
+  both copyright notices, there is a [Credits](#credits) section, and
+  [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) records the full provenance,
+  including which functions came across and where the artwork came from.
+- **A security policy.** [SECURITY.md](SECURITY.md) sets out what is in scope for
+  a report and, more usefully, that the CLI gate is a session-wide grant of
+  TrustedInstaller by design rather than a defect. The README and the pipe ACL
+  comment now say the same thing, so nobody narrows that ACL believing they are
+  fixing a bug.
+- **Release workflow hardening.** The dispatch version input reached a PowerShell
+  block through `${{ }}` interpolation, which pastes text into the script before
+  any shell parses it, so a quote in the input could run arbitrary commands in the
+  job that goes on to hold the signing key. The regex meant to validate it ran one
+  line too late to matter. Inputs now arrive through the environment.
+- **`PLAN.md` is no longer tracked.** It was a maintainer's journal of
+  machine-specific state and dead ends, not documentation.
+- **Earlier tags and releases were removed.** 2.1.3 is the baseline. Everything
+  before it was built by a private repository under the signing arrangement this
+  release retires, and the old tags pinned pre-publication history that had no
+  business being published.
+
+## What's new in 2.1.2
+
+- **Released builds are signed.** The release workflow now signs both EXEs and the
+  MSI with the *Serenity Software* certificate, RFC3161-timestamped, and refuses to
+  publish unless all three verify as valid, correctly signed and timestamped.
+  Everything up to 2.1.1 shipped unsigned: signing existed only as a local opt-in,
+  so the certificate this project carries had never signed anything anyone
+  downloaded.
+- **The installer's certificate page actually appears.** It was added in 1.5.7 and
+  has never been shown. It was published as a control event on the licence page's
+  Install button ordered *after* WixUI's own `EndDialog`, and MSI stops processing a
+  control's events at the first one that closes the dialog, so the install always
+  began before the page was reached. It is now scheduled in the UI sequence instead
+  and is the first thing setup asks. Still off by default.
+  **Retired in 2.1.3** ([why](#publisher)), so 2.1.2 is the only build
+  that ever displayed it:
+
+  ![The retired certificate page, as it appeared in 2.1.2](docs/images/installer-certificate.png)
+- **New installer artwork**, replacing WiX's stock red panel and disc glyph.
+- **Installation Check readability.** "token acquired & released" rendered as
+  "token acquired _released", because a WinForms label treats `&` as an accelerator;
+  mnemonics are off on those labels now. The detail lines were also clipping
+  mid-sentence at 420px, so they are wider and ellipsised rather than silently cut.
+
 ## What's new in 2.1.1
 
 - **CLI output is visible in an interactive terminal again.** `--help` — and every other CLI
@@ -397,26 +477,6 @@ reinstall in place (handy during development).
 - Note the shell does not wait for a WinExe, so in an interactive terminal the output can
   arrive after the next prompt is drawn. That is caller-side: `start /wait RunAsHelper.exe
   --help` in cmd, or pipe it (`RunAsHelper.exe --help | more`) in PowerShell.
-
-## What's new in 2.1.2
-
-- **Released builds are signed.** The release workflow now signs both EXEs and the
-  MSI with the *Serenity Software* certificate, RFC3161-timestamped, and refuses to
-  publish unless all three verify as valid, correctly signed and timestamped.
-  Everything up to 2.1.1 shipped unsigned: signing existed only as a local opt-in,
-  so the certificate this project carries had never signed anything anyone
-  downloaded.
-- **The installer's certificate page actually appears.** It was added in 1.5.7 and
-  has never been shown. It was published as a control event on the licence page's
-  Install button ordered *after* WixUI's own `EndDialog`, and MSI stops processing a
-  control's events at the first one that closes the dialog, so the install always
-  began before the page was reached. It is now scheduled in the UI sequence instead
-  and is the first thing setup asks. Still off by default.
-- **New installer artwork**, replacing WiX's stock red panel and disc glyph.
-- **Installation Check readability.** "token acquired & released" rendered as
-  "token acquired _released", because a WinForms label treats `&` as an accelerator;
-  mnemonics are off on those labels now. The detail lines were also clipping
-  mid-sentence at 420px, so they are wider and ellipsised rather than silently cut.
 
 ## What's new in 2.1.0
 
@@ -658,7 +718,9 @@ the docs now describe what the tool actually does. Everything delivered along th
   to import it into the machine's Trusted Root store, so the app's signature reads
   as a verified publisher. Opt in with the checkbox or `INSTALLCERT=1`; it is left
   in place on uninstall. A self-signed root is a machine-wide trust change, so it
-  stays opt-in.
+  stays opt-in. **Retired after 2.1.2** and `INSTALLCERT` no longer does anything;
+  see [Publisher](#publisher) for why and for how to remove the certificate if you
+  once opted in.
 
 ## What's new in 1.5.6
 
@@ -695,8 +757,8 @@ the docs now describe what the tool actually does. Everything delivered along th
 
 ## Project status
 
-**Feature-complete, at v2.1.2.** The corporate-hardening backlog was reviewed and closed on
-2026-08-18 — see [`PLAN.md`](PLAN.md) for the per-item reasoning. In short: publisher
+**Feature-complete, at v2.1.3.** The corporate-hardening backlog was reviewed and closed on
+2026-08-18. In short: publisher
 pinning is blocked on a purchased certificate (pinning the self-signed one would break
 unsigned official builds), AD-group pipe ACLs only pay off on a domain-joined machine,
 and a per-launch justification field earns its keep only when someone *other* than the
@@ -726,6 +788,21 @@ Two things are open, neither with action pending:
   vanished" rather than "it is still not elevated"; the crash is fixed, but the hand-off is
   still unguarded.
 
+## Credits
+
+RunAS Helper is a C# port of **[RunAsTrustedInstaller](https://github.com/fafalone/RunAsTrustedInstaller)**
+by **Jon Johnson (fafalone)**, and it exists because he worked out the hard part
+first: impersonate SYSTEM through `winlogon.exe`, start the `TrustedInstaller`
+service, steal and duplicate its token, launch with it. His `modRunAsTI` module
+was translated function for function, and its structure is still visible in
+`ElevationLauncher.cs` today. Everything here that is a service, a pipe
+protocol, a tray, a CLI, an installer or an audit trail is new work built on top
+of that core.
+
+Full provenance, including the artwork and the build dependencies, is in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE), which is the license the original project carries. See
+[Credits](#credits).

@@ -1,0 +1,51 @@
+# Third-party notices
+
+Everything RunAS Helper ships or builds on, and where it came from.
+
+## Original work: RunAsTrustedInstaller by Jon Johnson (fafalone)
+
+RunAS Helper began as a C# port of **[RunAsTrustedInstaller](https://github.com/fafalone/RunAsTrustedInstaller)**
+by Jon Johnson, who publishes as *fafalone*. That project is MIT-licensed.
+
+The port is not a loose reimplementation. `modRunAsTI.bas` was translated
+function for function, and the shape of the original survives in the current
+C# source: `LaunchAsTI`, `AdjustPrivileges`, `ImpersonateSystem`,
+`FindProcessByName`, `GetFirstThreadId`, `StartAndAcquireToken`,
+`ReleaseToken`, `SetPrivilege`, `GetErrorName` and `GetNtStatusName` are all
+his decomposition of the problem, carried across as-is.
+
+The whole approach is his: enable `SeDebugPrivilege` and
+`SeImpersonatePrivilege`, impersonate SYSTEM via `winlogon.exe`'s token, start
+the `TrustedInstaller` service, impersonate its thread, open and duplicate its
+token, then create the process with it. RunAS Helper adds a Windows service, a
+named-pipe protocol, server-side identity checks, a tray UI, a CLI, an MSI, and
+event-log auditing on top of that core. None of that changes where the core came
+from.
+
+The original repository was also vendored into this repo's history for
+reference (`VB6/`, `SourceExport/`, `RunAsTI.twinproj`) before being removed
+from the working tree. Those objects are still reachable in the git history.
+
+His copyright notice is retained in [LICENSE](LICENSE) and in the installer's
+[license.rtf](RunAsHelper.Installer/license.rtf), as the MIT license requires.
+
+## Artwork
+
+`power.png` and `power.ico` (the application icon) and
+`RunAsHelper.Shared/security-image.png` (the source artwork that
+`RunAsHelper.Installer/New-InstallerArt.ps1` crops into the installer's
+`dialog.bmp` and `banner.bmp`) were generated with Google's Nano Banana image
+model in Gemini. They are not third-party stock art and carry no attribution
+requirement.
+
+## Runtime and build dependencies
+
+- **.NET 10** and the WinForms and `Microsoft.Extensions.Hosting.WindowsServices`
+  libraries, from Microsoft, under the MIT license. Releases are self-contained,
+  so the runtime is redistributed inside the MSI.
+- **WiX Toolset v4** builds the installer. WiX is licensed under the Microsoft
+  Reciprocal License (MS-RL); it is a build-time tool and no WiX code ships in
+  the product beyond the standard installer UI resources it generates.
+- **`signing/serenity-software.cer`** is the public half of a self-signed
+  code-signing certificate created for this project. It is not a third-party
+  artifact.
