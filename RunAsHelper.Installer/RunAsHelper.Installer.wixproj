@@ -28,7 +28,7 @@
   </ItemGroup>
 
   <!--
-    Self-contained single-file publish of both apps into this installer
+    Framework-dependent single-file publish of both apps into this installer
     project's own publish\service\ and publish\client\ folders (git-ignored).
 
     Hooked BeforeTargets="CoreCompile" — that is the target that invokes the
@@ -38,11 +38,22 @@
 
     The relative Source paths in Package.wxs (publish\service\…, publish\client\…)
     resolve against the installer project directory, a default WiX bind path.
-    No .NET runtime is required on the target machine.
+
+    ** The .NET 10 Desktop Runtime (x64) IS required on the target machine. **
+    These were self-contained through 2.1.3, which meant each EXE carried its own
+    private copy of the entire runtime: 111 MB for the client and 72.5 MB for the
+    service, of which roughly half a megabyte was this project's own code, for a
+    65.8 MB installer. Framework-dependent brings that to 0.46 MB and 2.52 MB.
+    Package.wxs carries a launch condition so a machine without the runtime is
+    told so rather than installing an app that cannot start.
+
+    Keep PublishSingleFile turned on. Package.wxs declares exactly one File per
+    component, so a multi-file publish would silently omit every assembly but the
+    apphost and produce an installer that lays down an EXE which cannot run.
   -->
   <Target Name="PublishApps" BeforeTargets="CoreCompile">
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\service\&quot;" />
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\client\&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --no-self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\service\&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --no-self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\client\&quot;" />
   </Target>
 
   <!--

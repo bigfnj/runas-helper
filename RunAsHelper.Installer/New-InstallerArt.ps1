@@ -7,11 +7,19 @@
   and CI has no image tooling. This script is how they were made, so they can be
   remade rather than hand-edited.
 
-  WixUIDialogBmp is 493x312, but WixUI_Minimal covers all but the leftmost ~165px
-  of it with the licence control. A wide composition scaled into that would show
-  only its left edge, so the visible strip is cropped around the shield, which is
-  the centrepiece of the artwork. The hidden remainder is filled with the
-  artwork's own background colour, so nothing seams if a dialog ever shows more.
+  WixUIDialogBmp is 493x312. On WelcomeEulaDlg the licence control covers all but
+  the leftmost ~165px of it, so the visible strip is cropped around the shield,
+  which is the centrepiece of the artwork. A wide composition scaled into that
+  strip would show only its left edge.
+
+  The remainder is NOT hidden, which is the trap this script fell into. ExitDialog
+  shows the full bitmap and draws its title and description straight onto the
+  right-hand side in the standard dark text, and the optional "Launch RunAS Helper
+  now" checkbox paints its own opaque white rectangle over it, because an MSI
+  CheckBox control has no transparency. Filling that region with the artwork's own
+  near-black background gave unreadable dark-on-black headings with a white box
+  floating in the middle of them. It is white for the same reason WiX's own
+  default is white: everything WixUI draws on top of it assumes a light surface.
 
   WixUIBannerBmp is 493x58 and WixUI draws the dialog title over its left side in
   dark text, so the background stays light and only the icon goes on the right,
@@ -39,9 +47,10 @@ foreach ($f in @($art, $icon)) {
     if (-not (Test-Path $f)) { throw "Source image not found: $f" }
 }
 
-# Background of the source artwork, used to fill the part of the dialog bitmap
-# that WixUI never shows.
-$background = 'srgb(16,1,32)'
+# Fill for the part of the dialog bitmap that ExitDialog DOES show, underneath
+# its heading text and the optional-checkbox control. Must stay light; see the
+# .DESCRIPTION note. This is not the artwork's background colour, deliberately.
+$background = 'white'
 
 $strip = Join-Path $env:TEMP 'runashelper-dialog-strip.png'
 $flame = Join-Path $env:TEMP 'runashelper-banner-icon.png'

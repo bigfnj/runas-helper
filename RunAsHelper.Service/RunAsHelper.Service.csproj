@@ -7,7 +7,11 @@
     <AssemblyName>RunAsHelper.Service</AssemblyName>
     <RootNamespace>RunAsHelper.Service</RootNamespace>
     <ProjectGuid>{C3D4E5F6-A7B8-9012-CDEF-3D4E5F607182}</ProjectGuid>
-    <!-- Framework-dependent; the installer assumes .NET 10 x64 Runtime is present. -->
+    <!-- Framework-dependent; the installer assumes .NET 10 x64 Runtime is present.
+         True again as of 2.1.4. This comment was WRONG from 1.x through 2.1.3:
+         the wixproj published with self-contained regardless, which is why the
+         service EXE was 72.5 MB. The publish switches live in
+         RunAsHelper.Installer.wixproj, not here. -->
   </PropertyGroup>
 
   <ItemGroup>

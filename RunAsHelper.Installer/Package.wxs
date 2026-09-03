@@ -28,6 +28,61 @@
     <MajorUpgrade AllowSameVersionUpgrades="yes"
                   DowngradeErrorMessage="A newer version of RunAS Helper is already installed." />
 
+    <!-- ── .NET 10 Desktop Runtime prerequisite ──────────────────────────────
+      Both EXEs are framework-dependent as of 2.1.4, so the runtime has to be on
+      the machine already. Without this check the MSI would install cleanly and
+      then the service would fail to start with only an event-log entry to show
+      for it, which is a miserable thing to debug.
+
+      Detection reads the shared host version that every .NET install writes.
+      Note the 64-bit view here: the per-framework keys under sharedfx live in
+      the 32-bit view (WOW6432Node), but sharedhost is written to the 64-bit one.
+
+      Two honest limits. This proves a .NET host is present, not specifically that
+      the WINDOWS DESKTOP band is, and it does not compare versions, because the
+      sharedfx key names values by exact patch (10.0.4, 10.0.5, 10.0.10) and MSI
+      cannot pattern-match those, while a string compare would rank "9.0.14" above
+      "10.0.0". It therefore catches the common case, a machine with no .NET at
+      all, and leaves version and band mismatches to the apphost, which shows its
+      own dialog naming the required version and linking the download. Chaining
+      the runtime install properly needs a Burn bundle, which would make the
+      deliverable a .exe rather than a .msi.
+    -->
+    <Property Id="DOTNETHOSTVERSION" Secure="yes">
+      <RegistrySearch Id="DotNetSharedHost"
+                      Root="HKLM"
+                      Key="SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedhost"
+                      Name="Version"
+                      Type="raw"
+                      Bitness="always64" />
+    </Property>
+
+    <!--
+      Two gates, deliberately, because they cover different UI levels.
+
+      Full UI gets PrereqDlg (below): a real page with a clickable download link
+      and a Try Again button. LaunchConditions runs at sequence ~100, long before
+      any dialog, so without the UILevel clause here the blunt abort message would
+      always win and the nice page would never be reached. UILevel 5 is full UI;
+      4 is reduced, 3 basic, 2 none.
+
+      Silent and basic installs (/qn, /qb) have no dialogs at all, so for those
+      this condition IS the gate and aborts with the message below.
+    -->
+    <!-- Backs the prerequisite page's Try Again button. asyncNoWait so this
+         session can end immediately afterwards; the replacement re-runs
+         AppSearch from scratch. ProgramFiles64Folder is only the working
+         directory, chosen because it is already in the Directory table. -->
+    <CustomAction Id="RelaunchSetup"
+                  Directory="ProgramFiles64Folder"
+                  ExeCommand="[System64Folder]msiexec.exe /i &quot;[OriginalDatabase]&quot;"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="asyncNoWait" />
+
+    <Launch Condition="Installed OR DOTNETHOSTVERSION OR UILevel &gt; 4"
+            Message="RunAS Helper requires the .NET 10 Desktop Runtime (x64), which was not found on this computer. Install it from https://dotnet.microsoft.com/download/dotnet/10.0 and run this installer again." />
+
     <!-- Apps &amp; Features entry: show the product icon instead of a blank tile. -->
     <Icon Id="RunAsHelper.ico" SourceFile="..\power.ico" />
     <Property Id="ARPPRODUCTICON" Value="RunAsHelper.ico" />
@@ -270,11 +325,22 @@
 
       A dialog's "EndDialog Return" returns control to this sequence rather than
       ending it, which is how ProgressDlg still follows the licence page. -->
-    <?ifdef InstallCertFeature ?>
+    <!-- ── Prerequisite page ────────────────────────────────────────────────
+      Shown only when the runtime is missing, at 1293 so it lands before the
+      certificate page's old 1294 slot and before WelcomeEulaDlg at 1296. There
+      is no Next button: the only way forward is Try Again succeeding, which
+      cannot happen until the runtime is actually present.
+
+      AppSearch runs at sequence 50, so DOTNETHOSTVERSION is already populated
+      by the time this is evaluated.
+    -->
     <InstallUISequence>
+      <Show Dialog="PrereqDlg" Sequence="1293"
+            Condition="NOT Installed AND NOT DOTNETHOSTVERSION" />
+      <?ifdef InstallCertFeature ?>
       <Show Dialog="CertDlg" Sequence="1294" Condition="NOT Installed" />
+      <?endif?>
     </InstallUISequence>
-    <?endif?>
 
     <UI>
       <Publish Dialog="ExitDialog"
@@ -282,6 +348,45 @@
                Event="DoAction"
                Value="LaunchApplication"
                Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+
+      <!--
+        Try Again RESTARTS setup rather than re-running the search in place.
+
+        The obvious implementation, publishing DoAction with AppSearch, does not
+        work. The DoAction ControlEvent documentation describes its argument as
+        "the name of the custom action to be executed", and a standard action is
+        not a custom action. Tested against this package with the search pointed
+        at a key that was created between clicks, with and without explicit
+        control-event Order: the property never repopulated and the button did
+        nothing. It looked like a working button, which is worse than no button.
+
+        AppSearch does run, reliably, at sequence 50 of a NEW install session. So
+        the button launches a fresh msiexec against [OriginalDatabase] and ends
+        this one. The re-detection is therefore real rather than cosmetic. No
+        mutex conflict: this session never reaches the execute sequence, and
+        _MSIExecute is only held during execution.
+      -->
+      <Dialog Id="PrereqDlg" Width="370" Height="270" Title="[ProductName] Setup" NoMinimize="yes">
+        <Control Id="Title" Type="Text" X="15" Y="15" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}.NET 10 Desktop Runtime required" />
+        <Control Id="Description" Type="Text" X="25" Y="42" Width="320" Height="80" NoPrefix="yes"
+                 Text="RunAS Helper needs the Microsoft .NET 10 Desktop Runtime (x64), which is not installed on this computer. Setup cannot continue without it.&#13;&#10;&#13;&#10;Download and install the &quot;.NET Desktop Runtime 10.x&quot; x64 package, then choose Recheck. Recheck restarts Setup, so this window will close and a new one will open." />
+        <Control Id="DownloadLink" Type="Hyperlink" X="25" Y="126" Width="320" Height="18" Transparent="yes">
+          <Text Value="&lt;a href=&quot;https://dotnet.microsoft.com/download/dotnet/10.0&quot;&gt;https://dotnet.microsoft.com/download/dotnet/10.0&lt;/a&gt;" />
+        </Control>
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <!-- "Recheck", not "Try Again": it restarts Setup rather than retrying in
+             place, and the outgoing window says "Setup Wizard was interrupted".
+             Under the honest label that reads as expected; under "Try Again" it
+             reads as the button having failed. -->
+        <Control Id="Retry" Type="PushButton" X="212" Y="243" Width="80" Height="17" Default="yes" Text="Recheck">
+          <Publish Event="DoAction" Value="RelaunchSetup" Order="1" />
+          <Publish Event="EndDialog" Value="Exit" Order="2" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
 
       <?ifdef InstallCertFeature ?>
       <Dialog Id="CertDlg" Width="370" Height="270" Title="[ProductName] Setup">
