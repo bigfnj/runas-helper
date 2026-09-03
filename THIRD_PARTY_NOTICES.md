@@ -38,6 +38,12 @@ His copyright notice is retained in [LICENSE](LICENSE) and in the installer's
 model in Gemini. They are not third-party stock art and carry no attribution
 requirement.
 
+`docs/images/great-responsibility.png` is the maintainer's own drawing. The line
+it renders is a well-known piece of dialogue, quoted and attributed rather than
+reproduced from any published artwork. It is not currently used by the build.
+
+The remaining files in `docs/images/` are screenshots of this application.
+
 ## Runtime and build dependencies
 
 - **.NET 10** and the WinForms and `Microsoft.Extensions.Hosting.WindowsServices`
