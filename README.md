@@ -73,13 +73,22 @@ Keep the pipe ACL and the install-path identity check intact if you modify the p
 
 ## Install
 
+**Prerequisite: the [.NET 10 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/10.0).**
+Setup checks for it and stops on a page with a download link if it is missing, so
+you cannot end up with an installed service that will not start. Installs run with
+`/qn` or `/qb` have no dialogs, so those abort with the same message instead.
+
 1. Download `RunAsHelper-Setup-<version>.msi` from the [latest release](https://github.com/bigfnj/runas-helper/releases/latest).
 2. Run it (it's a per-machine install and needs elevation):
    ```
    msiexec /i RunAsHelper-Setup-<version>.msi /passive
    ```
 
-The installer is a single self-contained file — **no .NET runtime is required** on the target machine. It:
+Releases through 2.1.3 bundled the runtime and needed no prerequisite, at the cost
+of a 65.8 MB installer that was 99.6% Microsoft's code. 2.1.4 is 1.5 MB. See
+[What's new in 2.1.4](#whats-new-in-214).
+
+The installer:
 
 - installs the **RunASHelper** Windows service (LocalSystem, auto-start),
 - installs the tray app and a Start Menu shortcut,
@@ -306,7 +315,7 @@ context (see the gate note below).
 dotnet build RunAsHelper.sln -c Release
 ```
 
-This produces a single self-contained installer at:
+This produces a single-file, framework-dependent installer at:
 
 ```
 RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi
@@ -382,7 +391,7 @@ title to make this unambiguous.
 | `RunAsHelper` | `RunAsHelper.exe` | Tray GUI + CLI client (WinForms) |
 | `RunAsHelper.Service` | `RunAsHelper.Service.exe` | LocalSystem Windows service; performs the elevation |
 | `RunAsHelper.Shared` | library | Named-pipe wire protocol (framed JSON) |
-| `RunAsHelper.Installer` | `RunAsHelper-Setup.msi` | WiX 4 installer; publishes both apps self-contained and embeds them |
+| `RunAsHelper.Installer` | `RunAsHelper-Setup.msi` | WiX 4 installer; publishes both apps framework-dependent single-file and embeds them |
 
 ## Releasing
 
@@ -399,6 +408,32 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
 Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
+
+## What's new in 2.1.4
+
+- **The installer is 1.5 MB instead of 65.8 MB.** Both executables were published
+  self-contained, so each carried its own private copy of the entire .NET 10
+  runtime: 111 MB for the tray client and 72.5 MB for the service, 183.5 MB of
+  payload of which roughly half a megabyte was this project's code. Publishing
+  framework-dependent takes them to 0.46 MB and 2.52 MB. Trimming was not the
+  answer and was measured rather than assumed: the SDK refuses outright for
+  WinForms (`NETSDK1175`), and trimming only the service would have saved about
+  18 MB of the 65.8.
+- **The .NET 10 Desktop Runtime (x64) is now a prerequisite**, which is the cost
+  of the above. Setup detects it and, if it is missing, stops on a page with a
+  download link and a **Recheck** button rather than installing a service that
+  cannot start. Recheck restarts Setup, because Windows Installer offers no
+  supported way to re-run a registry search inside a running session. Silent and
+  basic installs (`/qn`, `/qb`) show no dialogs, so they abort with the same
+  message via a launch condition instead.
+- **The Finish page is readable.** The dialog bitmap filled everything outside
+  its 165px artwork strip with the artwork's near-black background, on the
+  assumption that WixUI covered it. ExitDialog does not: it draws its heading and
+  description straight onto that area in dark text, and the optional
+  "Launch RunAS Helper now" checkbox paints an opaque white rectangle over it,
+  because MSI checkbox controls have no transparency. The result was dark-on-black
+  headings with a white box floating through them. That area is white now, which
+  is what every WixUI dialog assumes.
 
 ## What's new in 2.1.3
 
@@ -757,7 +792,7 @@ the docs now describe what the tool actually does. Everything delivered along th
 
 ## Project status
 
-**Feature-complete, at v2.1.3.** The corporate-hardening backlog was reviewed and closed on
+**Feature-complete, at v2.1.4.** The corporate-hardening backlog was reviewed and closed on
 2026-08-18. In short: publisher
 pinning is blocked on a purchased certificate (pinning the self-signed one would break
 unsigned official builds), AD-group pipe ACLs only pay off on a domain-joined machine,
