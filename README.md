@@ -1,3 +1,15 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/banner-light.png">
+    <img src="docs/images/banner-light.png" width="420"
+         alt="With great power comes great responsibility. Spider-Man.">
+  </picture>
+</p>
+
+<br>
+<br>
+
 # RunAS Helper
 
 Launch any program as **TrustedInstaller** — the highest privilege level on Windows, above standard Administrator — from a system-tray app or a one-line command.
