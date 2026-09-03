@@ -819,9 +819,9 @@ the docs now describe what the tool actually does. Everything delivered along th
 ## Project status
 
 **Feature-complete, at v2.1.4.** The corporate-hardening backlog was reviewed and closed on
-2026-08-18. In short: publisher
-pinning is blocked on a purchased certificate (pinning the self-signed one would break
-unsigned official builds), AD-group pipe ACLs only pay off on a domain-joined machine,
+2026-08-18. In short: publisher pinning is blocked on a purchased certificate (pinning the
+self-signed one would break unsigned official builds), AD-group pipe ACLs only pay off on
+a domain-joined machine,
 and a per-launch justification field earns its keep only when someone *other* than the
 operator reads the audit trail — events 1001–1006 already record who launched what,
 when, and from which source.
@@ -837,17 +837,25 @@ certificate is self-signed, so pinning it would reject any build made without th
 key: a local `dotnet build`, a fork, or a CI run with no access to the secret. The service
 identifies the tray by install path for exactly that reason.
 
-Two things are open, neither with action pending:
+There is no separate backlog file; this section is it. Three things are open:
 
+- **A publicly trusted certificate.** Releases are signed by a self-signed certificate, so
+  Windows reports an unknown publisher and SmartScreen warns on first download. The intended
+  fix is a real CA-issued certificate, after which the CI signing step and the
+  `SIGNING_PFX_BASE64` secret both get replaced, and publisher pinning becomes possible for
+  the first time. This is the only open item with work attached.
 - A single unexplained `0xe0434352` crash from before v1.6.1, which has not recurred. Every
   build since ships a crash logger that writes the full stack to
   `%AppData%\RunAsHelper\crash.log` (and Event ID 1099), so it will identify itself if it
-  ever comes back.
+  ever comes back. No action pending.
 - **Activate does not confirm the elevated copy started.** `ActivateElevation()` exits the
   non-elevated instance to hand over the single-instance mutex without waiting for its
   replacement to come up. That is what turned the 2.0.2 startup crash into "the app
   vanished" rather than "it is still not elevated"; the crash is fixed, but the hand-off is
-  still unguarded.
+  still unguarded. No action pending.
+
+Bugs and questions go to [Issues](https://github.com/bigfnj/runas-helper/issues); suspected
+vulnerabilities go to a private advisory instead, per [SECURITY.md](SECURITY.md).
 
 ## Credits
 

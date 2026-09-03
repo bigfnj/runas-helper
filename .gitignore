@@ -22,11 +22,21 @@ packages/
 *.nupkg
 .nuget/
 
-# Code-signing private keys — NEVER commit. The public .cer (signing/*.cer) is
-# intentionally tracked; the private key stays in the user's certificate store.
+# Secrets — NEVER commit. The public .cer (signing/*.cer) is intentionally
+# tracked and carries no private key; everything else here is belt to GitHub
+# push protection's braces, which only recognises known credential formats and
+# would not stop a hand-rolled .pem or a stray .env.
 *.pfx
 *.p12
 *.snk
+*.key
+*.pem
+*.jks
+*.keystore
+.env
+.env.*
+secrets.json
+appsettings.*.local.json
 
 # Rider / JetBrains
 .idea/
@@ -37,11 +47,22 @@ packages/
 Thumbs.db
 *:Zone.Identifier
 
+# AI assistant leftovers. These accumulate silently and are the maintainer's
+# working context, not documentation. CLAUDE.md and AGENTS.md were committed once
+# by accident and had to be scrubbed from history before this repo went public;
+# that scrub is no longer possible now that forks can exist, so keep this list
+# ahead of whatever tool gets used next.
 CLAUDE.md
+CLAUDE.local.md
 AGENTS.md
+GEMINI.md
+.claude/
 .codex/
+.cursor/
 .cursorrules
 .windsurfrules
+.aider*
+.mcp.json
 SESSION_*
 
 # Maintainer's working journal. Deliberately untracked: it is a dev log of
