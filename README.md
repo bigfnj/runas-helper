@@ -4,14 +4,14 @@ Launch any program as **TrustedInstaller** — the highest privilege level on Wi
 
 [![Release](https://github.com/bigfnj/runas-helper/actions/workflows/release.yml/badge.svg)](https://github.com/bigfnj/runas-helper/actions/workflows/release.yml)
 
-![The RunAS Helper tray app, with the Active Jobs pane open](docs/images/snapshot02.png)
+![RunAS Helper with saved applications and a one-off path ready to run](docs/images/snapshot04.png)
 
 Quick run takes a one-off path and launches it as TrustedInstaller or SYSTEM.
-Saved applications keep the things you run often. The Active Jobs pane on the
-right lists what is currently running, with its account, source, PID and captured
-output, and can kill any of it. The status bar shows whether the service is up,
-whether the command-line gate is open and for how long, and how many of the ten
-launch slots are in use. Dark mode follows the system theme.
+Saved applications keep the things you run often. The Active Jobs pane lists what
+is currently running, with its account, source, PID and captured output, and can
+kill any of it. The status bar shows whether the service is up, whether the
+command-line gate is open and for how long, and how many of the ten launch slots
+are in use. Dark mode follows the system theme.
 
 ---
 
@@ -168,11 +168,14 @@ icon (see *Startup* below). The main window is a **saved-applications manager**:
   Active Jobs*) to expand it, and again to collapse it. Needs an elevated tray to list
   anything.
 
-![The main window with saved applications and a quick-run path](docs/images/snapshot04.png)
-
-Collapsed, which is how it starts, the window is just the list and the log:
+The pane starts collapsed, so the window is just the list and the log:
 
 ![The main window with the Active Jobs pane collapsed](docs/images/snapshot01.png)
+
+Expanding it **widens** the window rather than squeezing the list, and collapsing
+gives the width back:
+
+![The same window with the Active Jobs pane expanded](docs/images/snapshot02.png)
 
 **From the tray.** Right-click the tray icon to run a saved application or a
 recent one without opening the window, or to open a TrustedInstaller PowerShell
