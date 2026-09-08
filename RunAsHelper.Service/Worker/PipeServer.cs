@@ -321,7 +321,15 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                 // ── setcli: signed tray + elevated (both required to control the gate) ──
                 if (request.Verb == "setcli")
                 {
-                    if (!isTrayElevated)
+                    // Closing the gate is allowed for the registered owner even when
+                    // identity re-verification fails (the process may be exiting — its
+                    // image path is unreadable by the time the service calls OpenProcess).
+                    // Opening the gate still requires the full elevated-tray identity check.
+                    bool isClosingOwnGate =
+                        !string.Equals(request.CommandLine, "on", StringComparison.OrdinalIgnoreCase)
+                        && _allowCli && clientPid != 0 && clientPid == _allowCliOwnerPid;
+
+                    if (!isTrayElevated && !isClosingOwnGate)
                     {
                         string reason = !isTray ? "not the installed tray" : "tray is not elevated";
                         logger.LogWarning("Rejected setcli — {Reason} (pid {Pid}).", reason, clientPid);

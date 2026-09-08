@@ -374,7 +374,13 @@ namespace RunAsHelper
         {
             Task.Run(() =>
             {
-                bool available = NativeMethods.WaitNamedPipeW(@"\\.\pipe\RunAsHelper", 500);
+                // Retry the probe briefly before declaring the service offline so a
+                // single snapshot doesn't race the startup window between SCM
+                // "Running" and the named pipe becoming ready (typically <1 s, but
+                // can stretch to ~30 s while the TI token chain initialises).
+                bool available = false;
+                for (int i = 0; i < 6 && !available; i++)
+                    available = NativeMethods.WaitNamedPipeW(@"\\.\pipe\RunAsHelper", 500);
                 // Runs on a thread-pool thread. If the form is torn down between the
                 // pipe check and here, BeginInvoke throws (ObjectDisposed/
                 // InvalidOperation) with no UI-thread handler to catch it — guard it.
@@ -390,6 +396,10 @@ namespace RunAsHelper
 
         private void ApplyServiceState(bool available)
         {
+            // Poll rapidly while offline so recovery is surfaced quickly; back off
+            // to the slow cadence once the service is confirmed running.
+            _statusTimer.Interval = available ? 60_000 : 5_000;
+
             if (_serviceOnline == available) return;
             _serviceOnline = available;
 

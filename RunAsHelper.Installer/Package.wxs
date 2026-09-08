@@ -116,6 +116,14 @@
                           Stop="both"
                           Remove="uninstall"
                           Wait="yes" />
+          <!-- Restart the service on any of the first three failures.
+               Reset the failure count after one day of clean running. -->
+          <util:ServiceConfig ServiceName="RunASHelper"
+                              FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              ResetPeriodInDays="1"
+                              RestartServiceDelayInSeconds="5" />
         </Component>
 
         <!-- Tray client binary (apphost KeyPath) -->

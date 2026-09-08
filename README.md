@@ -437,6 +437,27 @@ Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
 
+## What's new in 2.1.5
+
+- **The tray no longer flickers "Service: not running" for up to 30 seconds after
+  a reboot.** The root cause was a race between when SCM marks the service
+  *Running* and when the named pipe is actually listening. The fix is three-part:
+  (1) the service now creates the pipe immediately after start, with TI token
+  acquisition running in the background so a launch request that arrives early
+  waits inside `_initLock` instead of being dropped; (2) the tray's status probe
+  retries up to 6 × 500 ms before declaring the service offline; (3) the poll
+  cadence drops to 5 s while offline and returns to 60 s once the service is
+  confirmed running, so recovery is surfaced promptly without hammering the pipe.
+- **The CLI gate no longer gets stuck open on tray exit.** When the tray process
+  exits, Windows may have already torn down the process before the pipe server
+  calls `OpenProcess` to re-verify its identity — causing `setcli off` to be
+  rejected on a stale security check. The gate now allows the registered owner
+  to close it by PID match alone, without re-verifying the image path.
+- **SCM auto-recovery is configured by the installer.** The service is now set to
+  restart automatically on any of the first three failures (5 s delay, 1-day reset
+  period), so a crash during boot doesn't leave the service stopped until the next
+  reboot.
+
 ## What's new in 2.1.4
 
 - **The installer is 1.5 MB instead of 65.8 MB.** Both executables were published
@@ -818,7 +839,7 @@ the docs now describe what the tool actually does. Everything delivered along th
 
 ## Project status
 
-**Feature-complete, at v2.1.4.** The corporate-hardening backlog was reviewed and closed on
+**Feature-complete, at v2.1.5.** The corporate-hardening backlog was reviewed and closed on
 2026-08-18. In short: publisher pinning is blocked on a purchased certificate (pinning the
 self-signed one would break unsigned official builds), AD-group pipe ACLs only pay off on
 a domain-joined machine,
