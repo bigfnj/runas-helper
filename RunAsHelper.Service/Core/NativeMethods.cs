@@ -99,6 +99,9 @@ internal static partial class NativeMethods
     // ── Misc ─────────────────────────────────────────────────────────────
     internal const int STATUS_SUCCESS = 0;
     internal const int MAX_PATH       = 260;
+    // SID_NAME_USE.SidTypeUser. LookupAccountSidW reports this for user
+    // principals; groups and aliases must never enter the trusted-caller policy.
+    internal const int SID_NAME_USE_USER = 1;
     internal static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
 
     // ── Enums ─────────────────────────────────────────────────────────────

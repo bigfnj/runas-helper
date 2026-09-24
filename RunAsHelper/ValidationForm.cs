@@ -178,12 +178,7 @@ namespace RunAsHelper
                 // 3) TrustedInstaller token round-trip via the service.
                 _tokenRow.SetRunning();
                 bool token;
-                if (!admin)
-                {
-                    token = false;
-                    _tokenRow.SetResult(false, "Requires administrator — use “Restart as administrator”");
-                }
-                else if (!svc)
+                if (!svc)
                 {
                     token = false;
                     _tokenRow.SetResult(false, "Skipped — service is not responding");
@@ -203,12 +198,7 @@ namespace RunAsHelper
                 // 4) SYSTEM token round-trip — confirms the account=”system” path works.
                 _systemRow.SetRunning();
                 bool systemToken;
-                if (!admin)
-                {
-                    systemToken = false;
-                    _systemRow.SetResult(false, "Requires administrator — use “Restart as administrator”");
-                }
-                else if (!svc)
+                if (!svc)
                 {
                     systemToken = false;
                     _systemRow.SetResult(false, "Skipped — service is not responding");

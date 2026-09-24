@@ -11,7 +11,7 @@ namespace RunAsHelper.Shared.Protocol;
 public sealed record LaunchRequest(
     string CommandLine,
     uint   Priority,
-    string Verb             = "launch",   // "launch" | "validate" | "validate-system" | "setcli"
+    string Verb             = "launch",   // launch/validation, tray controls, or trusted-caller policy verbs
     string WorkingDirectory = "",
     int    ShowWindow       = 1,
     string Account          = "ti",       // "ti" (TrustedInstaller) | "system"

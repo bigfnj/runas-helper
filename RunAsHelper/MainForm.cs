@@ -123,6 +123,7 @@ namespace RunAsHelper
             menuExit.Click         += MenuExit_Click;
             menuStartService.Click += MenuStartService_Click;
             menuSettings.Click     += MenuSettings_Click;
+            menuTrustedCallers.Click += MenuTrustedCallers_Click;
             menuValidate.Click     += MenuValidate_Click;
             menuActiveJobs.Click   += MenuActiveJobs_Click;
             menuImport.Click       += MenuImport_Click;
@@ -561,6 +562,12 @@ namespace RunAsHelper
             }
         }
 
+        private void MenuTrustedCallers_Click(object? sender, EventArgs e)
+        {
+            using var form = new TrustedCallersForm(_client);
+            form.ShowDialog(this);
+        }
+
         // Push the current "Allow command line" state to the service (the gate).
         // Best-effort: needs an elevated connection; harmless if it can't connect.
         private void PushCliAllowed()
@@ -860,12 +867,12 @@ namespace RunAsHelper
                         return;
                 }
 
-                // Only worth showing if it can actually validate. The two token checks
-                // need tray-control rights, i.e. the installed exe running *elevated*;
-                // without that they fail with "Command line is disabled" and the dialog
-                // becomes an alarming red wall that says nothing about the install. If
-                // the installer's launch was not elevated, consume the marker silently
+                // Keep the automatic post-install popup elevation-only. The service also
+                // permits its token checks for an explicitly trusted SID or while the
+                // broad gate is open, but a fresh install must not assume either policy.
+                // If the installer's launch was not elevated, consume the marker silently
                 // rather than deferring it — deferring is what turned this into a nag.
+                // On-demand validation still lets the service decide authorization.
                 if (!NativeMethods.IsUserAnAdmin())
                 {
                     StampValidated(pending);

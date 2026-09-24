@@ -20,6 +20,15 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
 {
     private const string PipeName = "RunAsHelper";
 
+    private readonly TrustedCallerStore _trustedCallers = new(logger);
+
+    // A policy mutation changes the pipe DACL. Cancel the one outstanding accept
+    // so RunAsync immediately creates a fresh instance with the new ACL; otherwise
+    // the old listener could continue admitting a removed SID (or reject a newly
+    // added SID) until some unrelated client happened to connect.
+    private readonly object _pipeRefreshSync = new();
+    private CancellationTokenSource _pipeRefresh = new();
+
     // Limits concurrent launches. Each connection has its own log channel so
     // messages are routed correctly without serializing launches. The bound (10)
     // prevents runaway resource use while allowing multiple concurrent callers.
@@ -30,8 +39,9 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
 
     // Whether CLI-sourced launches are permitted. Defaults OFF and is controlled
     // by the (installed, elevated) tray via the "setcli" verb; the tray resets it
-    // on launch/exit. When enabled, ANY process that can reach the pipe is elevated
-    // — the pipe ACL is the real boundary (Administrators + SYSTEM + InteractiveSid).
+    // on launch/exit. When enabled, ANY process that can reach the pipe is elevated.
+    // A separately configured exact-user allowlist bypasses this broad gate while
+    // leaving it unchanged for all legacy callers.
     private volatile bool _allowCli;
 
     // PID of the tray that enabled the gate. The gate is lazily revoked if that
@@ -90,6 +100,36 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         Interlocked.Exchange(ref _allowCliExpiresUtcTicks, 0);
     }
 
+    private CancellationToken PipeRefreshToken()
+    {
+        lock (_pipeRefreshSync) return _pipeRefresh.Token;
+    }
+
+    private void RequestPipeRefresh()
+    {
+        lock (_pipeRefreshSync)
+        {
+            if (!_pipeRefresh.IsCancellationRequested)
+                _pipeRefresh.Cancel();
+        }
+    }
+
+    private void ResetPipeRefresh()
+    {
+        CancellationTokenSource? superseded = null;
+        lock (_pipeRefreshSync)
+        {
+            if (_pipeRefresh.IsCancellationRequested)
+            {
+                superseded = _pipeRefresh;
+                _pipeRefresh = new CancellationTokenSource();
+            }
+        }
+        // The linked accept CTS has already unwound by the time this method is
+        // called from RunAsync's cancellation handler, so disposal is race-free.
+        superseded?.Dispose();
+    }
+
     /// <summary>Snapshot of in-flight launches, plus how many slots are in use.</summary>
     private (JobInfo[] Jobs, int InUse) SnapshotJobs()
     {
@@ -127,7 +167,17 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
 
             try
             {
-                await pipe.WaitForConnectionAsync(ct);
+                using var acceptCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    ct, PipeRefreshToken());
+                await pipe.WaitForConnectionAsync(acceptCts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Trusted-caller policy changed. Drop the old listener and rebuild
+                // its DACL from the store before accepting another connection.
+                pipe.Dispose();
+                ResetPipeRefresh();
+                continue;
             }
             catch (OperationCanceledException)
             {
@@ -156,6 +206,14 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         catch { return 0; }
     }
 
+    private sealed record ClientProcessSnapshot(
+        uint Pid,
+        string? ExecutablePath,
+        SecurityIdentifier? UserSid,
+        bool IsInstalledTray,
+        bool IsElevated,
+        bool IsSigned);
+
     // The gate owner is "alive" only if that PID is still a running RunAsHelper
     // tray (guards against PID reuse by an unrelated process).
     private static bool IsTrayAlive(uint pid)
@@ -170,25 +228,17 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         catch { return false; }
     }
 
-    // Returns the full image path of the process on the other end of the pipe,
-    // or null if it cannot be determined.
-    private static unsafe string? GetClientExecutablePath(NamedPipeServerStream pipe)
+    // Returns the full image path from an already-open process handle. Capturing
+    // path and elevation through one handle makes both properties refer to the
+    // same process object even if the client exits and its PID is reused.
+    private static unsafe string? GetClientExecutablePath(IntPtr hProcess)
     {
-        uint pid = ClientPid(pipe);
-        if (pid == 0) return null;
-        IntPtr hProc = NativeMethods.OpenProcess(
-            NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-        if (hProc == IntPtr.Zero) return null;
-        try
-        {
-            const int MaxPath = 1024;
-            char* buf = stackalloc char[MaxPath];
-            uint  len = MaxPath;
-            return NativeMethods.QueryFullProcessImageNameW(hProc, 0, buf, ref len)
-                ? new string(buf, 0, (int)len)
-                : null;
-        }
-        finally { NativeMethods.CloseHandle(hProc); }
+        const int MaxPath = 1024;
+        char* buf = stackalloc char[MaxPath];
+        uint len = MaxPath;
+        return NativeMethods.QueryFullProcessImageNameW(hProcess, 0, buf, ref len)
+            ? new string(buf, 0, (int)len)
+            : null;
     }
 
     // True if the pipe client is the RunAsHelper tray binary installed alongside
@@ -199,9 +249,8 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     // unsigned local or CI builds, which would otherwise never open the CLI gate.
     // A code signature, when present, is reported for diagnostics (IsClientSigned)
     // and can later be pinned to the official publisher as optional hardening.
-    private static bool IsRunAsHelperTray(NamedPipeServerStream pipe)
+    private static bool IsRunAsHelperTray(string? path)
     {
-        string? path = GetClientExecutablePath(pipe);
         if (path is null) return false;
         if (!path.EndsWith("\\RunAsHelper.exe", StringComparison.OrdinalIgnoreCase)) return false;
 
@@ -218,9 +267,8 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     // Best-effort: true if the client binary carries an Authenticode signature.
     // Reported in the connection log for diagnostics; NOT a gate (see
     // IsRunAsHelperTray for why unsigned builds must still be trusted).
-    private static bool IsClientSigned(NamedPipeServerStream pipe)
+    private static bool IsClientSigned(string? path)
     {
-        string? path = GetClientExecutablePath(pipe);
         if (path is null) return false;
         try
         {
@@ -231,33 +279,141 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         catch { return false; }
     }
 
-    // True if the client process holds an elevated (admin) token. Used together
-    // with IsRunAsHelperTray to gate setcli — only the elevated, signed tray may
-    // open or close the CLI gate.
-    private static bool IsClientElevated(NamedPipeServerStream pipe)
+    // Reads TokenUser from an already-open token. The returned SecurityIdentifier
+    // owns its own binary form, so it remains valid after the token and temporary
+    // buffer are released.
+    private static unsafe SecurityIdentifier? GetTokenUserSid(IntPtr hToken)
     {
-        uint pid = ClientPid(pipe);
-        if (pid == 0) return false;
-        try
+        uint required = 0;
+        _ = NativeMethods.GetTokenInformation(
+            hToken,
+            NativeMethods.TOKEN_INFORMATION_CLASS.TokenUser,
+            null,
+            0,
+            out required);
+        if (required < (uint)sizeof(NativeMethods.SID_AND_ATTRIBUTES)) return null;
+
+        byte[] buffer = new byte[checked((int)required)];
+        fixed (byte* pBuffer = buffer)
         {
-            IntPtr hProc = NativeMethods.OpenProcess(
-                NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-            if (hProc == IntPtr.Zero) return false;
-            try
-            {
-                if (!NativeMethods.OpenProcessToken(hProc, NativeMethods.TOKEN_QUERY, out IntPtr hToken))
-                    return false;
-                try   { return NativeMethods.IsTokenElevated(hToken); }
-                finally { NativeMethods.CloseHandle(hToken); }
-            }
-            finally { NativeMethods.CloseHandle(hProc); }
+            if (!NativeMethods.GetTokenInformation(
+                    hToken,
+                    NativeMethods.TOKEN_INFORMATION_CLASS.TokenUser,
+                    pBuffer,
+                    required,
+                    out _))
+                return null;
+
+            var tokenUser = (NativeMethods.SID_AND_ATTRIBUTES*)pBuffer;
+            return tokenUser->Sid == IntPtr.Zero
+                ? null
+                : new SecurityIdentifier(tokenUser->Sid);
         }
-        catch { return false; }
     }
 
-    private static NamedPipeServerStream CreatePipe()
+    // Capture elevation and TokenUser from one token belonging to the process
+    // object pinned by hProcess. This is not a PID re-lookup: even if the client
+    // exits and Windows reuses its numeric PID, the existing process handle still
+    // names the original connector.
+    private static (bool IsElevated, SecurityIdentifier? UserSid) GetClientTokenSnapshot(
+        IntPtr hProcess)
+    {
+        if (!NativeMethods.OpenProcessToken(
+                hProcess, NativeMethods.TOKEN_QUERY, out IntPtr hToken))
+            return (false, null);
+
+        try
+        {
+            return (NativeMethods.IsTokenElevated(hToken), GetTokenUserSid(hToken));
+        }
+        catch
+        {
+            return (false, null);
+        }
+        finally
+        {
+            NativeMethods.CloseHandle(hToken);
+        }
+    }
+
+    // Read TokenUser from the security context authenticated by the pipe itself.
+    // Some restricted Windows tokens permit the connection and expose their PID,
+    // but do not yield a usable identity through ImpersonateNamedPipeClient. The
+    // pinned process-token snapshot above is therefore the reliable local identity;
+    // this path supplies an independent cross-check whenever impersonation works.
+    private static SecurityIdentifier? GetClientUserSid(NamedPipeServerStream pipe)
+    {
+        try
+        {
+            SecurityIdentifier? result = null;
+            pipe.RunAsClient(() =>
+            {
+                using WindowsIdentity identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
+                SecurityIdentifier? user = identity.User;
+                // None/anonymous clients are not an authenticated identity source,
+                // even if Windows exposes the Anonymous Logon SID for the token.
+                if (user is not null
+                    && identity.ImpersonationLevel >= TokenImpersonationLevel.Identification)
+                    result = new SecurityIdentifier(user.Value);
+            });
+            return result;
+        }
+        catch
+        {
+            // Anonymous/None-level or restricted clients may not expose TokenUser
+            // through impersonation. They provide no pipe-token cross-check; the
+            // pinned local process token remains the authorization identity.
+            return null;
+        }
+    }
+
+    // Capture every process-derived client property synchronously as soon as the
+    // pipe connects, before awaiting or parsing client-controlled JSON. Only one
+    // PID lookup and one process handle are used for path, elevation, and TokenUser,
+    // pinning the process after that handle opens and preventing mixed-process
+    // identity snapshots during request parsing.
+    private static ClientProcessSnapshot CaptureClientProcess(NamedPipeServerStream pipe)
+    {
+        uint pid = ClientPid(pipe);
+        string? path = null;
+        bool elevated = false;
+        SecurityIdentifier? userSid = null;
+
+        if (pid != 0)
+        {
+            IntPtr hProcess = NativeMethods.OpenProcess(
+                NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (hProcess != IntPtr.Zero)
+            {
+                try
+                {
+                    path = GetClientExecutablePath(hProcess);
+                    (elevated, userSid) = GetClientTokenSnapshot(hProcess);
+                }
+                finally { NativeMethods.CloseHandle(hProcess); }
+            }
+        }
+
+        bool isTray = IsRunAsHelperTray(path);
+        return new ClientProcessSnapshot(
+            pid,
+            path,
+            userSid,
+            isTray,
+            elevated,
+            isTray && IsClientSigned(path));
+    }
+
+    private NamedPipeServerStream CreatePipe()
     {
         var security = new PipeSecurity();
+        // Named pipes are reachable through SMB unless explicitly constrained.
+        // Reject tokens carrying NETWORK even if their account SID would otherwise
+        // match an allow ACE. Explicit deny ACEs precede every allow ACE.
+        security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.NetworkSid, null),
+            PipeAccessRights.FullControl,
+            AccessControlType.Deny));
         security.AddAccessRule(new PipeAccessRule(
             new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
             PipeAccessRights.FullControl,
@@ -269,7 +425,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
             AccessControlType.Allow));
         // Allow any interactively logged-on user to connect so that CLI launches
         // can reach the pipe when the gate is open. The gate itself is controlled
-        // by the elevated signed tray, and the pipe ACL remains the outer boundary.
+        // by the installed elevated tray, and the pipe ACL remains the outer boundary.
         //
         // Be clear about the scope of this rule: INTERACTIVE covers every process
         // in the interactive session, non-elevated ones and standard (non-admin)
@@ -277,12 +433,25 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         // TrustedInstaller, not a grant to one caller. That is deliberate -- the
         // gate exists precisely so unelevated scripts can use the service -- and it
         // is why the gate is off by default, is revoked when its owning tray dies,
-        // and expires after AppSettings.CliGateMinutes. To make it per-user instead,
-        // replace InteractiveSid with the tray owner's user SID.
+        // and expires after AppSettings.CliGateMinutes. The additional exact-user
+        // ACEs below are narrow, persistent exceptions;
+        // they do not reduce the scope of this legacy gate when it is open.
         security.AddAccessRule(new PipeAccessRule(
             new SecurityIdentifier(WellKnownSidType.InteractiveSid, null),
             PipeAccessRights.ReadWrite,
             AccessControlType.Allow));
+
+        // A restricted caller token must pass access checks against both its
+        // normal and restricting SID sets. The legacy INTERACTIVE ACE alone is
+        // therefore insufficient for sandboxed callers; add each explicitly
+        // trusted user SID to the DACL as an exact principal.
+        foreach (SecurityIdentifier sid in _trustedCallers.Snapshot())
+        {
+            security.AddAccessRule(new PipeAccessRule(
+                sid,
+                PipeAccessRights.ReadWrite,
+                AccessControlType.Allow));
+        }
 
         return NamedPipeServerStreamAcl.Create(
             PipeName,
@@ -301,24 +470,48 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         {
             try
             {
+                // Capture the process identity snapshot before the first await. A
+                // client cannot race request parsing with PID reuse to borrow tray status.
+                ClientProcessSnapshot client = CaptureClientProcess(pipe);
+
                 var request = await PipeProtocol.ReadLaunchRequestAsync(pipe, ct);
                 if (request is null) return;
 
-                uint clientPid = ClientPid(pipe);
-                // Determine identity server-side; Source field is logged for info only.
-                bool isTray = IsRunAsHelperTray(pipe);
-                // Elevation is only checked when identity passes — saves a syscall for
-                // CLI/other connections that skip the tray path entirely.
-                bool isTrayElevated = isTray && IsClientElevated(pipe);
+                uint clientPid = client.Pid;
+                bool isTray = client.IsInstalledTray;
+                bool isTrayElevated = isTray && client.IsElevated;
+                // Impersonate only after reading the request: Windows binds pipe
+                // impersonation to the security context of the last message read.
+                // The process token was captured from a handle opened before any
+                // await. Prefer the pipe SID when available, require both sources
+                // to agree, and otherwise use that pinned process-token identity.
+                SecurityIdentifier? pipeUserSid = GetClientUserSid(pipe);
+                bool identityMismatch = pipeUserSid is not null
+                    && client.UserSid is not null
+                    && !pipeUserSid.Equals(client.UserSid);
+                SecurityIdentifier? clientUserSid = identityMismatch
+                    ? null
+                    : pipeUserSid ?? client.UserSid;
+                if (identityMismatch)
+                {
+                    logger.LogWarning(
+                        "Rejected client identity mismatch for pid {Pid}: pipe SID {PipeSid}, process SID {ProcessSid}.",
+                        clientPid, pipeUserSid!.Value, client.UserSid!.Value);
+                }
+                bool isTrustedCaller = _trustedCallers.Contains(clientUserSid);
 
                 logger.LogInformation(
-                    "{Verb} request (source={Source} identity={Identity} signed={Signed} pid={Pid}): '{CommandLine}' priority=0x{Priority:X}",
+                    "{Verb} request (source={Source} identity={Identity} callerSid={CallerSid} pipeSid={PipeSid} processSid={ProcessSid} trusted={Trusted} signed={Signed} pid={Pid}): '{CommandLine}' priority=0x{Priority:X}",
                     request.Verb, request.Source,
                     isTrayElevated ? "tray-elevated" : isTray ? "tray-notelev" : "other",
-                    isTray && IsClientSigned(pipe),
+                    clientUserSid?.Value ?? "unknown",
+                    pipeUserSid?.Value ?? "unknown",
+                    client.UserSid?.Value ?? "unknown",
+                    isTrustedCaller,
+                    client.IsSigned,
                     clientPid, request.CommandLine, request.Priority);
 
-                // ── setcli: signed tray + elevated (both required to control the gate) ──
+                // ── setcli: installed tray + elevated (both required to control the gate) ──
                 if (request.Verb == "setcli")
                 {
                     // Closing the gate is allowed for the registered owner even when
@@ -359,6 +552,75 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("gate",
                         expiresTicks == 0 ? "0" : request.GateMinutes.ToString()), ct);
                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Success"), ct);
+                    return;
+                }
+
+                // ── trusted caller policy: installed + elevated tray only ──
+                // These operations can grant permanent SYSTEM/TI command execution
+                // while the broad gate is closed, so the allowlist itself is never
+                // manageable through either the gate or an existing trusted SID.
+                if (request.Verb is "listtrustedcallers" or "addtrustedcaller" or "removetrustedcaller")
+                {
+                    if (!isTrayElevated)
+                    {
+                        string reason = !isTray ? "not the installed tray" : "tray is not elevated";
+                        logger.LogWarning(
+                            "Rejected {Verb} — {Reason} (pid {Pid}).",
+                            request.Verb, reason, clientPid);
+                        EventLogHelper.Denied(request.Verb, $"pid {clientPid}: {reason}");
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
+                        return;
+                    }
+
+                    if (request.Verb == "listtrustedcallers")
+                    {
+                        foreach (SecurityIdentifier sid in _trustedCallers.Snapshot())
+                            await PipeProtocol.WriteAsync(
+                                pipe, new PipeMessage("trustedcaller", sid.Value), ct);
+                        await PipeProtocol.WriteAsync(
+                            pipe, new PipeMessage("result", "Success"), ct);
+                        return;
+                    }
+
+                    bool ok;
+                    bool changed;
+                    string canonicalSid;
+                    string error;
+                    if (request.Verb == "addtrustedcaller")
+                    {
+                        ok = _trustedCallers.TryAdd(
+                            request.CommandLine, out canonicalSid, out changed, out error);
+                    }
+                    else
+                    {
+                        ok = _trustedCallers.TryRemove(
+                            request.CommandLine, out canonicalSid, out changed, out error);
+                    }
+
+                    if (!ok)
+                    {
+                        logger.LogWarning(
+                            "Rejected {Verb} for '{Sid}': {Reason}",
+                            request.Verb, request.CommandLine, error);
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("log", error), ct);
+                        await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
+                        return;
+                    }
+
+                    if (changed)
+                    {
+                        logger.LogWarning(
+                            "Trusted caller policy changed by tray pid {Pid}: {Action} {Sid}.",
+                            clientPid,
+                            request.Verb == "addtrustedcaller" ? "added" : "removed",
+                            canonicalSid);
+                        RequestPipeRefresh();
+                    }
+
+                    await PipeProtocol.WriteAsync(
+                        pipe, new PipeMessage("trustedcaller", canonicalSid), ct);
+                    await PipeProtocol.WriteAsync(
+                        pipe, new PipeMessage("result", "Success"), ct);
                     return;
                 }
 
@@ -439,8 +701,11 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     return;
                 }
 
-                // ── launch / validate: elevated signed tray always allowed;
-                //    everyone else (any process, any elevation level) needs the CLI gate open ──
+                // ── launch / validate authorization ──
+                // The installed elevated tray remains unconditionally trusted. An
+                // exact user SID in the persistent trusted-caller policy receives the
+                // same launch/validation surface while the broad gate is closed. Every
+                // other process (at any elevation level) still needs that gate open.
                 if (!isTrayElevated)
                 {
                     // Lazily revoke the gate if the owning tray is gone.
@@ -465,10 +730,12 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                         CloseCliGate();
                     }
 
-                    if (!_allowCli)
+                    if (!isTrustedCaller && !_allowCli)
                     {
-                        logger.LogWarning("Blocked launch ({Reason}) from pid {Pid}: {CommandLine}",
-                            closedReason, clientPid, request.CommandLine);
+                        logger.LogWarning(
+                            "Blocked launch ({Reason}) from pid {Pid}, SID {Sid}: {CommandLine}",
+                            closedReason, clientPid,
+                            clientUserSid?.Value ?? "unknown", request.CommandLine);
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
                             closedReason == "CLI gate expired"
                                 ? "Command line was enabled but the allowance expired. Re-enable it in RunAS Helper > Settings > \"Allow command line\"."
