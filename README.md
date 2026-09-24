@@ -58,12 +58,39 @@ RunAS Helper is two cooperating processes:
 
 ### Security model
 
-The named pipe ACL grants access to BUILTIN\Administrators, SYSTEM, and the interactive session — this lets endpoint-privilege-management tools (Avecto, BeyondTrust, CyberArk, etc.) elevate a standard-user tray process on-demand.
+The named pipe ACL grants access to BUILTIN\Administrators, SYSTEM, the
+interactive session, and each explicitly trusted caller SID. The service still
+authorizes every request after the connection is made; a client-supplied
+`Source` value is never treated as proof of identity. Network-logon tokens are
+explicitly denied, so this is a local-machine capability rather than a remote
+SMB named-pipe API.
 
-The service enforces identity server-side, not via the client-supplied `Source` field:
+There are two separate planes:
 
-- **Tray control** (`setcli`, saving settings, validation): requires the client to be both the installed `RunAsHelper.exe` — identified by image path (the binary sitting next to the service), so unsigned local/CI builds still work — **and** running with an elevated token. Neither condition alone is sufficient. A caller's Authenticode signature is recorded for diagnostics; pinning it to a specific publisher was considered and closed (see *Project status*).
-- **CLI gate** (any other process): when the elevated tray opens the gate, **any** process that can reach the pipe gets elevated to TrustedInstaller — the pipe ACL is the boundary. The gate resets whenever the owning tray exits or crashes, and it **auto-closes after a configurable ceiling** (default 30 minutes) so an allowance cannot be left open indefinitely.
+- **Launching and validation** (`launch`, `validate`, and `validate-system`) is
+  allowed when **any one** of these conditions is true: the caller is the
+  installed elevated tray, the caller's exact user SID is in the persistent
+  trusted-caller list, or the existing session-wide CLI gate is open. An empty
+  trusted-caller list is the default and preserves the existing local tray/gate
+  authorization behavior.
+- **Administrative controls** remain restricted to the installed elevated tray:
+  opening or closing the CLI gate, listing/reading/terminating jobs, and changing
+  the trusted-caller policy. Being trusted to launch does not grant control over
+  another caller's jobs or over who else is trusted.
+
+The installed tray is identified by image path (the `RunAsHelper.exe` beside the
+service) **and** an elevated token; neither condition alone is sufficient. Its
+Authenticode signature is recorded for diagnostics, but unsigned local and CI
+builds remain supported.
+
+Trusted callers are matched by exact Windows **user SID**, not display name and
+not group membership. Renaming an account therefore keeps the grant; deleting and
+recreating the same account name does not. Groups and broad principals are not
+accepted by the management API. The list is stored machine-wide as the `REG_MULTI_SZ` value
+`HKLM\SOFTWARE\RunAsHelper\AllowedCallerSids` and is empty unless an
+administrator deliberately adds an account through the tray. The policy is
+bounded to 128 accounts. Once validated and stored, a SID remains authoritative
+without requiring a domain controller or reverse name lookup at service startup.
 
 > **The CLI gate is a session-wide grant, by design.** The pipe ACL includes the
 > `INTERACTIVE` SID, so while the gate is open, *any* process in the interactive
@@ -76,10 +103,8 @@ The service enforces identity server-side, not via the client-supplied `Source` 
 >
 > The consequence is worth stating plainly: **on a machine with users you do not
 > trust, do not open the gate.** Treat opening it as equivalent to handing the
-> whole interactive session SYSTEM rights for that window. If you need a tighter
-> boundary, narrow the `INTERACTIVE` rule in `PipeServer.CreatePipe()` to the SID
-> of the user who owns the tray.
-- **Job control** (`jobs`, `killjob`): same requirement as tray control — the installed, elevated tray. Deliberately *not* reachable through an open CLI gate: being allowed to launch must not imply the right to enumerate or terminate other elevated jobs.
+> whole interactive session SYSTEM rights for that window. Add only the specific
+> automation account instead when persistent, per-user access is required.
 
 Keep the pipe ACL and the install-path identity check intact if you modify the pipe security.
 
@@ -150,7 +175,15 @@ rather than quietly rewritten.
 ```
 msiexec /x RunAsHelper-Setup-<version>.msi /passive
 ```
-…or via *Settings → Apps → RunAS Helper*. This stops and removes the service and the shortcut. (Remove the per-user login auto-start, if you want it gone, via *Settings → Apps → Startup* or by deleting the `RunAsHelper` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.)
+…or via *Settings → Apps → RunAS Helper*. This stops and removes the service and
+the shortcut. The trusted-caller policy is runtime machine configuration rather
+than an MSI-owned value, so upgrades preserve it; the normal MSI uninstall also
+leaves it available for a later reinstall. For a complete scrub, run the
+repository's elevated `uninstall.py`, which deletes
+`HKLM\Software\RunAsHelper` (including `AllowedCallerSids`). Remove the per-user
+login auto-start, if you want it gone, via *Settings → Apps → Startup* or by
+deleting the `RunAsHelper` value under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ## Usage
 
@@ -167,8 +200,9 @@ icon (see *Startup* below). The main window is a **saved-applications manager**:
 - **Quick run (one-off)** — launch a path once without saving it: pick a
   priority, type or **Browse…** to a path, then click **Run as TrustedInstaller**
   or **Run as SYSTEM** (the button you click chooses the account).
-- **Tools menu** — Settings, Validate Installation, **Active Jobs**, Open PowerShell
-  (TrustedInstaller), Import/Export saved apps, and **How to Use**.
+- **Tools menu** — Settings, **Trusted command-line users**, Validate
+  Installation, **Active Jobs**, Open PowerShell (TrustedInstaller),
+  Import/Export saved apps, and **How to Use**.
 - **Status bar** — three live indicators along the bottom: the **service** state, the
   **CLI gate** (`CLI: off`, or `CLI: open` with the time left), and the **Jobs:** slot count.
   The last two are clickable: the gate label opens the gate for the configured duration, and
@@ -195,11 +229,19 @@ directly:
 
 ![The tray icon's context menu](docs/images/snapshot05.png)
 
-**Elevation (Activate).** The tray runs **non-elevated** (greyed icon). The
-service's control pipe only admits elevated administrators, so click the
-**Activate** bar to relaunch elevated (via your OS/endpoint elevation prompt);
-the bar disappears once elevated and the icon turns colour when the service is
-reachable.
+**Elevation (Activate).** The tray runs **non-elevated** (greyed icon). Sensitive
+tray controls still require the installed tray with an elevated administrator
+token, so click the **Activate** bar to relaunch elevated (via your OS/endpoint
+elevation prompt); the bar disappears once elevated and the icon turns colour
+when the service is reachable.
+
+**Trusted command-line users.** In an elevated tray, open *Tools → Trusted
+command-line users…*. Select a local Windows user, or use **Find another user…**
+to resolve an account by name; the dialog resolves and stores the SID for you.
+It never stores a password. Before adding an account, the tray warns that the
+account will be able to launch arbitrary commands as SYSTEM or TrustedInstaller
+even while the general CLI gate is closed. Disabled or no-longer-resolvable
+accounts remain visible by SID so their grants can be reviewed and removed.
 
 **Accounts.** *TrustedInstaller* launches with a SYSTEM token carrying the
 `NT SERVICE\TrustedInstaller` group (needed for TI-owned files/keys/services);
@@ -220,10 +262,13 @@ following the system it repaints live when Windows switches.
 which runs an installation check: service reachable over the pipe, tray running,
 and both a TrustedInstaller and a SYSTEM token actually acquired and released. It
 shows once per installed version, and *Tools → Validate Installation* runs it
-again on demand. The token checks need an elevated tray; from a non-elevated one
-they report that they could not be checked rather than that they failed.
+again on demand. The service decides whether those token checks are authorized:
+they work from the installed elevated tray, an explicitly trusted user, or while
+the general command-line gate is open.
 
-Settings are stored in `%AppData%\RunAsHelper\settings.json`.
+Per-user tray settings are stored in
+`%AppData%\RunAsHelper\settings.json`. The trusted-caller list is machine policy
+stored separately in `HKLM\SOFTWARE\RunAsHelper\AllowedCallerSids`.
 
 ### Command line
 
@@ -309,17 +354,30 @@ arguments intact — get these wrong and the target may start but do nothing:
   Policy, the switch is ignored for `.ps1` regardless.
 
 The CLI streams the service's log lines to stdout and exits `0` on success, `1`
-on failure. It requires the **RunASHelper** service running and an elevated
-context (see the gate note below).
+on failure. It requires the **RunASHelper** service and one authorization path:
+the installed elevated tray, the caller's exact user SID in the trusted list, or
+the session-wide gate described below. Trusted users receive all existing launch
+and validation features—including SYSTEM/TrustedInstaller selection, capture,
+timeouts, priority, working directory, document resolution, `validate`, and
+`validate-system`—but not gate, job, or trusted-user policy controls.
 
-> 🔒 **The command line is disabled by default.** As a hardening measure, the
-> service rejects CLI-sourced launches unless you enable them this session via
-> *Settings → "Allow command line"* (off again on every tray launch/exit). The
-> tray's own launches are unaffected. When the gate is open, **any** process that
-> can reach the pipe is elevated — the pipe ACL (Administrators + interactive
-> session) is the boundary, not per-caller elevation.
+Trusted-SID authentication is performed entirely by the service. As soon as a
+pipe connects, it opens the kernel-reported client process once and reads
+`TokenUser` from that pinned process object; a disconnected client's numeric PID
+cannot be recycled into a different identity. The current client also requests
+pipe-token identification for an independent cross-check when Windows permits it.
+Restricted clients for which pipe impersonation is unavailable, and older clients
+that do not request it, can still be authorized from the pinned process token.
+
+> 🔒 **The general command-line gate is disabled by default.** As a hardening
+> measure, the service rejects an otherwise-untrusted CLI launch unless you
+> enable the gate this session via *Settings → "Allow command line"* (off again
+> on every tray launch/exit). The tray's own launches and explicitly trusted
+> users are unaffected. When the gate is open, **any** process that can reach the
+> pipe is elevated — the pipe ACL (Administrators + interactive session) is the
+> boundary, not per-caller elevation.
 >
-> **To use the CLI:** open the tray, click **Activate** (approve your OS/endpoint
+> **To use the broad gate:** open the tray, click **Activate** (approve your OS/endpoint
 > elevation prompt), then toggle *Settings → "Allow command line"*. That allowance
 > **expires on its own** after *Settings → "…auto-close it after"* minutes (default 30;
 > 0 disables the countdown). The service enforces it, so an allowance you forget about
@@ -345,6 +403,11 @@ This produces a single-file, framework-dependent installer at:
 ```
 RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi
 ```
+
+Changes to trusted-caller authorization should be verified against the
+[security and integration test plan](docs/trusted-callers-test-plan.md); its
+release-blocking matrix exercises real Windows tokens, the named-pipe ACL, the
+LocalSystem service, HKLM persistence, and upgrade/uninstall behavior.
 
 To stamp a specific version into the MSI **and** the EXE `FileVersion`/`AssemblyVersion` (the release workflow does this from the git tag):
 
@@ -436,6 +499,25 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
 Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
+
+## What's new in 2.2.0
+
+- **Persistent trusted command-line users.** An administrator can grant selected
+  Windows user SIDs the existing CLI launch and validation capability without
+  leaving the session-wide gate open. The new account picker enumerates local
+  users, resolves other account names, displays the canonical SID, and warns
+  before granting complete SYSTEM/TrustedInstaller launch access. Existing local
+  gate behavior is unchanged, and an empty trusted list is backward-compatible.
+- **Control-plane separation.** A trusted caller can launch and validate, but
+  cannot open the gate, enumerate/read/terminate jobs, or change the trusted-user
+  policy. Those operations still require the installed elevated tray.
+- **Machine-wide policy.** Exact user SIDs are persisted in
+  `HKLM\SOFTWARE\RunAsHelper\AllowedCallerSids`; credentials are never stored.
+  Upgrades and normal MSI uninstall preserve the runtime-created value; the
+  repository's full-cleanup uninstaller removes it.
+- **Restricted-caller compatibility.** Caller `TokenUser` is captured from a
+  process handle opened when the pipe connects, avoiding both pipe-impersonation
+  limitations in restricted sandboxes and PID-reuse races.
 
 ## What's new in 2.1.5
 
@@ -839,19 +921,21 @@ the docs now describe what the tool actually does. Everything delivered along th
 
 ## Project status
 
-**Feature-complete, at v2.1.5.** The corporate-hardening backlog was reviewed and closed on
-2026-08-18. In short: publisher pinning is blocked on a purchased certificate (pinning the
-self-signed one would break unsigned official builds), AD-group pipe ACLs only pay off on
-a domain-joined machine,
-and a per-launch justification field earns its keep only when someone *other* than the
-operator reads the audit trail — events 1001–1006 already record who launched what,
-when, and from which source.
+**The broad feature backlog was closed at v2.1.5.** A focused addition since then
+provides persistent, exact-user CLI authorization without changing the existing
+session-wide gate. Publisher pinning remains blocked on a purchased certificate
+(pinning the self-signed one would break unsigned official builds), AD-group
+authorization is deliberately not part of the trusted-user feature, and a
+per-launch justification field earns its keep only when someone *other* than the
+operator reads the audit trail — events 1001–1006 already record who launched
+what, when, and from which source.
 
-"Feature-complete" means the backlog is closed, not that nothing needed fixing: three bug
-reports and two UX changes followed it in 2.0.2 → 2.1.1 (the Activate hand-off crash, the
-Installation Check nag, invisible CLI output, the one-click CLI gate, and Active Jobs as a
-pane), and 2.1.2 fixed a certificate page that had never once been displayed. Fixes and
-small UX work still land; new capability is not planned.
+Closing the broad backlog did not mean that nothing else could change: three bug
+reports and two UX changes followed in 2.0.2 → 2.1.1 (the Activate hand-off crash,
+the Installation Check nag, invisible CLI output, the one-click CLI gate, and
+Active Jobs as a pane), 2.1.2 fixed a certificate page that had never once been
+displayed, and the trusted-user work addresses a concrete automation need without
+weakening the old default.
 
 Note that publisher pinning is *still* blocked even though releases are signed now. The
 certificate is self-signed, so pinning it would reject any build made without the signing

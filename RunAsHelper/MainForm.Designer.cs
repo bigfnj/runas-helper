@@ -21,6 +21,7 @@ namespace RunAsHelper
             menuStrip         = new MenuStrip();
             menuTools         = new ToolStripMenuItem();
             menuSettings      = new ToolStripMenuItem();
+            menuTrustedCallers = new ToolStripMenuItem();
             menuToolsSep1     = new ToolStripSeparator();
             menuValidate      = new ToolStripMenuItem();
             menuActiveJobs    = new ToolStripMenuItem();
@@ -87,6 +88,9 @@ namespace RunAsHelper
 
             // ── Tools menu ───────────────────────────────────────────────────
             menuSettings.Text      = "Settings...";
+            menuTrustedCallers.Text = "Trusted command-line users...";
+            menuTrustedCallers.ToolTipText =
+                "Choose users that may use the CLI while the general command-line gate is closed";
             menuValidate.Text      = "Validate Installation...";
             menuActiveJobs.Text    = "Active Jobs";   // toggles the pane, not a dialog
             menuToolsOpenPwsh.Text = "Open PowerShell (TrustedInstaller)";
@@ -98,7 +102,7 @@ namespace RunAsHelper
             menuTools.Text = "Tools";
             menuTools.DropDownItems.AddRange(new ToolStripItem[]
             {
-                menuSettings, menuToolsSep1,
+                menuSettings, menuTrustedCallers, menuToolsSep1,
                 menuValidate, menuActiveJobs, menuToolsSepV,
                 menuToolsOpenPwsh, menuToolsSepP,
                 menuImport, menuExport,
@@ -359,6 +363,7 @@ namespace RunAsHelper
         private MenuStrip            menuStrip;
         private ToolStripMenuItem    menuTools;
         private ToolStripMenuItem    menuSettings;
+        private ToolStripMenuItem    menuTrustedCallers;
         private ToolStripSeparator   menuToolsSep1;
         private ToolStripMenuItem    menuValidate;
         private ToolStripMenuItem    menuActiveJobs;

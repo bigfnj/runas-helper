@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
+using System.Security.Principal;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -79,6 +80,34 @@ internal sealed class PipeClient
     public Task<bool> SetCommandLineAllowedAsync(bool allow, int gateMinutes = 30, CancellationToken ct = default)
         => SendAsync(new LaunchRequest(allow ? "on" : "off", NativeMethods.NORMAL_PRIORITY_CLASS, "setcli",
             GateMinutes: gateMinutes), ct);
+
+    /// <summary>
+    /// Returns the user SIDs that may use the command-line launch surface even while
+    /// the general CLI gate is closed. Policy management is deliberately tray-only;
+    /// the service rejects callers that are not the installed, elevated tray.
+    /// </summary>
+    public async Task<(bool Ok, IReadOnlyList<string> Sids)> ListTrustedCallersAsync(
+        CancellationToken ct = default)
+    {
+        var sids = new List<string>();
+        bool ok = await SendAsync(
+            new LaunchRequest(string.Empty, NativeMethods.NORMAL_PRIORITY_CLASS, "listtrustedcallers"),
+            ct,
+            onMessage: msg =>
+            {
+                if (msg.Type == "trustedcaller" && !string.IsNullOrWhiteSpace(msg.Content))
+                    sids.Add(msg.Content.Trim());
+            });
+        return (ok, sids);
+    }
+
+    /// <summary>Adds one canonical user SID to the persistent trusted-caller policy.</summary>
+    public Task<bool> AddTrustedCallerAsync(string sid, CancellationToken ct = default)
+        => SendAsync(new LaunchRequest(sid, NativeMethods.NORMAL_PRIORITY_CLASS, "addtrustedcaller"), ct);
+
+    /// <summary>Removes one canonical user SID from the persistent trusted-caller policy.</summary>
+    public Task<bool> RemoveTrustedCallerAsync(string sid, CancellationToken ct = default)
+        => SendAsync(new LaunchRequest(sid, NativeMethods.NORMAL_PRIORITY_CLASS, "removetrustedcaller"), ct);
 
     /// <summary>
     /// Lists the launches currently holding a slot, with "N/M" slot usage. Like
@@ -188,8 +217,13 @@ internal sealed class PipeClient
                 request = request with { CommandLine = resolved };
         }
 
+        // Identification lets the service cross-check the authenticated pipe
+        // token's user SID without granting it permission to act as this client.
+        // The service also pins the kernel-reported client process and reads its
+        // primary TokenUser, which supports restricted and legacy clients.
         using var pipe = new NamedPipeClientStream(
-            ".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            ".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous,
+            TokenImpersonationLevel.Identification);
 
         try
         {

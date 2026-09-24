@@ -13,8 +13,11 @@ internal static class HelpText
 OVERVIEW
   Launches any program at TrustedInstaller or LocalSystem level. A background
   Windows service (RunASHelper, running as LocalSystem) performs the elevation;
-  the tray app and CLI ask it over a named pipe whose ACL admits only
-  BUILTIN\Administrators and SYSTEM. The caller must already be elevated.
+  the tray app and CLI ask it over a local named pipe. The service determines
+  caller identity server-side from the kernel-reported connecting process token,
+  cross-checking the authenticated pipe token when available. Tray-only controls
+  also require the installed process path and elevation. Client-supplied names,
+  SIDs and PIDs are never trusted. Network-logon tokens are rejected.
 
 ACCOUNTS  (who the launched program runs as)
   TrustedInstaller (default)
@@ -60,13 +63,17 @@ COMMAND LINE
   A bare name (e.g. notepad.exe, lusrmgr.msc) is resolved on the PATH. The CLI
   streams the service log to stdout and exits 0 on success, 1 on failure. With
   /capture it also streams the child's output, blocking until exit or timeout.
-  Requires the RunASHelper service running and an elevated context.
+  Requires the RunASHelper service and one authorization path: the installed
+  RunAsHelper.exe running elevated, the caller's exact user SID in Trusted
+  command-line users, or the general command-line gate being open.
 
-  SECURITY: the command line is DISABLED by default. Enable it per session in
-  RunAS Helper > Settings > ""Allow command line"" (the tray must be running and
-  elevated; it resets to OFF on every tray launch and on exit). The allowance also
-  expires on its own after Settings > ""...auto-close it after"" minutes (default
-  30, 0 = never); the service enforces that, and re-enabling restarts the clock.
+  SECURITY: the general command-line gate is DISABLED by default. An installed,
+  elevated tray can either add selected accounts under Tools > Trusted
+  command-line users, or enable the broad gate per session in Settings > ""Allow
+  command line"". A trusted account works while that gate is closed. The broad
+  allowance resets to OFF on every tray launch/exit and expires after Settings >
+  ""...auto-close it after"" minutes (default 30, 0 = never). While it is open,
+  every local process that can reach the pipe can request elevation.
 
 SCRIPTING / AUTOMATION NOTES
   Two things surprise callers that drive this programmatically:
@@ -83,9 +90,9 @@ SCRIPTING / AUTOMATION NOTES
      gate entirely. Automation running elevated from C:\Program Files\RunAsHelper
      therefore needs no gate toggle; a copy of the exe anywhere else does.
 
-  Exit codes: 0 = success, 1 = failure (service unreachable, gate closed or
-  expired, launch denied, or no such job). The service's log lines are written to
-  stdout, so a failed call explains itself there.
+  Exit codes: 0 = success, 1 = failure (service unreachable, caller not trusted
+  and gate closed/expired, launch denied, or no such job). The service's log
+  lines are written to stdout, so a failed call explains itself there.
 
 EXAMPLES
   RunAsHelper.exe cmd.exe
@@ -128,9 +135,10 @@ TRAY APP
                         launch slots are in use. The gate and jobs labels are
                         clickable: CLI: off opens the gate, and the jobs count
                         shows or hides the Active Jobs pane.
-  Tools menu:           Settings, Validate Installation, Active Jobs, Open
-                        PowerShell (TrustedInstaller), Import/Export saved apps,
-                        Clear Recent History, How to Use.
+  Tools menu:           Settings, Trusted command-line users, Validate
+                        Installation, Active Jobs, Open PowerShell
+                        (TrustedInstaller), Import/Export saved apps, Clear
+                        Recent History, How to Use.
   Theme:                Settings > Theme -- Follow system (default), Light or
                         Dark. Following the system repaints live when Windows
                         switches between light and dark.
