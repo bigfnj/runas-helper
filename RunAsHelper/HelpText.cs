@@ -134,7 +134,7 @@ EXAMPLES
   RunAsHelper /joblog:3                       :: what job 3 has printed so far
   RunAsHelper /kill:3                         :: stop a stuck job
   RunAsHelper /trusted                        :: who may call without the gate
-  RunAsHelper /trusted:add elsewhere\admin    :: from an elevated shell
+  RunAsHelper /trusted:add MYPC\alice         :: from an elevated shell
 
 TRAY APP
   Quick run (one-off):  pick a priority, type or Browse... to a path, then click

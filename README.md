@@ -402,10 +402,10 @@ arguments intact — get these wrong and the target may start but do nothing:
 
   ```bat
   :: GOOD — switches are separate tokens; only the script block is quoted
-  RunAsHelper.exe /as:system powershell.exe -NoProfile -Command "Get-Service WSLService | Restart-Service -Force"
+  RunAsHelper /as:system powershell.exe -NoProfile -Command "Get-Service WSLService | Restart-Service -Force"
 
   :: BAD — the entire argument string is one quoted blob; PowerShell can't parse it
-  RunAsHelper.exe /as:system powershell.exe "-NoProfile -Command Get-Service WSLService | Restart-Service -Force"
+  RunAsHelper /as:system powershell.exe "-NoProfile -Command Get-Service WSLService | Restart-Service -Force"
   ```
 
 - **Don't add `-ExecutionPolicy Bypass` for an inline `-Command`.** Execution
