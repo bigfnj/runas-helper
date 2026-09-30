@@ -1,0 +1,47 @@
+name: CI
+
+# Build, unit-test and MSI-content check on every branch push and pull request.
+# Tags are release.yml's job, so this trigger deliberately does not fire on them.
+# No signing and no install: CI proves the tree compiles and the MSI carries the
+# v2.3.0 contract. Every step fails the job loudly; there is no continue-on-error.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # lets Directory.Build.props stamp the tag version, not 1.0.0.0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build (Release, unsigned, includes the .com publish and the MSI)
+        shell: pwsh
+        run: |
+          dotnet build RunAsHelper.sln -c Release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Unit tests
+        shell: pwsh
+        run: |
+          dotnet test RunAsHelper.Tests\RunAsHelper.Tests.csproj -c Release --no-build --logger "trx;LogFileName=unit.trx" --results-directory TestResults
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: MSI content
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests\Invoke-MsiContent.ps1 -MsiPath RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: TestResults
+          retention-days: 7

@@ -1,6 +1,8 @@
 # Plan: console launcher so CLI callers don't need `| Out-String`
 
-Status: **not started** — notes written 2026-09-29 to pick up on another machine.
+Status: **shipped in 2.3.0 (pending release)**. The notes below are the original
+2026-09-29 write-up; the "Decisions taken" and "Phase 0 probe result" sections at the
+end record what was actually built and what superseded these notes.
 
 ## The problem
 
@@ -59,9 +61,11 @@ the one assumption the design rests on.
 
 ### Things to decide or check while building it
 
-- **Ctrl+C:** the child shares the shim's console, so it gets the event too. The shim
-  should ignore Ctrl+C (`SetConsoleCtrlHandler(NULL, TRUE)`) and keep waiting for the
-  child, so exit-code relay still works when the user interrupts.
+- **Ctrl+C:** _(superseded, see "Decisions taken" below.)_ The original note assumed the
+  child shares the shim's console and should be left running while the shim keeps
+  waiting. The GUI child never receives console control events, so the shipped shim
+  instead handles Ctrl+C itself: it terminates the exe child and exits `0xC000013A`,
+  printing one line that the elevated target may still be running.
 - **`/timeout:N`:** the `.exe` already enforces it; the shim just waits on the child. Don't
   add a second timeout.
 - **No arguments / double-click:** if the `.com` is run with no args, it could just
@@ -117,3 +121,49 @@ The work machine's global `~/.claude/CLAUDE.md` (RunAS Helper section) was updat
 2026-09-29 with the `| Out-String` requirement and the "gate scripts run under 5.1"
 rule. Those edits are local to that machine and not in this repo. Once the `.com`
 ships, update them to the bare `RunAsHelper` form.
+
+## Decisions taken (v2.3.0)
+
+Condensed from the approved plan. Where a decision reversed a note above, it wins.
+
+- **The `.com` is a C# framework-dependent single-file console app**, renamed to
+  `RunAsHelper.com` in its own project after publish (an apphost cannot be renamed by
+  `TargetExt`), so every publish path, dev, CI and installer, produces the exact file
+  that ships and is signed. NativeAOT stays in the backlog unless startup exceeds about
+  150 ms; the probe measured it well under that.
+- **The launcher runs the child with inherited handles** (not a pipe pump), decided by
+  the Phase 0 probe below.
+- **The launcher sets `__COMPAT_LAYER=RunAsInvoker`** so the child runs at the caller's
+  level. From an elevated shell the child is the installed exe running elevated, so it
+  keeps the tray-level identity; from a normal shell it runs non-elevated and needs a
+  trusted SID or the session gate.
+- **Ctrl+C is handled by the launcher, not ignored.** The GUI child never sees console
+  control events, so the launcher terminates its exe child and exits `0xC000013A`,
+  printing one line that the elevated target may still be running and to check
+  `RunAsHelper /jobs`. This supersedes the "ignore Ctrl+C and keep waiting" note above.
+- **`/ps:` overrides `#Requires`.** For a `.ps1` target the host is chosen by `/ps:`,
+  then `#Requires`, then the caller's shell, then Windows PowerShell 5.1, and one log
+  line names the host and the reason.
+- **With `/capture` the exit code is the child's own**, a timeout exits 124, and
+  RunAsHelper's own failures exit 1.
+- **The service exe refuses to start from a shell** once the install folder is on PATH.
+
+## Phase 0 probe result (2026-09-29, this box)
+
+A prototype `.com` was staged next to a copy of the installed 2.2.0 exe and run both on
+a real pseudo console and through a pipe:
+
+- The GUI child wrote to inherited console handles without attaching a console, both on
+  a real console (help: 116 lines, exit 0) and through a pipe (help: 138 lines,
+  `$LASTEXITCODE` 0). This settles the one assumption these notes flagged, so the
+  inherited-handle design holds and the pipe-pump fallback is not needed.
+- A non-elevated `/jobs` returned exit 1 (elevation required) rather than Win32 740,
+  which proves the child ran at the caller's level under RunAsInvoker.
+- Ctrl+C under a real console left no `RunAsHelper.exe` and returned `0xC000013A` in
+  about three seconds.
+- Startup overhead was 71 ms median (launcher+exe 242 ms vs exe alone 171 ms), under the
+  150 ms NativeAOT threshold.
+- Encoding: when the exe's stdout is a pipe, the em dash in the service's log lines is
+  written as one byte 0x97 (Windows-1252) and shows as a replacement character in a
+  UTF-8 reader. The durable fix is ASCII-only service log prose (tracked as BL-27);
+  on a real console the launcher's UTF-8 code-page setting renders it correctly.
