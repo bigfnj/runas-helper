@@ -18,6 +18,8 @@ OVERVIEW
   cross-checking the authenticated pipe token when available. Tray-only controls
   also require the installed process path and elevation. Client-supplied names,
   SIDs and PIDs are never trusted. Network-logon tokens are rejected.
+  Two launchers are installed: RunAsHelper.com for the command line, and the
+  tray binary RunAsHelper.exe.
 
 ACCOUNTS  (who the launched program runs as)
   TrustedInstaller (default)
@@ -30,7 +32,9 @@ ACCOUNTS  (who the launched program runs as)
   group membership, which is what grants access to TI-owned objects.
 
 COMMAND LINE
-  RunAsHelper.exe [/capture] [/timeout:N] [/p:N] [/as:ACCOUNT] <path> [arguments]
+  RunAsHelper [/capture] [/timeout:N] [/ps:5|7] [/p:N] [/as:ACCOUNT] <path> [arguments]
+  RunAsHelper /jobs | /kill:<id> | /joblog:<id>
+  RunAsHelper /trusted | /trusted:add <SID|DOMAIN\user> | /trusted:remove <SID>
 
   /p:N         Priority class of the launched process:
                  1 Normal (default)   2 Idle          3 High
@@ -38,33 +42,52 @@ COMMAND LINE
   /as:ACCOUNT  Account to run as:
                  /as:ti       TrustedInstaller (default)
                  /as:system   LocalSystem
-  /capture     Stream the child's stdout and stderr back so the CLI caller sees
-               them directly. The call blocks until the child exits (or until the
-               timeout). Skip for GUI apps (no stdout) and interactive shells.
-  /timeout:N   Hard ceiling in seconds. Without it the CLI waits forever. On
-               timeout the output stream closes but the child is left running.
+  /capture     Stream the child's stdout and stderr back and block until it
+               exits (or the timeout). The CLI then exits with the CHILD's exit
+               code. Skip for GUI apps (no stdout) and interactive shells.
+  /timeout:N   Hard ceiling in seconds. On timeout the output stream closes, the
+               child is left running (see /jobs) and the CLI exits 124.
+  /ps:5|/ps:7  Which PowerShell hosts a .ps1 target: Windows PowerShell 5.1 or
+               pwsh 7. Ignored when the script itself says so (#Requires, below)
+               or when the target is not a .ps1.
   -h, --help, /?   Show this help.
   --revalidate     Re-run the post-install validation dialog.
   /jobs            List the launches currently holding a service launch slot,
                    with their job id, elapsed time, account, PID and command.
   /kill:<id>       Terminate the process behind one of those jobs.
   /joblog:<id>     Show the output an in-flight capture job has produced so far.
+  /trusted             List the trusted command-line users (SID and account per line).
+  /trusted:add X       Trust a user (SID or DOMAIN\user; groups are refused).
+  /trusted:remove SID  Stop trusting a user.
 
-  /jobs, /kill and /joblog need the installed RunAsHelper.exe running elevated
-  (the same check that guards the CLI toggle), so they are not available to an
-  arbitrary process through an open CLI gate. The tray equivalent is the Active
-  Jobs pane (click the status bar's Jobs count, or Tools > Active Jobs). In practice the jobs listed are /capture launches: a fire-and-forget
-  launch frees its slot as soon as the process starts.
+  /jobs, /kill, /joblog and /trusted need the installed RunAsHelper running
+  elevated: run them from an elevated shell (RunAsHelper.com runs at the shell's
+  level) or use the tray (Active Jobs pane, Tools > Trusted command-line users).
+  In practice the jobs listed are /capture launches: a fire-and-forget launch
+  frees its slot as soon as the process starts.
 
   Non-executable targets are launched via their host automatically:
-    .msc -> mmc.exe    .cpl -> control.exe    .bat/.cmd -> cmd /c    .ps1 -> powershell
-    .reg -> regedit /s     any other document -> its registered handler
+    .msc -> mmc.exe    .cpl -> control.exe    .bat/.cmd -> cmd /c
+    .reg -> regedit /s    .ps1 -> PowerShell (see below)
+    any other document -> its registered handler
+
+  PowerShell host for a .ps1 target, first match wins:
+    1. /ps:5 or /ps:7 on the command line.
+    2. '#Requires -Version 6+' or '#Requires -PSEdition Core' in the script picks
+       pwsh; '#Requires -PSEdition Desktop' picks Windows PowerShell 5.1.
+    3. Command line only: the shell you typed the command in (pwsh picks pwsh,
+       Windows PowerShell or ISE picks 5.1). cmd, Git Bash and the tray skip this.
+    4. Windows PowerShell 5.1.
+  If pwsh is wanted but not installed, 5.1 is used and the log says so. The CLI
+  always prints one 'PowerShell host:' line naming the host and the reason.
+  Naming a host yourself (a powershell.exe or pwsh.exe target with -File)
+  bypasses the rule.
 
   A bare name (e.g. notepad.exe, lusrmgr.msc) is resolved on the PATH. The CLI
   streams the service log to stdout and exits 0 on success, 1 on failure. With
   /capture it also streams the child's output, blocking until exit or timeout.
   Requires the RunASHelper service and one authorization path: the installed
-  RunAsHelper.exe running elevated, the caller's exact user SID in Trusted
+  RunAsHelper running elevated, the caller's exact user SID in Trusted
   command-line users, or the general command-line gate being open.
 
   SECURITY: the general command-line gate is DISABLED by default. An installed,
@@ -76,37 +99,42 @@ COMMAND LINE
   every local process that can reach the pipe can request elevation.
 
 SCRIPTING / AUTOMATION NOTES
-  Two things surprise callers that drive this programmatically:
-
-  1. RunAsHelper.exe is a GUI-subsystem binary. PowerShell's call operator (&)
-     neither waits for it nor captures its output, so a script that does
-     '$out = & RunAsHelper.exe /jobs' silently gets nothing. Redirect explicitly:
-       $p = Start-Process RunAsHelper.exe -ArgumentList '/jobs' -PassThru -Wait -RedirectStandardOutput out.txt
-     From cmd.exe, 'start /wait /b' behaves similarly. (Output is written to the
-     parent console normally when run interactively.)
-
-  2. An ELEVATED call made from the INSTALLED RunAsHelper.exe is treated as the
-     tray, not as a foreign CLI caller, so it bypasses the ""Allow command line""
-     gate entirely. Automation running elevated from C:\Program Files\RunAsHelper
-     therefore needs no gate toggle; a copy of the exe anywhere else does.
-
-  Exit codes: 0 = success, 1 = failure (service unreachable, caller not trusted
-  and gate closed/expired, launch denied, or no such job). The service's log
-  lines are written to stdout, so a failed call explains itself there.
+  1. Two binaries, one command line. RunAsHelper.com is a console program: your
+     shell waits for it, output streams, and $LASTEXITCODE / %ERRORLEVEL% are set.
+     Because .COM precedes .EXE in PATHEXT and the install folder is on the PATH,
+     the bare name 'RunAsHelper' runs the .com from cmd and PowerShell. Git Bash
+     resolves bare names to .exe, so type 'RunAsHelper.com' there. The tray binary
+     is RunAsHelper.exe, a GUI program a shell never waits for, so a call such as
+     '& ""C:\Program Files\RunAsHelper\RunAsHelper.exe"" ...' returns before
+     anything prints. Pipe it (| Out-String) or use Start-Process -Wait.
+  2. Elevation. RunAsHelper.com runs at your shell's level. From an elevated shell
+     the installed exe counts as the tray and needs no gate; from a normal shell
+     you need your SID in /trusted (one-time, from an elevated shell) or the
+     session gate.
+  3. Exit codes: 0 success; 1 RunAsHelper failure (service unreachable, not
+     trusted and gate closed, launch denied, no such job, bad switch); with
+     /capture, the child's own exit code; 124 when /timeout fired. Service log
+     lines go to stdout.
+  4. Windows PowerShell 5.1 gotchas when it hosts your script: $PSScriptRoot is
+     empty inside param() defaults; &&, ||, ?? and the ternary do not parse;
+     Set-Content writes ANSI. Add '#Requires -Version 7' to opt into pwsh.
 
 EXAMPLES
-  RunAsHelper.exe cmd.exe
-  RunAsHelper.exe /p:3 regedit.exe
-  RunAsHelper.exe /as:system cmd.exe
-  RunAsHelper.exe /as:ti lusrmgr.msc
-  RunAsHelper.exe ""C:\Program Files\Tool\tool.exe"" --flag
-  RunAsHelper.exe /capture /as:system powershell.exe -NoProfile -Command ""Get-Service Wuauserv""
-  RunAsHelper.exe /capture /timeout:30 /as:system powershell.exe -NoProfile -File C:\scripts\fix.ps1
-  RunAsHelper.exe C:\patches\fix.reg              :: imported silently via regedit /s
-  RunAsHelper.exe C:\Windows\System32\drivers\etc\hosts   :: opens in your editor
-  RunAsHelper.exe /jobs                           :: what is holding a launch slot
-  RunAsHelper.exe /joblog:3                       :: what job 3 has printed so far
-  RunAsHelper.exe /kill:3                         :: stop a stuck job
+  RunAsHelper cmd.exe
+  RunAsHelper /p:3 regedit.exe
+  RunAsHelper /as:system cmd.exe
+  RunAsHelper /as:ti lusrmgr.msc
+  RunAsHelper ""C:\Program Files\Tool\tool.exe"" --flag
+  RunAsHelper /capture /as:system powershell.exe -NoProfile -Command ""Get-Service Wuauserv""
+  RunAsHelper /capture /as:system C:\scripts\fix.ps1        :: host picked by the rule above
+  RunAsHelper /capture /ps:7 /as:system C:\scripts\fix.ps1  :: force pwsh
+  RunAsHelper C:\patches\fix.reg              :: imported silently via regedit /s
+  RunAsHelper C:\Windows\System32\drivers\etc\hosts   :: opens in your editor
+  RunAsHelper /jobs                           :: what is holding a launch slot
+  RunAsHelper /joblog:3                       :: what job 3 has printed so far
+  RunAsHelper /kill:3                         :: stop a stuck job
+  RunAsHelper /trusted                        :: who may call without the gate
+  RunAsHelper /trusted:add elsewhere\admin    :: from an elevated shell
 
 TRAY APP
   Quick run (one-off):  pick a priority, type or Browse... to a path, then click
