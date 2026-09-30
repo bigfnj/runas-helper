@@ -1,11 +1,13 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-  The 2.2.0 behavior suite: what must not change in v2.3.0. Every case not tagged
-  [changed-in-2.3.0] must PASS against the installed 2.2.0 build, except R5 and R13: they
-  make elevated calls through the 2.3.0 console launcher (Invoke-Elevated cannot read a
-  GUI exe's exit code) and SKIP where there is none. Everything must pass against the
-  installed 2.3.0 build with -NewBuild.
+  The 2.2.0 behavior suite: what must not change in v2.3.0. Against the installed 2.2.0
+  build every case not tagged [changed-in-2.3.0] must PASS, except the ones that SKIP
+  there: R5 and R13 (elevated calls go through the 2.3.0 console launcher, because
+  Invoke-Elevated cannot read a GUI exe's exit code), R8 and R9 (integration-only, run
+  with -NewBuild) and the R16 GUI placeholder. Against the installed 2.3.0 build with
+  -NewBuild every case must pass except R16, which always records SKIP, and R8, which
+  skips when no tray window is open.
 .DESCRIPTION
   Read-only cases run by default. Cases that write persistent machine state (R4 writes
   an HKLM scratch key, removed afterwards) need -AllowMachineWrites; cases that need the
@@ -172,6 +174,7 @@ try {
                 # Piped on, not left last in the pipeline: PowerShell waits for a GUI exe and
                 # reads its stdout only when its output goes to another command.
                 & $exe /capture /timeout:15 /as:system cmd /c "ping -n 6 127.0.0.1 >nul & echo R12-DONE" | ForEach-Object { $_ }
+                "R12-RC=$LASTEXITCODE"
             } -ArgumentList $exe
         }
         $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -184,6 +187,7 @@ try {
         # service's "Args detected" echo of the command also contains R12-DONE.
         $done = @($out | Where-Object { "$_" -match '^R12-DONE\s*$' }).Count
         Assert-Equal 3 $done 'captures whose child line arrived'
+        Assert-Equal 3 @($out | Where-Object { "$_" -match '^R12-RC=0$' }).Count 'captures that exited 0'
         Assert-InRange $sw.Elapsed.TotalSeconds 0 14 'wall clock for three parallel 6s pings'
     }
 

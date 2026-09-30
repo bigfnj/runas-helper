@@ -10,9 +10,10 @@
   the set of mutations, and every control must pass. Exit 0 when they match.
 #>
 param(
-    # With the new build installed, also run the integration mutations (MUT7-MUT16) and
+    # With the new build installed, also run the integration mutations (MUT7-MUT17) and
     # controls (CTRL3, CTRL5): each mutation feeds a wrong expectation to the same operation
-    # an integration case performs. MUT14 and CTRL5 make elevated calls.
+    # an integration case performs. MUT14 and CTRL5 make elevated calls, so -Integration
+    # is also this script's permission to elevate (it has no -AllowElevated).
     [switch]$Integration,
     # A copy of the 2.2.0 release MSI for MUT4 (the MSI-version mutation), CTRL2 (a File-row
     # count) and CTRL4 (the version reader on a known MSI). The default is the maintainer's
@@ -165,6 +166,9 @@ if ($Integration) {
 
     Invoke-Case -Id 'MUT14-elevated-wrong-exit' -Name 'an elevated exit 7 is not reported as 8 (Invoke-Elevated logic)' -Test {
         $r = Invoke-Elevated -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-Command', 'exit 7') -TimeoutSec 60
+        # A throw, not an assertion, when the real code is lost: a helper that returned the
+        # runner's own 0 would otherwise still count as the mutation firing.
+        if ($r.ExitCode -ne 7) { throw "Invoke-Elevated returned $($r.ExitCode) for a target that exits 7" }
         Assert-ExitCode 8 $r.ExitCode
     }
 
@@ -176,12 +180,31 @@ if ($Integration) {
         Assert-Match "WITNESS-$cn" $r.Stdout 'child witness (deliberately absent: the child prints nothing)'
     }
 
-    $reg = Get-ItemProperty 'HKLM:\SOFTWARE\RunAsHelper' -ErrorAction SilentlyContinue
-    $trustedSids = @(if ($reg -and ($reg.PSObject.Properties.Name -contains 'AllowedCallerSids')) { $reg.AllowedCallerSids })
+    $trustedSids = @(Get-AllowedCallerSids)
     Invoke-Case -Id 'MUT16-dacl-trusted-withheld' -Name 'the pipe DACL check reports trusted-user ACEs when the trusted list is withheld (B16 logic)' -Test {
         if ($trustedSids.Count -eq 0) { Skip-Case -Reason 'no trusted SIDs on this box, so there is nothing to withhold' }
         $bad = @(Get-PipeDaclViolations -TrustedSids @())
         Assert-Equal 0 $bad.Count "DACL departures with the trusted list withheld (deliberately wrong): $($bad -join '; ')"
+    }
+
+    Invoke-Case -Id 'MUT17-dacl-narrow-network-deny' -Name 'a NETWORK deny that no longer covers full control is reported (B16 logic)' -Test {
+        # A private pipe built like CreatePipe except that its NETWORK deny covers only
+        # ChangePermissions, which would leave read/write open to a remote token. The check
+        # must report it; this case asserts it does not, so it has to fire.
+        $name = 'rah-mut17-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+        $sec = [IO.Pipes.PipeSecurity]::new()
+        $sec.AddAccessRule([IO.Pipes.PipeAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-5-2'), [IO.Pipes.PipeAccessRights]::ChangePermissions, 'Deny'))
+        foreach ($p in @{ 'S-1-5-4' = 'ReadWrite'; 'S-1-5-18' = 'FullControl'; 'S-1-5-32-544' = 'FullControl' }.GetEnumerator()) {
+            $sec.AddAccessRule([IO.Pipes.PipeAccessRule]::new([Security.Principal.SecurityIdentifier]::new($p.Key), [IO.Pipes.PipeAccessRights]$p.Value, 'Allow'))
+        }
+        $server = [IO.Pipes.NamedPipeServerStreamAcl]::Create($name, [IO.Pipes.PipeDirection]::InOut, 1,
+            [IO.Pipes.PipeTransmissionMode]::Byte, [IO.Pipes.PipeOptions]::Asynchronous, 4096, 4096,
+            $sec, [IO.HandleInheritability]::None, [IO.Pipes.PipeAccessRights]0)
+        try {
+            [void]$server.WaitForConnectionAsync()
+            $bad = @(Get-PipeDaclViolations -PipeName $name)
+        } finally { $server.Dispose() }
+        Assert-Equal 0 $bad.Count "DACL departures on a narrowed NETWORK deny (deliberately wrong): $($bad -join '; ')"
     }
 
     Invoke-Case -Id 'CTRL3-installed-version-ok' -Name 'control: the three installed binaries share one FileVersion' -Test {
@@ -192,17 +215,23 @@ if ($Integration) {
 
     Invoke-Case -Id 'CTRL5-elevated-unmeasured' -Name 'control: an elevated call that records no exit code throws and leaves no work folder (BL-45)' -Test {
         # The installed exe is GUI-subsystem, so the elevated runner records no exit code
-        # for it; the helper must say so instead of returning a number, and clean up.
-        $before = @(Get-ChildItem $env:TEMP -Filter 'rah-tests-*' -Directory -ErrorAction SilentlyContinue | ForEach-Object Name)
+        # for it; the helper must say so instead of returning a number, and clean up. The
+        # call gets a private TEMP: other harness runs share %TEMP% and name their folders
+        # the same way, so looking there would blame, and delete, folders still in use.
+        $root = (New-Item -ItemType Directory -Path (Join-Path $env:TEMP ('rah-ctrl5-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)))).FullName
+        $savedTemp = $env:TEMP
         $err = $null
-        try { Invoke-Elevated -FilePath $exe -ArgumentList @('/trusted') -TimeoutSec 60 | Out-Null } catch { $err = $_.Exception.Message }
-        $left = @(Get-ChildItem $env:TEMP -Filter 'rah-tests-*' -Directory -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Name })
-        foreach ($d in $left) { Remove-Item -Recurse -Force $d.FullName -ErrorAction SilentlyContinue }
+        try {
+            $env:TEMP = $root
+            try { Invoke-Elevated -FilePath $exe -ArgumentList @('/trusted') -TimeoutSec 60 | Out-Null } catch { $err = $_.Exception.Message }
+        } finally { $env:TEMP = $savedTemp }
+        $left = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue)
+        Remove-Item -Recurse -Force -LiteralPath $root -ErrorAction SilentlyContinue
         Assert-Equal 0 $left.Count 'work folders left behind'
         Assert-Match 'recorded no exit code' $err 'error from the helper'
     }
 
-    $expectedFail += @('MUT7-wrong-installed-version', 'MUT8-folder-not-on-path', 'MUT10-wrong-event-source', 'MUT11-guard-exit-zero', 'MUT12-wrong-child-exit', 'MUT13-timeout-not-zero', 'MUT14-elevated-wrong-exit', 'MUT15-witness-echo-only')
+    $expectedFail += @('MUT7-wrong-installed-version', 'MUT8-folder-not-on-path', 'MUT10-wrong-event-source', 'MUT11-guard-exit-zero', 'MUT12-wrong-child-exit', 'MUT13-timeout-not-zero', 'MUT14-elevated-wrong-exit', 'MUT15-witness-echo-only', 'MUT17-dacl-narrow-network-deny')
     if ($trustedSids.Count -gt 0) { $expectedFail += 'MUT16-dacl-trusted-withheld' }
     $trayOpen = @(Get-Process RunAsHelper -ErrorAction SilentlyContinue | ForEach-Object { $_.MainWindowTitle } | Where-Object { $_ }).Count -gt 0
     if ($trayOpen) { $expectedFail += 'MUT9-wrong-tray-title' }

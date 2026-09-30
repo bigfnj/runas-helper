@@ -41,7 +41,9 @@ passed, and ends with its own RESULT sentence.
 - Elevated cases use `Invoke-Elevated`, which starts a hidden elevated pwsh that writes
   its own `out.txt`/`rc.txt` (`-Verb RunAs` cannot combine with `-RedirectStandardOutput`).
   On this box UAC auto-consents, so elevation is silent. Elevated cases are tagged
-  `needs-elevated` and skipped unless `-AllowElevated` (smoke: or `-Integration`).
+  `needs-elevated` and skipped unless `-AllowElevated` (smoke: or `-Integration`). The
+  self-test has no such switch: its `-Integration` also runs MUT14 and CTRL5, which call
+  `Invoke-Elevated`.
   `Invoke-Elevated` returns only an exit code the target recorded. A GUI-subsystem target
   such as `RunAsHelper.exe` records none, so the helper throws "recorded no exit code"
   rather than substitute a number, and elevated cases call `RunAsHelper.com` (on 2.2.0,
@@ -105,7 +107,9 @@ build in CI, which is the alarm we want. Keep `PowerShellHost.cs`, `CliLaunchRes
   machine change. The SID-removed window (a `/trusted:remove` then re-add) proves the
   same authorization predicate for this user instead.
 - Remote pipe access: single machine. Smoke B16 reads the live pipe's DACL and checks
-  that NETWORK is denied first and that no principal beyond the designed ones is allowed.
+  that the first ACE denies NETWORK full control, that the designed allow ACEs are there
+  and that no other principal is allowed; B4 checks that a trust change reaches the live
+  DACL without a service restart (BL-48).
 - Restricted tokens, the 128-entry trusted-list limit, a domain user, PID-reuse churn.
 - A machine without pwsh: pwsh is installed. The unit test
   `Resolve_FallsBackTo51_WhenPwshMissing` covers the fallback (the resolver is given no

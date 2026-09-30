@@ -57,9 +57,11 @@ function Get-PipeDaclViolations {
     <#
       Reads the service pipe's DACL through a connected client stream (Get-Acl cannot open a
       pipe path) and returns one line per departure from PipeServer.cs CreatePipe. The first
-      ACE must deny NETWORK. Allow ACEs may name only SYSTEM and Administrators (any rights),
-      or INTERACTIVE and the trusted user SIDs with read/write and Synchronize only, and each
-      trusted SID has its own ACE. Nothing may allow NETWORK. No lines means as designed.
+      ACE must deny NETWORK full control (a deny removes only the rights in its own mask).
+      SYSTEM, Administrators and INTERACTIVE must each have their allow ACE. Allow ACEs may
+      name only SYSTEM and Administrators (any rights), or INTERACTIVE and the trusted user
+      SIDs with read/write and Synchronize only, and each trusted SID has its own ACE.
+      Nothing may allow NETWORK. No lines means as designed.
     #>
     param([string[]]$TrustedSids = @(), [string]$PipeName = 'RunAsHelper')
     $c = [IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [IO.Pipes.PipeDirection]::InOut)
@@ -71,6 +73,11 @@ function Get-PipeDaclViolations {
     $out = @()
     if ($rules[0].IdentityReference.Value -ne 'S-1-5-2' -or $rules[0].AccessControlType -ne 'Deny') {
         $out += "first ACE is $($rules[0].AccessControlType) $($rules[0].IdentityReference.Value), not Deny S-1-5-2 (NETWORK)"
+    } elseif ($rules[0].PipeAccessRights -ne [IO.Pipes.PipeAccessRights]::FullControl) {
+        $out += "the NETWORK deny covers $($rules[0].PipeAccessRights), not FullControl"
+    }
+    foreach ($need in 'S-1-5-4', 'S-1-5-18', 'S-1-5-32-544') {
+        if (@($rules | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -eq $need }).Count -eq 0) { $out += "the designed allow ACE for $need is missing" }
     }
     $limited = [int]([IO.Pipes.PipeAccessRights]::ReadWrite -bor [IO.Pipes.PipeAccessRights]::Synchronize)
     foreach ($r in $rules) {

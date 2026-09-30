@@ -137,7 +137,7 @@ The five skips: A10, A12, A14 (covered by Invoke-MsiContent and the install cycl
 
 | Case | First run | Cause | Fix |
 |---|---|---|---|
-| R5, R13 | `harness error: You cannot call a method on a null-valued expression` | the elevated runner's `&` does not wait for a GUI exe and records no exit code, so rc.txt was empty | elevated calls use RunAsHelper.com. (This row first said the runner also falls back to its own exit code. It never did: see BL-45 in the hand-off section.) |
+| R5, R13 | `harness error: You cannot call a method on a null-valued expression` | the elevated runner's `&` does not wait for a GUI exe and records no exit code, so rc.txt was empty | elevated calls use RunAsHelper.com. (This row first said the runner also falls back to its own exit code. For R5 and R13 it never did, because the empty rc.txt threw first; see BL-45 in the hand-off section.) |
 | R7 | (would have failed) | the design used `/listtrustedcallers` as a CLI switch, which never existed | rewritten on `/trusted`, tagged changed-in-2.3.0 |
 
 `Invoke-AuditProbes.ps1 -SoakLaunches 30`: 5 pass. Handles 440 -> 463 (+23) -> 427 (-36)
@@ -323,9 +323,10 @@ directly), so `.Trim()` threw before the folder was removed; the timeout path al
 before its cleanup. rc.txt is empty whenever the target records no exit code: a
 GUI-subsystem target such as the installed exe, or a target that never started (the
 release-verify2 suites ran with nothing installed). The comment above the code promised a
-fallback to the runner's own exit code. That line could never run, and if it had, it would
-have returned the runner's 0 for a target that was never measured. The helper now removes
-its folder on every path and throws "recorded no exit code" instead of returning a number.
+fallback to the runner's own exit code. For an empty rc.txt it never ran, because .Trim()
+on $null threw first; when rc.txt was never written it did run, and returned the runner's
+own code as the target's (S-K2 later measured 64 for a target that exits 7). The helper now
+removes its folder on every path and throws "recorded no exit code" instead of returning a number.
 
 Proof (session scratchpad `p7\elevated-proof.ps1`): E1, a console target running `exit 7`,
 returns 7; E2, the installed exe, and E3, a missing path, both throw the named error and
@@ -379,3 +380,37 @@ Final rerun on the fixed harness against that fresh 2.3.1 install: smoke 25 pass
 skip (30 cases with B16; A6 skips because T1 left a tray open), regression 15 / 0 / 1,
 hardening 6 / 0 / 0, self-test 16 mutations fired of 16 expected and 5 controls passed of 5
 (new: MUT14, MUT15, MUT16, CTRL4, CTRL5). No `rah-*` entry left in %TEMP%.
+
+### Fix review
+
+A second read-only workflow reviewed the sweep's own diff: 23 findings, 22 confirmed and 1
+refuted (BACKLOG HR-01 to HR-23). One was a product defect, BL-48.
+
+BL-48, the pipe DACL after a trust change. On 2.3.1 (session scratchpad
+`p7\v4-verify.ps1`: the change B4 makes, plus one restart): after `/trusted:remove` the live
+DACL already lacked the SID's ACE, but after `/trusted:add`, following a restart, the SID had
+no ACE of its own until the next restart. Private pipes, current user only
+(`p7\npfs-experiment.ps1`): with one instance open, a second instance created with a wider
+DACL left clients seeing the first DACL; SetAccessControl on a new instance created with
+ChangePermissions applied the wider one. CreatePipe now does that on every new listener. On
+the 2.3.2 dev build the v4-verify sequence was clean at every step.
+
+B4 now checks the DACL after the remove and after the re-add. Its first version passed on
+2.3.1, because both refreshes won the race in that run, so it could not be trusted. It now
+holds an idle connection open across both changes, which takes the race away. With it: 2.3.1
+FAIL "pipe DACL follows /trusted:remove within 5 s: unexpected allowed principal <this
+account's SID> (ReadWrite, Synchronize)"; the 2.3.2 dev build PASS.
+
+Other review fixes, proven: MUT17 (a private pipe whose NETWORK deny covers only
+ChangePermissions) fires with "the NETWORK deny covers ChangePermissions, not FullControl";
+S-K5b (TEMP holding U+2019): working tree PASS, bc9c191 FAIL at "pwsh caller selects pwsh
+7"; T2 with the Run value cleared first: the dev install passed 12/12.
+
+The 2.3.2 dev build (unsigned, `-p:ProductVersion=2.3.2`; its published service binary is
+2.3.2 and carries one more SetAccessControl reference than 2.3.1's; 105 unit tests; MSI
+content 7/7 at 2.3.2): install cycle 12/12 over 2.3.1, smoke 24 pass / 0 fail / 6 skip (A13
+skips on an unsigned build), regression 15 / 0 / 1 (R12 now also requires three exit codes of
+0), hardening 6 / 0 / 0, self-test 17 of 17 mutations fired and 5 of 5 controls passed, no
+`rah-*` entry left in %TEMP%. That suite run used B4 before the held connection; the held
+version passed on the same build afterwards. The dev build was then removed and the signed
+2.3.1 release reinstalled (install cycle 10/10).

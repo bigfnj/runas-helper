@@ -15,9 +15,9 @@
   the .com, the framing soak) and the elevated ones; use it only from the integration
   owner's serial run, never from a parallel worktree.
 
-  ConPTY cases need this process's stdout to be a real console. When it is redirected,
-  the script re-launches itself through a hidden pwsh with a real console and prints
-  the captured results, per the Phase 0 harness lesson.
+  ConPTY cases need this process's stdout and stderr to be a real console. When either
+  is redirected, the script re-launches itself through a hidden pwsh with a real console
+  and prints the captured results, per the Phase 0 harness lesson.
 #>
 param(
     [ValidateSet('A', 'B', 'All')][string]$Phase = 'All',
@@ -110,10 +110,12 @@ function Get-Launcher {
 }
 
 function ConvertTo-PsLiteral {
-    # A single-quoted PowerShell literal for splicing a path into a -Command string: an
-    # apostrophe in the path (C:\Users\O'Brien\...) is doubled instead of ending the string.
+    # A single-quoted PowerShell literal for splicing a path into a -Command string. The
+    # parser's own escaper doubles every character that closes such a string: the ASCII
+    # apostrophe (C:\Users\O'Brien\...) and the typographic quotes U+2018 to U+201B, which
+    # pwsh 7 and Windows PowerShell 5.1 both treat as a closing quote too.
     param([Parameter(Mandatory)][string]$Text)
-    "'" + $Text.Replace("'", "''") + "'"
+    "'" + [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Text) + "'"
 }
 
 function Invoke-AdminPwsh {
@@ -249,25 +251,43 @@ try {
             Assert-ExitCode 0 $r.ExitCode
         }
 
-        Invoke-Case -Id 'B4' -Name 'gate-closed untrusted caller exits 1 with "disabled"; trust restored' -Tags @('needs-elevated', 'integration-only') -Test {
+        Invoke-Case -Id 'B4' -Name 'gate-closed untrusted caller exits 1 with "disabled"; trust restored; the pipe DACL follows both changes' -Tags @('needs-elevated', 'integration-only') -Test {
             $sid = Get-CallerSid
             $add = $null
+            # Held open for the whole case: with another instance of the pipe open, the
+            # listener rebuilt after each trust change cannot take the new DACL by being the
+            # name's first instance (BL-48), so the DACL checks below cannot pass by winning
+            # that race. The service drops a silent connection after 30 s; B4 takes less.
+            $hold = [IO.Pipes.NamedPipeClientStream]::new('.', 'RunAsHelper', [IO.Pipes.PipeDirection]::InOut)
+            $hold.Connect(5000)
             try {
-                $rm = Invoke-Elevated -FilePath $com -ArgumentList @('/trusted:remove', $sid)
-                Assert-ExitCode 0 $rm.ExitCode
-                Assert-Match 'Removed' $rm.Text 'remove confirmation'
-                $den = Invoke-Console -FilePath $com -TimeoutSec 30 -Env $comp -ArgumentList @('/capture', '/timeout:10', 'cmd', '/c', 'echo', "WITNESS-$cn")
-                Assert-ExitCode 1 $den.ExitCode
-                Assert-Match 'Command line is disabled' $den.Stdout 'denial text'
-                Assert-NotMatch "WITNESS-$cn" $den.Stdout 'the child did not run'
-            } finally {
-                $add = Invoke-Elevated -FilePath $com -ArgumentList @('/trusted:add', $sid)
-            }
-            Assert-ExitCode 0 $add.ExitCode
-            Assert-Match 'Trusted:' $add.Text 'add confirmation'
-            $ok = Invoke-Console -FilePath $com -TimeoutSec 30 -Env $comp -ArgumentList @('/capture', '/timeout:10', 'cmd', '/c', 'echo', "WITNESS-$cn")
-            Assert-ExitCode 0 $ok.ExitCode
-            Assert-Match "WITNESS-$cn" $ok.Stdout 'launch allowed again after re-add'
+                try {
+                    $rm = Invoke-Elevated -FilePath $com -ArgumentList @('/trusted:remove', $sid)
+                    Assert-ExitCode 0 $rm.ExitCode
+                    Assert-Match 'Removed' $rm.Text 'remove confirmation'
+                    $den = Invoke-Console -FilePath $com -TimeoutSec 30 -Env $comp -ArgumentList @('/capture', '/timeout:10', 'cmd', '/c', 'echo', "WITNESS-$cn")
+                    Assert-ExitCode 1 $den.ExitCode
+                    Assert-Match 'Command line is disabled' $den.Stdout 'denial text'
+                    Assert-NotMatch "WITNESS-$cn" $den.Stdout 'the child did not run'
+                    # The change must reach the live pipe DACL without a service restart
+                    # (BL-48): the removed SID keeps no ACE of its own. Polled briefly, because
+                    # the listener is rebuilt on the service's accept loop, not in the request.
+                    $clean = Wait-Until -TimeoutSec 5 -Condition { @(Get-PipeDaclViolations -TrustedSids (Get-AllowedCallerSids)).Count -eq 0 }
+                    $dacl = @(Get-PipeDaclViolations -TrustedSids (Get-AllowedCallerSids))
+                    Assert-True $clean "pipe DACL follows /trusted:remove within 5 s: $($dacl -join '; ')"
+                } finally {
+                    $add = Invoke-Elevated -FilePath $com -ArgumentList @('/trusted:add', $sid)
+                }
+                Assert-ExitCode 0 $add.ExitCode
+                Assert-Match 'Trusted:' $add.Text 'add confirmation'
+                $ok = Invoke-Console -FilePath $com -TimeoutSec 30 -Env $comp -ArgumentList @('/capture', '/timeout:10', 'cmd', '/c', 'echo', "WITNESS-$cn")
+                Assert-ExitCode 0 $ok.ExitCode
+                Assert-Match "WITNESS-$cn" $ok.Stdout 'launch allowed again after re-add'
+                # And the re-added SID has its own ACE again, without a restart (BL-48).
+                $clean2 = Wait-Until -TimeoutSec 5 -Condition { @(Get-PipeDaclViolations -TrustedSids (Get-AllowedCallerSids)).Count -eq 0 }
+                $dacl2 = @(Get-PipeDaclViolations -TrustedSids (Get-AllowedCallerSids))
+                Assert-True $clean2 "pipe DACL follows /trusted:add within 5 s: $($dacl2 -join '; ')"
+            } finally { $hold.Dispose() }
         }
 
         Invoke-Case -Id 'B5' -Name 'service down: help still works, launch exits 1; service restarts' -Tags @('needs-elevated', 'integration-only') -Test {
@@ -338,12 +358,13 @@ try {
             # quote and holds more, and ArgumentList would escape inner quotes with
             # backslashes, so the cmd row runs a small .cmd wrapper by relative path from the
             # work dir (.\ because agent shells set NoDefaultCurrentDirectoryInExePath, which
-            # stops cmd finding a bare name there). The script path travels as %1 on cmd's
-            # UTF-16 command line, never through the ASCII file, which would turn a letter
-            # such as u-umlaut into '?'. The caller of the .com is then cmd.exe.
+            # stops cmd finding a bare name there). Both paths travel as arguments on cmd's
+            # UTF-16 command line (%1 the launcher, %2 the script), never through the ASCII
+            # file, which would turn a letter such as u-umlaut into '?'. The caller of the
+            # .com is then cmd.exe.
             $wrap = Join-Path $W 'via-cmd.cmd'
-            Set-Content -LiteralPath $wrap -Encoding ASCII -Value ('@"' + $com + '" /capture /timeout:30 %1')
-            $r6 = Invoke-Console -FilePath 'cmd' -TimeoutSec 40 -Env $env2 -WorkingDirectory $W -ArgumentList @('/d', '/c', '.\via-cmd.cmd', $v)
+            Set-Content -LiteralPath $wrap -Encoding ASCII -Value '@%1 /capture /timeout:30 %2'
+            $r6 = Invoke-Console -FilePath 'cmd' -TimeoutSec 40 -Env $env2 -WorkingDirectory $W -ArgumentList @('/d', '/c', '.\via-cmd.cmd', $com, $v)
             Assert-Match 'PSV=5' $r6.Stdout 'cmd caller falls back to 5.1'
             Assert-Match '\(default\)' $r6.Stdout 'reason is default for a cmd caller'
             $r7 = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& $qc /capture /timeout:30 $(ConvertTo-PsLiteral $fx.Args) alpha 'b c'")
@@ -453,12 +474,10 @@ try {
             Assert-Match 'applies with /capture' $r.Stdout 'the ignored-timeout line'
         }
 
-        Invoke-Case -Id 'B16' -Name 'pipe DACL: NETWORK denied first; only INTERACTIVE and trusted users get read/write; no other principal' -Tags @('baseline-control') -Test {
+        Invoke-Case -Id 'B16' -Name 'pipe DACL: NETWORK denied full control first; SYSTEM and Administrators full control; INTERACTIVE and each trusted user read/write only; no other principal' -Tags @('baseline-control') -Test {
             # The remote-access row of "What cannot be tested" rests on this deny ACE, so it is
             # read from the live pipe rather than from PipeServer.cs.
-            $reg = Get-ItemProperty 'HKLM:\SOFTWARE\RunAsHelper' -ErrorAction SilentlyContinue
-            $trusted = @(if ($reg -and ($reg.PSObject.Properties.Name -contains 'AllowedCallerSids')) { $reg.AllowedCallerSids })
-            $bad = @(Get-PipeDaclViolations -TrustedSids $trusted)
+            $bad = @(Get-PipeDaclViolations -TrustedSids (Get-AllowedCallerSids))
             Assert-Equal 0 $bad.Count "departures from the designed DACL: $($bad -join '; ')"
         }
     }

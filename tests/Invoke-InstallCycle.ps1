@@ -59,7 +59,10 @@ if ($Cycle) {
         "Install again and verify again"
     )
 }
-if ($StartTray) { $steps += "Start the installed tray with administrator rights (no arguments) and check its title carries v$ExpectedVersion" }
+if ($StartTray) {
+    $steps += "Put the HKCU Run value in the opposite of the state the tray should leave (per settings.json StartWithWindows)"
+    $steps += "Start the installed tray with administrator rights (no arguments) and check its title carries v$ExpectedVersion, then that it wrote (or removed) the Run value; the profile's value is restored if it did not"
+}
 
 if ($DryRun) {
     Write-Host "DRY RUN Invoke-InstallCycle (no machine state changed):"
@@ -135,7 +138,9 @@ function Invoke-Msiexec {
 $p = Start-Process msiexec.exe -ArgumentList '__ARGS__' -Wait -PassThru -WindowStyle Hidden
 [IO.File]::WriteAllText("__RC__", "$($p.ExitCode)")
 '@
-    Invoke-AdminRunner -Body $body.Replace('__ARGS__', $quoted.Replace("'", "''"))
+    # The parser's escaper, not a plain '' doubling: U+2018 to U+201B also close a
+    # single-quoted string, and an MSI or log path may hold one.
+    Invoke-AdminRunner -Body $body.Replace('__ARGS__', [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($quoted))
 }
 
 function Stop-TrayInstances {
@@ -281,6 +286,18 @@ if ($Cycle) {
 }
 
 if ($StartTray) {
+    # T2 must prove the tray itself writes (or deletes) the Run value, so the value is put
+    # in the opposite state before T1: a profile that already held the expected value
+    # passed T2 whether or not the tray did anything. The tray writes the value on load
+    # when Start with Windows is on (the default, and what a settings.json without
+    # StartWithWindows means) and deletes it when it is off.
+    $s = if (Test-Path $settingsPath) { Get-Content -Raw $settingsPath | ConvertFrom-Json } else { $null }
+    $startWithWindows = -not ($s -and ($s.PSObject.Properties.Name -contains 'StartWithWindows') -and -not $s.StartWithWindows)
+    $wantRun = if ($startWithWindows) { '"' + $exe + '" --tray' } else { '<absent>' }
+    $runBefore = (Get-Snapshot).HkcuRun
+    if ($startWithWindows) { Remove-ItemProperty -Path $runKey -Name RunAsHelper -ErrorAction SilentlyContinue }
+    else { Set-ItemProperty -Path $runKey -Name RunAsHelper -Value ('"' + $exe + '" --tray') }
+
     Invoke-Case -Id 'T1' -Name "tray started with administrator rights shows 'RunAS Helper - v$ExpectedVersion'" -Test {
         Start-Process $exe -Verb RunAs | Out-Null
         $ok = Wait-Until -TimeoutSec 20 -Condition {
@@ -292,18 +309,18 @@ if ($StartTray) {
         $title = @(Get-Process RunAsHelper -ErrorAction SilentlyContinue | ForEach-Object { $_.MainWindowTitle } | Where-Object { $_ })[0]
         Assert-Match ('RunAS Helper - v' + [regex]::Escape($ExpectedVersion)) $title 'tray title'
     }
-    Invoke-Case -Id 'T2' -Name 'HKCU Run entry names the installed exe after the tray start' -Test {
-        # The tray writes the Run value on load when Start with Windows is on (the default,
-        # and what a settings.json without StartWithWindows means) and deletes it when it is
-        # off. Comparing with the value from before the cycle failed on a profile where no
-        # tray had run yet, or where the value named another copy of the exe.
-        $s = if (Test-Path $settingsPath) { Get-Content -Raw $settingsPath | ConvertFrom-Json } else { $null }
-        $startWithWindows = -not ($s -and ($s.PSObject.Properties.Name -contains 'StartWithWindows') -and -not $s.StartWithWindows)
-        $want = if ($startWithWindows) { '"' + $exe + '" --tray' } else { '<absent>' }
+    Invoke-Case -Id 'T2' -Name 'the started tray writes (or removes) the HKCU Run entry itself' -Test {
+        # Against the value the tray should leave, not the value from before the cycle:
+        # that comparison failed on a profile where no tray had run yet, or where the
+        # value named another copy of the exe.
         $got = [string](Get-Snapshot).HkcuRun
         if (-not $got) { $got = '<absent>' }
-        Assert-Equal $want $got "HKCU Run value after the tray start (StartWithWindows $startWithWindows)"
+        Assert-Equal $wantRun $got "HKCU Run value after the tray start (StartWithWindows $startWithWindows)"
     }
+    # A tray that did not act must not cost the profile its entry.
+    $after = [string](Get-Snapshot).HkcuRun
+    if (-not $after) { $after = '<absent>' }
+    if ($after -ne $wantRun -and $null -ne $runBefore) { Set-ItemProperty -Path $runKey -Name RunAsHelper -Value $runBefore }
 }
 
 Finish-Run -Title "install cycle $ExpectedVersion"

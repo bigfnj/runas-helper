@@ -4,7 +4,8 @@
 # requested, 1002 launch succeeded (a failed launch writes 1003, not 1002), 1003 denied
 # (gate closed or expired, tray-only verb, unknown verb, launch failure) or identity
 # mismatch, 1004 token failure, 1005 service start or stop (there is no install event),
-# 1006 job ended by an operator. The client's CrashLogger writes 1099 under the same source.
+# 1006 an operator's kill of a job (its text says terminated or could not be terminated).
+# The client's CrashLogger writes 1099 under the same source.
 Set-StrictMode -Version Latest
 
 function Get-RunAsHelperEvents {

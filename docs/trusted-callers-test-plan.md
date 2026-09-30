@@ -168,8 +168,8 @@ account, a domain, or token crafting. Case IDs are from `tests/Invoke-Smoke.ps1`
 | `/trusted` list / add / remove round-trip | B10 | Add resolves a name to the same SID; remove revokes; idempotent |
 | Event records keep `Source: cli` for a CLI launch, `Source: tray` for the elevated tray | B11, B12 | |
 | Old client compatible with the new service | R14 | Old 2.2.0 client copy: capture, witness and `/jobs` |
-| Pipe DACL carries an ACE for the trusted SID only while trusted | B10 (accesschk) | `accesschk -nobanner \\pipe\RunAsHelper` after add and after remove |
-| Remote NETWORK deny ACE | recorded | Single machine; the deny-NETWORK ACE is checked locally with `accesschk`, not from a second host |
+| Pipe DACL carries an ACE for the trusted SID only while trusted | B4, B16 | Read from the live pipe (`Get-PipeDaclViolations`): B4 after `/trusted:remove` and after the re-add, without a service restart (BL-48); B16 for the current list. Earlier this row named an `accesschk` check that was never built |
+| Remote NETWORK deny ACE | B16 (locally) | Single machine; B16 checks on the live pipe that the first ACE denies NETWORK full control, not from a second host |
 
 Rows not automatable on this box, recorded rather than run (see `tests/README.md` and
 BACKLOG NT-01..NT-06):

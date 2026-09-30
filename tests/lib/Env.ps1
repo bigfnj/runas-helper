@@ -29,6 +29,13 @@ function Get-InstalledCom { Join-Path (Get-InstallDir) 'RunAsHelper.com' }
 function Get-InstalledService { Join-Path (Get-InstallDir) 'RunAsHelper.Service.exe' }
 
 function Get-CallerSid { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
+
+function Get-AllowedCallerSids {
+    # The trusted command-line users the service reads (HKLM\SOFTWARE\RunAsHelper,
+    # AllowedCallerSids); an empty list when the key or the value is absent.
+    $reg = Get-ItemProperty 'HKLM:\SOFTWARE\RunAsHelper' -ErrorAction SilentlyContinue
+    @(if ($reg -and ($reg.PSObject.Properties.Name -contains 'AllowedCallerSids')) { $reg.AllowedCallerSids })
+}
 function Get-ComputerNameLocal { $env:COMPUTERNAME }
 
 function Get-MachinePath { [Environment]::GetEnvironmentVariable('Path', 'Machine') }
