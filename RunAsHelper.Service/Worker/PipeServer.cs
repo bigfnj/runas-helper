@@ -33,9 +33,13 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     // messages are routed correctly without serializing launches. The bound (10)
     // prevents runaway resource use while allowing multiple concurrent callers.
     // A 30-second wait timeout prevents new requests from queuing behind a stuck
-    // job indefinitely — callers get a "service busy" error and can retry.
+    // job indefinitely: callers get a "service busy" error and can retry.
     private const int MaxConcurrentLaunches = 10;
     private readonly SemaphoreSlim _launchGate = new(MaxConcurrentLaunches, MaxConcurrentLaunches);
+
+    // How long a freshly connected client has to send its request frame before the
+    // connection is dropped. The shipped client writes immediately after ConnectAsync.
+    private static readonly TimeSpan FirstFrameTimeout = TimeSpan.FromSeconds(30);
 
     // Whether CLI-sourced launches are permitted. Defaults OFF and is controlled
     // by the (installed, elevated) tray via the "setcli" verb; the tray resets it
@@ -70,18 +74,23 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         public volatile uint LivePid;
 
         // Rolling tail of the child's captured output, so the tray can show what a job
-        // is actually doing rather than just its command line. Bounded: a chatty job
-        // must not grow the service's memory without limit, and only the recent lines
+        // is actually doing rather than just its command line. Bounded in lines and in
+        // characters: a chatty job must not grow the service's memory without limit (a
+        // single line can be up to LineSplitter.MaxLineBytes), and only the recent lines
         // are useful for "why is this stuck?".
         private const int MaxLines = 200;
+        private const int MaxChars = 1024 * 1024;
         private readonly Queue<string> _output = new();
+        private int _chars;
 
         public void AddOutput(string line)
         {
             lock (_output)
             {
                 _output.Enqueue(line);
-                while (_output.Count > MaxLines) _output.Dequeue();
+                _chars += line.Length;
+                while (_output.Count > 1 && (_output.Count > MaxLines || _chars > MaxChars))
+                    _chars -= _output.Dequeue().Length;
             }
         }
 
@@ -150,6 +159,34 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
         if (hProc == IntPtr.Zero) return false;
         try { return NativeMethods.TerminateProcess(hProc, 1); }
         finally { NativeMethods.CloseHandle(hProc); }
+    }
+
+    // A WaitHandle over a process handle the caller still owns (ownsHandle: false), so the
+    // exit wait can be registered with the thread pool instead of parking a pool thread in
+    // WaitForSingleObject for the child's whole lifetime.
+    private sealed class ProcessWaitHandle : WaitHandle
+    {
+        public ProcessWaitHandle(IntPtr hProcess) =>
+            SafeWaitHandle = new Microsoft.Win32.SafeHandles.SafeWaitHandle(hProcess, ownsHandle: false);
+    }
+
+    // Completes true when the process signals, false when timeoutMs (INFINITE allowed)
+    // passes first. Cancelling the token unregisters the wait and throws.
+    private static async Task<bool> WaitForExitAsync(IntPtr hProcess, uint timeoutMs, CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handle = new ProcessWaitHandle(hProcess);
+        RegisteredWaitHandle registration = ThreadPool.RegisterWaitForSingleObject(
+            handle,
+            static (state, timedOut) => ((TaskCompletionSource<bool>)state!).TrySetResult(!timedOut),
+            tcs,
+            timeoutMs,
+            executeOnlyOnce: true);
+        using CancellationTokenRegistration ctr = ct.Register(
+            static state => ((TaskCompletionSource<bool>)state!).TrySetCanceled(),
+            tcs);
+        try { return await tcs.Task; }
+        finally { registration.Unregister(null); }
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -475,8 +512,8 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                 ClientProcessSnapshot client = CaptureClientProcess(pipe);
 
                 // One serialised writer for the whole connection. Only the launch block
-                // near the end has a second, background writer (the stdout pump running on
-                // pumpTask), so its frames go through this gate: the log-drain relay, each
+                // near the end has a second, background writer (the stdout pump inside
+                // CaptureRelay), so its frames go through this gate: the log-drain relay, each
                 // captured "stdout" line, the exit-or-timeout "log" line, the "exit"/"timeout"
                 // signal, the "pid", and the final "result". Every verb block ABOVE the launch
                 // block writes on the single handler continuation with no background task
@@ -491,7 +528,26 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                 // None of those overlaps the pump, which is created only inside the launch block.
                 using var writer = new PipeMessageWriter(pipe);
 
-                var request = await PipeProtocol.ReadLaunchRequestAsync(pipe, ct);
+                // The first frame is read under a deadline. The shipped client writes its
+                // request right after connecting, so a client that connects and stays silent
+                // is not one of ours; without the deadline it would hold this pipe instance
+                // and this handler until it exited.
+                LaunchRequest? request;
+                using (var firstFrameCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    firstFrameCts.CancelAfter(FirstFrameTimeout);
+                    try
+                    {
+                        request = await PipeProtocol.ReadLaunchRequestAsync(pipe, firstFrameCts.Token);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        logger.LogDebug(
+                            "Client pid {Pid} connected but sent no request within {Seconds}s; dropping the connection.",
+                            client.Pid, (int)FirstFrameTimeout.TotalSeconds);
+                        return;
+                    }
+                }
                 if (request is null) return;
 
                 uint clientPid = client.Pid;
@@ -511,17 +567,18 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     : pipeUserSid ?? client.UserSid;
                 if (identityMismatch)
                 {
+                    // Not a denial: the request goes on, but with no SID it cannot match the
+                    // trusted-caller policy, so it is authorized on the installed-tray identity
+                    // or the open CLI gate alone. The log line and Event 1003 say exactly that.
                     logger.LogWarning(
-                        "Rejected client identity mismatch for pid {Pid}: pipe SID {PipeSid}, process SID {ProcessSid}.",
+                        "Client identity mismatch for pid {Pid}: pipe SID {PipeSid}, process SID {ProcessSid}; the caller's SID is treated as unknown and the request continues.",
                         clientPid, pipeUserSid!.Value, client.UserSid!.Value);
-                    // Surface the mismatch to the event log too. EventLogHelper.cs claims 1003
-                    // covers identity mismatch; before this it only fired on a gate/launch denial.
-                    EventLogHelper.Denied(request.CommandLine, "pipe and process identity differ");
+                    EventLogHelper.IdentityMismatch(clientPid, pipeUserSid.Value, client.UserSid.Value);
                 }
                 bool isTrustedCaller = _trustedCallers.Contains(clientUserSid);
 
                 logger.LogInformation(
-                    "{Verb} request (source={Source} identity={Identity} callerSid={CallerSid} pipeSid={PipeSid} processSid={ProcessSid} trusted={Trusted} signed={Signed} pid={Pid}): '{CommandLine}' priority=0x{Priority:X}",
+                    "{Verb} request (source={Source} identity={Identity} callerSid={CallerSid} pipeSid={PipeSid} processSid={ProcessSid} trusted={Trusted} signed={Signed} pid={Pid} image={Image}): '{CommandLine}' priority=0x{Priority:X}",
                     request.Verb, request.Source,
                     isTrayElevated ? "tray-elevated" : isTray ? "tray-notelev" : "other",
                     clientUserSid?.Value ?? "unknown",
@@ -529,7 +586,9 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     client.UserSid?.Value ?? "unknown",
                     isTrustedCaller,
                     client.IsSigned,
-                    clientPid, request.CommandLine, request.Priority);
+                    clientPid,
+                    client.ExecutablePath ?? "unknown",
+                    request.CommandLine, request.Priority);
 
                 // ── setcli: installed tray + elevated (both required to control the gate) ──
                 if (request.Verb == "setcli")
@@ -545,7 +604,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     if (!isTrayElevated && !isClosingOwnGate)
                     {
                         string reason = !isTray ? "not the installed tray" : "tray is not elevated";
-                        logger.LogWarning("Rejected setcli — {Reason} (pid {Pid}).", reason, clientPid);
+                        logger.LogWarning("Rejected setcli - {Reason} (pid {Pid}).", reason, clientPid);
                         EventLogHelper.Denied("setcli", $"pid {clientPid}: {reason}");
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
                         return;
@@ -567,8 +626,10 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                             ? (_allowCli ? " with no expiry" : "")
                             : $" for {request.GateMinutes} minute(s)");
 
-                    // Report the effective deadline so the tray can mirror the countdown
-                    // rather than assume its own clock matches the enforcer's.
+                    // Acknowledge the expiry the request asked for: the payload is the
+                    // request's own GateMinutes (0 when the gate has no expiry), not an
+                    // absolute deadline. No shipped client reads it; the frame stays so a
+                    // future tray can confirm what the service accepted.
                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("gate",
                         expiresTicks == 0 ? "0" : request.GateMinutes.ToString()), ct);
                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Success"), ct);
@@ -585,7 +646,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     {
                         string reason = !isTray ? "not the installed tray" : "tray is not elevated";
                         logger.LogWarning(
-                            "Rejected {Verb} — {Reason} (pid {Pid}).",
+                            "Rejected {Verb} - {Reason} (pid {Pid}).",
                             request.Verb, reason, clientPid);
                         EventLogHelper.Denied(request.Verb, $"pid {clientPid}: {reason}");
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
@@ -653,7 +714,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     if (!isTrayElevated)
                     {
                         string reason = !isTray ? "not the installed tray" : "tray is not elevated";
-                        logger.LogWarning("Rejected {Verb} — {Reason} (pid {Pid}).", request.Verb, reason, clientPid);
+                        logger.LogWarning("Rejected {Verb} - {Reason} (pid {Pid}).", request.Verb, reason, clientPid);
                         EventLogHelper.Denied(request.Verb, $"pid {clientPid}: {reason}");
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
                         return;
@@ -713,7 +774,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     else
                     {
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
-                            "No such job — it may have finished already."), ct);
+                            "No such job - it may have finished already."), ct);
                     }
 
                     await PipeProtocol.WriteAsync(pipe,
@@ -746,7 +807,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     if (_allowCli && !IsTrayAlive(_allowCliOwnerPid))
                     {
                         logger.LogInformation(
-                            "CLI gate owner (pid {Pid}) is gone — reverting to disabled.",
+                            "CLI gate owner (pid {Pid}) is gone - reverting to disabled.",
                             _allowCliOwnerPid);
                         CloseCliGate();
                     }
@@ -759,7 +820,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     long expiresTicks = Interlocked.Read(ref _allowCliExpiresUtcTicks);
                     if (_allowCli && expiresTicks != 0 && DateTime.UtcNow.Ticks >= expiresTicks)
                     {
-                        logger.LogInformation("CLI gate expired — reverting to disabled.");
+                        logger.LogInformation("CLI gate expired - reverting to disabled.");
                         closedReason = "CLI gate expired";
                         CloseCliGate();
                     }
@@ -839,7 +900,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                                 return (ok, 0u, IntPtr.Zero, (System.IO.Stream?)null);
                             }
 
-                            // Warn when /capture is requested without a timeout — an infinite
+                            // Warn when /capture is requested without a timeout: an infinite
                             // wait blocks this launch slot until the child exits naturally.
                             if (request.CaptureOutput && request.TimeoutSeconds <= 0)
                                 LogCallback("[warning] /capture used without /timeout - this launch slot is held until the child process exits. Use /timeout:N to set a ceiling.");
@@ -857,11 +918,46 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                         }
                     }, ct);
 
-                    await foreach (string msg in logChannel.Reader.ReadAllAsync(ct))
-                        await writer.WriteAsync(new PipeMessage("log", msg), ct);
+                    // Once the client has stopped reading, every remaining frame is best
+                    // effort: the outcome (a child launched, exited, timed out) is decided by
+                    // what happened, not by whether anyone is still listening, and the
+                    // handles are released the same way in every case.
+                    bool clientGone = false;
+                    async Task SendAsync(PipeMessage msg)
+                    {
+                        if (clientGone) return;
+                        try { await writer.WriteAsync(msg, ct); }
+                        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                        {
+                            clientGone = true;
+                        }
+                    }
 
-                    var (result, launchedPid, hProcess, stdoutStream) = await launchTask;
+                    // Relay the launcher's log lines while it works. If the client vanishes
+                    // during the launch the relay fails, but the launch itself is already in
+                    // flight: its result must still be collected so the process handle and
+                    // the capture stream are closed rather than orphaned.
+                    (bool result, uint launchedPid, IntPtr hProcess, System.IO.Stream? stdoutStream) launch;
+                    try
+                    {
+                        await foreach (string msg in logChannel.Reader.ReadAllAsync(ct))
+                            await writer.WriteAsync(new PipeMessage("log", msg), ct);
+                    }
+                    catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                    {
+                        clientGone = true;
+                    }
+                    finally
+                    {
+                        launch = await launchTask;
+                    }
+                    var (result, launchedPid, hProcess, stdoutStream) = launch;
                     tracked.LivePid = launchedPid;
+
+                    if (clientGone)
+                        logger.LogWarning(
+                            "Job {Id}: client pid {Client} disconnected during the launch; releasing the launch's handles (pid {Pid}).",
+                            tracked.Info.Id, clientPid, launchedPid);
 
                     // When output capture is active, stream the child's stdout/stderr
                     // back to the caller as "stdout" messages and wait for the child to
@@ -872,106 +968,86 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                             ? (uint)(request.TimeoutSeconds * 1_000)
                             : NativeMethods.INFINITE;
 
-                        // Pump stdout on a background task so we don't block the
-                        // await below. The read end is an asynchronous pipe, so cancelling
-                        // pumpCts aborts a pending ReadLineAsync straight away — that is what
-                        // lets a /timeout release this caller (and its launch slot) while the
-                        // child keeps running. Disposing the stream cannot do that on its own:
-                        // a read on a synchronous handle only returns at EOF, i.e. when the
-                        // child finally exits.
-                        using var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
                         // The console OEM code page, read once for this launch. A line that is
                         // not valid UTF-8 (cmd.exe, Windows PowerShell 5.1) is decoded with it.
                         int oemCodePage = (int)NativeMethods.GetOEMCP();
 
-                        // Byte-level line reader rather than StreamReader.ReadLineAsync: it lets
-                        // each line be decoded strict-UTF-8-then-OEM, and ReadAsync(memory, ct)
-                        // on the asynchronous pipe honours pumpCts so a /timeout still aborts a
-                        // pending read at once (a StreamReader over the raw stream would not
-                        // expose the per-line bytes). Split on LF, strip a trailing CR, and
-                        // deliver the final line even when it has no trailing newline (EOF).
-                        var pumpTask = Task.Run(async () =>
-                        {
-                            try
-                            {
-                                var chunk = new byte[4096];
-                                using var lineBuf = new System.IO.MemoryStream();
-                                int read;
-                                while ((read = await stdoutStream.ReadAsync(chunk.AsMemory(), pumpCts.Token)) > 0)
-                                {
-                                    for (int i = 0; i < read; i++)
-                                    {
-                                        byte b = chunk[i];
-                                        if (b == (byte)'\n')
-                                        {
-                                            await EmitLineAsync(lineBuf);
-                                        }
-                                        else
-                                        {
-                                            lineBuf.WriteByte(b);
-                                        }
-                                    }
-                                }
-                                if (lineBuf.Length > 0) await EmitLineAsync(lineBuf);
-                            }
-                            catch (Exception ex)
-                                when (ex is System.IO.IOException or ObjectDisposedException
-                                          or OperationCanceledException) { }
-
-                            async Task EmitLineAsync(System.IO.MemoryStream buf)
-                            {
-                                byte[] bytes = buf.ToArray();
-                                buf.SetLength(0);
-                                int len = bytes.Length;
-                                if (len > 0 && bytes[len - 1] == (byte)'\r') len--;
-                                string text = CaptureDecoder.Decode(
-                                    len == bytes.Length ? bytes : bytes[..len], oemCodePage);
-                                tracked.AddOutput(text);
-                                await writer.WriteAsync(new PipeMessage("stdout", text), ct);
-                            }
-                        }, pumpCts.Token);
-
-                        // Wait for the child process to exit (blocking, on a thread-pool thread).
-                        uint waitResult = await Task.Run(
-                            () => NativeMethods.WaitForSingleObject(hProcess, waitMs), ct);
-
-                        bool  timedOut = waitResult == NativeMethods.WAIT_TIMEOUT;
+                        // CaptureRelay pumps the read end (an asynchronous pipe, so a pending
+                        // read is cancellable, which is what lets /timeout release this caller
+                        // and its slot while the child keeps running) and waits for the child.
+                        // It ends the session on the first of: child exit (then a bounded drain,
+                        // so a descendant holding the write end cannot stretch the ceiling),
+                        // the ceiling, or the client's pipe closing (then the read end is
+                        // disposed so the child's writes fail instead of blocking on a full
+                        // pipe). It always disposes the stream before returning and never
+                        // writes a frame after the outcome is decided.
+                        CaptureResult capture;
                         uint? exitCode = null;
-                        if (timedOut)
+                        try
                         {
-                            await writer.WriteAsync(new PipeMessage("log",
-                                $"[timeout] Process did not exit within {request.TimeoutSeconds}s - closing output stream (the process keeps running)."), ct);
-                            pumpCts.Cancel();
-                        }
-                        else if (waitResult == NativeMethods.WAIT_OBJECT_0 &&
-                                 NativeMethods.GetExitCodeProcess(hProcess, out uint code))
-                        {
+                            if (clientGone)
+                            {
+                                // Nobody will read the output: do not start the pump at all.
+                                await stdoutStream.DisposeAsync();
+                                capture = new CaptureResult(CaptureEnd.ClientGone, DrainCutShort: false);
+                            }
+                            else
+                            {
+                                capture = await CaptureRelay.RunAsync(
+                                    stdoutStream,
+                                    sendLine: (line, tok) =>
+                                    {
+                                        tracked.AddOutput(line);
+                                        return writer.WriteAsync(new PipeMessage("stdout", line), tok);
+                                    },
+                                    waitForExit: tok => WaitForExitAsync(hProcess, waitMs, tok),
+                                    oemCodePage,
+                                    CaptureRelay.DrainGrace,
+                                    ct);
+                            }
+
                             // Read the code BEFORE CloseHandle; the wait already reported exit,
                             // so it cannot still be STILL_ACTIVE.
-                            exitCode = code;
+                            if (capture.End == CaptureEnd.Exited &&
+                                NativeMethods.GetExitCodeProcess(hProcess, out uint code))
+                                exitCode = code;
+                        }
+                        finally
+                        {
+                            // Whatever happened to the client, the process handle is closed
+                            // here, before the first post-outcome frame could fail.
+                            NativeMethods.CloseHandle(hProcess);
                         }
 
-                        NativeMethods.CloseHandle(hProcess);
-                        try { await pumpTask; }
-                        catch (OperationCanceledException) { /* expected on timeout */ }
-                        await stdoutStream.DisposeAsync();
-
-                        // After the pump has drained, so every "stdout" frame precedes these.
+                        // The relay has ended, so every "stdout" frame precedes these.
                         // Wire order: log*, stdout*, then (log [timeout] + timeout) or
                         // (log "Process exited..." + exit), then pid, then result.
-                        if (timedOut)
+                        switch (capture.End)
                         {
-                            await writer.WriteAsync(new PipeMessage("timeout",
-                                request.TimeoutSeconds.ToString()), ct);
-                        }
-                        else if (exitCode is uint ec)
-                        {
-                            logger.LogInformation("Job {Id} (pid {Pid}) exited with code {Code}.",
-                                tracked.Info.Id, launchedPid, ec);
-                            await writer.WriteAsync(new PipeMessage("log",
-                                $"Process exited with code {ec}."), ct);
-                            await writer.WriteAsync(new PipeMessage("exit", ec.ToString()), ct);
+                            case CaptureEnd.ClientGone:
+                                clientGone = true;
+                                logger.LogWarning(
+                                    "Job {Id} (pid {Pid}): client pid {Client} disconnected while output was streaming; capture pipe detached, the process keeps running.",
+                                    tracked.Info.Id, launchedPid, clientPid);
+                                break;
+
+                            case CaptureEnd.TimedOut:
+                                await SendAsync(new PipeMessage("log",
+                                    $"[timeout] Process did not exit within {request.TimeoutSeconds}s - closing output stream (the process keeps running)."));
+                                await SendAsync(new PipeMessage("timeout",
+                                    request.TimeoutSeconds.ToString()));
+                                break;
+
+                            case CaptureEnd.Exited when exitCode is uint ec:
+                                logger.LogInformation("Job {Id} (pid {Pid}) exited with code {Code}.",
+                                    tracked.Info.Id, launchedPid, ec);
+                                if (capture.DrainCutShort)
+                                    await SendAsync(new PipeMessage("log",
+                                        $"[timeout] Process exited but its output stream was still held open by a process it started - detached after {(int)CaptureRelay.DrainGrace.TotalSeconds}s; later output from that process is not captured."));
+                                await SendAsync(new PipeMessage("log",
+                                    $"Process exited with code {ec}."));
+                                await SendAsync(new PipeMessage("exit", ec.ToString()));
+                                break;
                         }
                     }
                     else if (hProcess != IntPtr.Zero)
@@ -980,11 +1056,10 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     }
 
                     // Send PID before result so the tray can call AllowSetForegroundWindow
-                    // before acknowledging success — the launched process needs the right
+                    // before acknowledging success: the launched process needs the right
                     // while it is starting up.
                     if (result && launchedPid != 0)
-                        await writer.WriteAsync(
-                            new PipeMessage("pid", launchedPid.ToString()), ct);
+                        await SendAsync(new PipeMessage("pid", launchedPid.ToString()));
 
                     if (!isValidate)
                     {
@@ -994,8 +1069,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                             EventLogHelper.Denied(request.CommandLine, "launch failed");
                     }
 
-                    await writer.WriteAsync(
-                        new PipeMessage("result", result ? "Success" : "Failed"), ct);
+                    await SendAsync(new PipeMessage("result", result ? "Success" : "Failed"));
                 }
                 finally
                 {
