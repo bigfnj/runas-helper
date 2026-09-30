@@ -13,7 +13,7 @@ jobs:
   build-test:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # lets Directory.Build.props stamp the tag version, not 1.0.0.0
 
