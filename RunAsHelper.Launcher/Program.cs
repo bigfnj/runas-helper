@@ -48,7 +48,9 @@ internal static unsafe class Program
     {
         try
         {
-            Process.Start(new ProcessStartInfo(exe, args.Length == 1 ? args[0] : string.Empty)
+            // The Process object holds a handle to the child; dispose it before returning
+            // rather than leaving it to the finalizer (the child itself is not affected).
+            using var child = Process.Start(new ProcessStartInfo(exe, args.Length == 1 ? args[0] : string.Empty)
             {
                 UseShellExecute  = true,
                 WorkingDirectory = dir,
@@ -134,7 +136,7 @@ internal static unsafe class Program
             WaitForSingleObject(pi.hProcess, INFINITE);
             if (!GetExitCodeProcess(pi.hProcess, out uint code)) return 1;
             if (code == STATUS_CONTROL_C_EXIT && Volatile.Read(ref s_interrupted) != 0)
-                Console.Error.WriteLine("RunAsHelper.com: interrupted; RunAsHelper.exe was stopped. The elevated target may still be running: see RunAsHelper /jobs.");
+                Console.Error.WriteLine("RunAsHelper.com: interrupted; RunAsHelper.exe was stopped. The elevated target may still be running and is no longer tracked by RunAsHelper /jobs; end it yourself if needed.");
             return unchecked((int)code);
         }
         finally
@@ -153,8 +155,13 @@ internal static unsafe class Program
         Volatile.Write(ref s_interrupted, 1);
         IntPtr h = Volatile.Read(ref s_child);
         if (h != IntPtr.Zero) TerminateProcess(h, STATUS_CONTROL_C_EXIT);
-        // Handled for Ctrl+C/Break (the wait below returns with the child's code); for a
-        // console close let Windows finish this process.
-        return ctrlType is CTRL_C_EVENT or CTRL_BREAK_EVENT ? 1 : 0;
+        // Handled for Ctrl+C/Break (the wait below returns with the child's code). For a
+        // console close, and for any other event, return 0 so Windows finishes this process.
+        return ctrlType switch
+        {
+            CTRL_C_EVENT or CTRL_BREAK_EVENT => 1,
+            CTRL_CLOSE_EVENT                 => 0,
+            _                                => 0,
+        };
     }
 }

@@ -168,44 +168,49 @@ namespace RunAsHelper
             PowerShellEdition psHost = PowerShellEdition.Unspecified;
 
             // Consume leading /p:N, /as:ACCOUNT, /capture, /timeout:N, /ps:5|7 flags in any order.
+            // A token that starts like one of the valued switches but does not parse is a
+            // usage error (exit 1), never the launch target: "/timeout:abc cmd" used to be sent
+            // to the service as a launch of "/timeout:abc", which failed with a misleading log.
             int i = 0;
             for (; i < args.Length; i++)
             {
                 string a = args[i];
-                if (a.StartsWith("/p:", StringComparison.OrdinalIgnoreCase) && a.Length >= 4)
-                    priority = PriorityFromCode(a[3]);
+                if (a.StartsWith("/p:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (a.Length != 4 || !TryPriorityFromCode(a[3], out priority))
+                        ExitWithUsage($"Bad priority '{a}'. Use /p:1 to /p:6 (see --help).");
+                }
                 else if (a.StartsWith("/as:", StringComparison.OrdinalIgnoreCase))
                     account = a[4..].Equals("system", StringComparison.OrdinalIgnoreCase) ? "system" : "ti";
                 else if (a.Equals("/capture", StringComparison.OrdinalIgnoreCase))
                     captureOutput = true;
-                else if (a.StartsWith("/timeout:", StringComparison.OrdinalIgnoreCase) &&
-                         int.TryParse(a[9..], out int ts) && ts > 0)
+                else if (a.StartsWith("/timeout:", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 0 is the protocol's "no ceiling" and is accepted as such.
+                    if (!int.TryParse(a[9..], out int ts) || ts < 0)
+                        ExitWithUsage($"Bad timeout '{a}'. Use /timeout:N with N in whole seconds (0 = no ceiling).");
                     timeoutSecs = ts;
+                }
                 else if (a.StartsWith("/ps:", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!PowerShellSwitch.TryParse(a[4..], out psHost))
-                    {
-                        Console.Error.WriteLine(
-                            $"Unknown PowerShell host '{a[4..]}'. Use /ps:5 (Windows PowerShell 5.1) or /ps:7 (pwsh).");
-                        Environment.Exit(1);
-                        return;
-                    }
+                        ExitWithUsage($"Unknown PowerShell host '{a[4..]}'. Use /ps:5 (Windows PowerShell 5.1) or /ps:7 (pwsh).");
                 }
                 else
                     break;
             }
+
+            // The service enforces the ceiling only while it is pumping captured output, so
+            // a fire-and-forget launch cannot time out. Say so once instead of pretending.
+            if (timeoutSecs > 0 && !captureOutput)
+                Console.WriteLine("/timeout applies with /capture; ignored for this launch.");
 
             // Re-quote tokens containing spaces so paths survive argv splitting.
             string commandLine = string.Join(" ", args[i..].Select(a =>
                 a.Contains(' ') && !a.StartsWith('"') ? $"\"{a}\"" : a));
 
             if (string.IsNullOrWhiteSpace(commandLine))
-            {
-                Console.Error.WriteLine("Usage: RunAsHelper [/capture] [/timeout:N] [/ps:5|7] [/p:N] [/as:system|ti] <path> [args]");
-                Console.Error.WriteLine("Run  RunAsHelper --help  for details.");
-                Environment.Exit(1);
-                return;
-            }
+                ExitWithUsage(null);
 
             var client = new PipeClient();
             client.LogMessage += msg => Console.WriteLine(msg);
@@ -390,7 +395,7 @@ namespace RunAsHelper
             }
 
             Console.Error.WriteLine(
-                "Usage: RunAsHelper /trusted | /trusted:add <SID|DOMAIN\\user> | /trusted:remove <SID>");
+                "Usage: RunAsHelper /trusted | /trusted:add <SID|DOMAIN\\user> | /trusted:remove <SID|DOMAIN\\user>");
             Environment.Exit(1);
         }
 
@@ -430,16 +435,30 @@ namespace RunAsHelper
             return false;
         }
 
-        private static uint PriorityFromCode(char code) => code switch
+        // Bad switch: one line naming the problem (when given), the usage line, exit 1.
+        [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+        private static void ExitWithUsage(string? problem)
         {
-            '1' => NativeMethods.NORMAL_PRIORITY_CLASS,
-            '2' => NativeMethods.IDLE_PRIORITY_CLASS,
-            '3' => NativeMethods.HIGH_PRIORITY_CLASS,
-            '4' => NativeMethods.REALTIME_PRIORITY_CLASS,
-            '5' => NativeMethods.BELOW_NORMAL_PRIORITY_CLASS,
-            '6' => NativeMethods.ABOVE_NORMAL_PRIORITY_CLASS,
-            _   => NativeMethods.NORMAL_PRIORITY_CLASS,
-        };
+            if (problem is not null) Console.Error.WriteLine(problem);
+            Console.Error.WriteLine("Usage: RunAsHelper [/capture] [/timeout:N] [/ps:5|7] [/p:N] [/as:system|ti] <path> [args]");
+            Console.Error.WriteLine("Run  RunAsHelper --help  for details.");
+            Environment.Exit(1);
+        }
+
+        private static bool TryPriorityFromCode(char code, out uint priority)
+        {
+            priority = NativeMethods.NORMAL_PRIORITY_CLASS;
+            switch (code)
+            {
+                case '1': priority = NativeMethods.NORMAL_PRIORITY_CLASS;       return true;
+                case '2': priority = NativeMethods.IDLE_PRIORITY_CLASS;         return true;
+                case '3': priority = NativeMethods.HIGH_PRIORITY_CLASS;         return true;
+                case '4': priority = NativeMethods.REALTIME_PRIORITY_CLASS;     return true;
+                case '5': priority = NativeMethods.BELOW_NORMAL_PRIORITY_CLASS; return true;
+                case '6': priority = NativeMethods.ABOVE_NORMAL_PRIORITY_CLASS; return true;
+                default:  return false;
+            }
+        }
 
         // Attach to the parent console so CLI/help output is visible when run
         // from cmd/powershell (the app is a WinExe with no console of its own).

@@ -1,8 +1,8 @@
 #Requires -Version 7
 # Process primitives: run a console child and capture its output/exit code without
-# deadlocking, read PE subsystem, enumerate service-launched children (TI/SYSTEM
-# orphans whose parent is the service). Tray start/stop are deliberately guarded:
-# Phase 1 must never start a tray (it rewrites HKCU Run and takes the mutex).
+# deadlocking, and enumerate service-launched children (TI/SYSTEM orphans whose parent
+# is the service). Nothing here starts or stops a tray: the runners that do (smoke A6,
+# the install cycle) check for a running instance themselves first.
 Set-StrictMode -Version Latest
 
 function Invoke-Console {
@@ -87,10 +87,4 @@ function Get-ServiceChildren {
     $svc = Get-Process RunAsHelper.Service -ErrorAction SilentlyContinue
     if (-not $svc) { return @() }
     @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($svc.Id)")
-}
-
-function Assert-NoTrayStart {
-    # A guard other scripts call before anything that might touch the tray. Phase 1
-    # never starts a tray; this fails loudly rather than silently mutating HKCU Run.
-    throw "Phase 1 must not start a tray (it rewrites HKCU Run and takes the single-instance mutex)."
 }

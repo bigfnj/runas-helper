@@ -3,9 +3,22 @@
 # name or user name: derive them at run time.
 Set-StrictMode -Version Latest
 
-$script:InstallDir = 'C:\Program Files\RunAsHelper'
+# Where the product is installed. Precedence: RAH_INSTALL_DIR in the environment (a
+# staged folder holding a built RunAsHelper.exe next to a copy of RunAsHelper.com, for a
+# dev smoke against the installed service), then the InstallFolder value the MSI writes
+# (HKLM\SOFTWARE\RunAsHelper, Package.wxs), then the default folder.
+$script:InstallDir = $null
 
-function Get-InstallDir { $script:InstallDir }
+function Get-InstallDir {
+    if ($null -eq $script:InstallDir) {
+        $fromEnv = $env:RAH_INSTALL_DIR
+        $fromReg = (Get-ItemProperty 'HKLM:\SOFTWARE\RunAsHelper' -ErrorAction SilentlyContinue).InstallFolder
+        $script:InstallDir = if ($fromEnv) { $fromEnv.TrimEnd('\') }
+                             elseif ($fromReg) { ([string]$fromReg).TrimEnd('\') }
+                             else { 'C:\Program Files\RunAsHelper' }
+    }
+    $script:InstallDir
+}
 function Get-InstalledExe { Join-Path (Get-InstallDir) 'RunAsHelper.exe' }
 function Get-InstalledCom { Join-Path (Get-InstallDir) 'RunAsHelper.com' }
 function Get-InstalledService { Join-Path (Get-InstallDir) 'RunAsHelper.Service.exe' }

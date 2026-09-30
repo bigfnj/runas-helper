@@ -85,7 +85,8 @@ This IS the mutation for the CI MSI-content step (an integrated 2.3.0 MSI passes
 
 Proven on this box via the hidden-console relaunch the harness lesson prescribes:
 `harness-stdout-is-console=True`, rendered `CONPTY-OK`, relayed exit 7. A run whose
-witness is missing is a harness failure, not a product result (see PROBE-RESULTS.md).
+witness is missing is a harness failure, not a product result (see
+docs/console-launcher-plan.md, "Phase 0 probe result").
 
 ## Phase 0 encoding finding (recorded, fixed by slice B)
 
@@ -180,3 +181,52 @@ PASS on the signed build); regression 15 pass / 1 skip.
 
 Its first run failed to parse: `"$Tag:"` inside a double-quoted string reads as a scoped
 variable. Fixed with `${Tag}`, and every `tests/*.ps1` now passes `Parser.ParseFile`.
+
+## v2.3.1 audit fixes (2026-09-29, client and harness slice)
+
+Runs on this box against the installed 2.3.0 service. Client cases used the built 2.3.1
+`RunAsHelper.exe` staged next to a copy of the installed `RunAsHelper.com`
+(`RAH_INSTALL_DIR`); the installed 2.3.0 client is the mutation for the client fixes.
+
+Unit tests (`dotnet test -c Release`, 89 tests):
+
+| Check | Mutation | Observed |
+|---|---|---|
+| PowerShellHostTests.Rewrite_ExpandsEnvironmentInArguments (L1-01) | args expansion removed from TryRewrite | FAIL: Assert.EndsWith, expected end `-File "C:\scripts\fix.ps1" -Out C:\data\a.log` |
+| HelpTextTests.Cli_DocumentsEveryParsedSwitch (C0-10, derived list) | `else if (a.Equals("/mutationzz", ...))` added to the Program.cs flag loop | FAIL: "Program.cs parses switches the help does not mention: /mutationzz" |
+| HelpTextTests.Cli_DerivedSwitchList_HasTheKnownTokens (control) | extraction regex reduced to StartsWith only | FAIL: "lost known tokens: /capture, /jobs, /trusted (derived: /as:, /joblog:, /kill:, /p:, /ps:, /timeout:, /trusted:)" |
+| HelpTextTests wording pins (L1-02, L4-01, C0-04, L1-06) | HelpText.cs restored to its v2.3.0 text | 6 FAIL: "Overrides a #Requires" not found; "/trusted:remove <SID\|DOMAIN\user>", "no longer tracked", "Without /capture" not found; "(see /jobs)" found; Cli_DocumentsEveryParsedSwitch "/h, /validate" |
+| SourceHygieneTests.WireStrings_AreAscii (L4-12) | em dash in `PipeClient.cs` `Log($"Pipe communication error ...")` | FAIL: "RunAsHelper\Core\PipeClient.cs:299 U+2014 in ..." |
+| SourceHygieneTests.WireStrings_AreAscii, v2.3.0 service text | none needed: the v2.3.0 `PipeServer.cs:716` killjob frame still carries an em dash | FAIL: "RunAsHelper.Service\Worker\PipeServer.cs:716 U+2014 in "No such job ..."" (green once the service slice lands) |
+
+Smoke (`Invoke-Smoke.ps1 -Phase B -Only B13,B14,B15`):
+
+| Case | Mutation | Observed |
+|---|---|---|
+| B13 raw frame with an unknown verb (C0-05, BL-13) | the same frame with `Verb: launch` | the service ran it: 11 frames, result Success, log "Process created", one 1001 event, no 1003, no "Unknown request" |
+| B14 malformed /timeout: and /p: (L4-11) | installed 2.3.0 client | FAIL: "/timeout:abc usage line on stderr did not match /Usage: RunAsHelper/; got []" |
+| B15 /timeout without /capture (L1-06) | installed 2.3.0 client | FAIL: "the ignored-timeout line did not match /applies with \/capture/; got [Worker thread reverted ...]" |
+| B9 / R16 GUI placeholders (L2-08) | `gui` tag removed | body `Skip-Case` records SKIP; the v2.3.0 empty body recorded PASS (the vacuous pass the fix removes) |
+
+Staged client, all three: 3 pass / 0 fail. Installed 2.3.0 client: B13 PASS (service
+behaviour), B14 and B15 FAIL as above.
+
+Harness self-test (`Invoke-Mutations.ps1`, C0-02):
+
+| Run | Observed |
+|---|---|
+| default (baseline MSI present) | 6 fired, 2 controls, exit 0 |
+| `-BaselineMsi C:\nonexistent\...msi` | MUT4 and CTRL2 SKIP "no baseline MSI at ... (pass -BaselineMsi)"; 5 fired, 1 control, exit 0 |
+| `-BaselineMsi LICENSE` (a file that is not an MSI) | both cases `harness error: ... OpenDatabase`; "Harness errors (not counted as fired): MUT4-wrong-version, CTRL2-version-ok", "MUTATIONS THAT DID NOT FIRE: MUT4-wrong-version", exit 1 (the 2.3.0 reconciliation counted that MUT4 as fired) |
+| `-Integration` | 12 fired, 3 controls, exit 0 (MUT9 skipped: the running tray has no window open) |
+
+MSI content (`Invoke-MsiContent.ps1`, the ci.yml step with the derived version, C0-03):
+against the worktree's Release MSI `-ExpectedVersion 2.3.0` (from `git describe`) 7 pass;
+`-ExpectedVersion 9.9.9` fails M6 and M7.
+
+uninstall.py (L4-17, BL-24): `remove_path_entry()` imported and run with `DRY_RUN=True`
+printed "DRY-RUN would strip the install dir from the machine PATH." and changed nothing;
+a read-only replay of its matching rule against the live machine PATH (43 entries,
+REG_EXPAND_SZ) would remove exactly one entry, `C:\Program Files\RunAsHelper\`, and keep
+the other 42; `HKLM\SOFTWARE\RunAsHelper\InstallFolder` names the same folder. Not run
+for real (the MSI is installed and the box is in use).

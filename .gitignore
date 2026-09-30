@@ -3,6 +3,10 @@ bin/
 obj/
 publish/
 
+# Test output (ci.yml writes --results-directory TestResults at the repo root)
+TestResults/
+*.trx
+
 # Visual Studio
 .vs/
 *.suo

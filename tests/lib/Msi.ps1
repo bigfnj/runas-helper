@@ -1,9 +1,8 @@
 #Requires -Version 7
-# MSI inspection via the WindowsInstaller.Installer COM object, following the proven
-# pattern from ops\scripts\runas-helper\msi-certcheck.ps1: no LIKE in MSI SQL (COM
-# throws on it, so substring filtering happens in PowerShell), [void] on every
-# InvokeMember whose value is not wanted, and @() at every call site because
-# PowerShell unrolls a one-element array on return.
+# MSI inspection via the WindowsInstaller.Installer COM object. Three rules learned the
+# hard way: no LIKE in MSI SQL (COM throws on it, so substring filtering happens in
+# PowerShell), [void] on every InvokeMember whose value is not wanted, and @() at every
+# call site because PowerShell unrolls a one-element array on return.
 Set-StrictMode -Version Latest
 
 function Open-MsiDatabase {

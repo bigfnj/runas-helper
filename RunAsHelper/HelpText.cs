@@ -34,7 +34,7 @@ ACCOUNTS  (who the launched program runs as)
 COMMAND LINE
   RunAsHelper [/capture] [/timeout:N] [/ps:5|7] [/p:N] [/as:ACCOUNT] <path> [arguments]
   RunAsHelper /jobs | /kill:<id> | /joblog:<id>
-  RunAsHelper /trusted | /trusted:add <SID|DOMAIN\user> | /trusted:remove <SID>
+  RunAsHelper /trusted | /trusted:add <SID|DOMAIN\user> | /trusted:remove <SID|DOMAIN\user>
 
   /p:N         Priority class of the launched process:
                  1 Normal (default)   2 Idle          3 High
@@ -45,20 +45,23 @@ COMMAND LINE
   /capture     Stream the child's stdout and stderr back and block until it
                exits (or the timeout). The CLI then exits with the CHILD's exit
                code. Skip for GUI apps (no stdout) and interactive shells.
-  /timeout:N   Hard ceiling in seconds. On timeout the output stream closes, the
-               child is left running (see /jobs) and the CLI exits 124.
+  /timeout:N   Hard ceiling in seconds, with /capture. On timeout the output
+               stream closes and the CLI exits 124; the child keeps running and
+               is no longer tracked (it leaves /jobs). Use it for children that
+               finish on their own, or end the child yourself. Without /capture
+               it is ignored and one line says so. 0 = no ceiling.
   /ps:5|/ps:7  Which PowerShell hosts a .ps1 target: Windows PowerShell 5.1 or
-               pwsh 7. Ignored when the script itself says so (#Requires, below)
-               or when the target is not a .ps1.
-  -h, --help, /?   Show this help.
-  --revalidate     Re-run the post-install validation dialog.
+               pwsh 7. Overrides a #Requires line in the script; ignored when
+               the target is not a .ps1.
+  -h, --help, /?, /h        Show this help.
+  --revalidate, /validate   Re-run the post-install validation dialog.
   /jobs            List the launches currently holding a service launch slot,
                    with their job id, elapsed time, account, PID and command.
   /kill:<id>       Terminate the process behind one of those jobs.
   /joblog:<id>     Show the output an in-flight capture job has produced so far.
   /trusted             List the trusted command-line users (SID and account per line).
   /trusted:add X       Trust a user (SID or DOMAIN\user; groups are refused).
-  /trusted:remove SID  Stop trusting a user.
+  /trusted:remove X    Stop trusting a user (SID or DOMAIN\user).
 
   /jobs, /kill, /joblog and /trusted need the installed RunAsHelper running
   elevated: run them from an elevated shell (RunAsHelper.com runs at the shell's
@@ -113,8 +116,9 @@ SCRIPTING / AUTOMATION NOTES
      session gate.
   3. Exit codes: 0 success; 1 RunAsHelper failure (service unreachable, not
      trusted and gate closed, launch denied, no such job, bad switch); with
-     /capture, the child's own exit code; 124 when /timeout fired. Service log
-     lines go to stdout.
+     /capture, the child's own exit code; 124 when /timeout fired (/capture
+     only). Service log lines go to stdout; a bad switch prints a usage line
+     to stderr.
   4. Windows PowerShell 5.1 gotchas when it hosts your script: $PSScriptRoot is
      empty inside param() defaults; &&, ||, ?? and the ternary do not parse;
      Set-Content writes ANSI. Add '#Requires -Version 7' to opt into pwsh.
@@ -170,7 +174,7 @@ TRAY APP
   Theme:                Settings > Theme -- Follow system (default), Light or
                         Dark. Following the system repaints live when Windows
                         switches between light and dark.
-  Not elevated?         Click the Activate bar to relaunch elevated (Avecto/UAC);
-                        it disappears once elevated.
+  Not elevated?         Click the Activate bar to relaunch elevated (UAC); it
+                        disappears once elevated.
 ";
 }

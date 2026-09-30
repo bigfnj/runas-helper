@@ -167,6 +167,19 @@ public class PowerShellHostTests
     }
 
     [Fact]
+    public void Rewrite_ExpandsEnvironmentInArguments()
+    {
+        // The 2.2.0 service expanded the whole hosted .ps1 command line, arguments included;
+        // the client-side rewrite has to do the same or "-Out %X%\a.log" reaches the script
+        // literally. Killing mutation: drop the args expansion in TryRewrite.
+        string? result = PowerShellScriptRewrite.TryRewrite(
+            @"C:\scripts\fix.ps1 -Out %X%\a.log", "", PowerShellEdition.Core, null,
+            Resolver(), s => s.Replace("%X%", @"C:\data"), out _);
+        Assert.EndsWith(@"-File ""C:\scripts\fix.ps1"" -Out C:\data\a.log", result);
+        Assert.DoesNotContain("%X%", result);
+    }
+
+    [Fact]
     public void Rewrite_MakesRelativePathAbsolute_WhenNoWorkingDirectory()
     {
         string? result = PowerShellScriptRewrite.TryRewrite(

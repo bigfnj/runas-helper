@@ -51,8 +51,9 @@ The remaining files in `docs/images/` are screenshots of this application.
 
 - **.NET 10** and the WinForms and `Microsoft.Extensions.Hosting.WindowsServices`
   libraries, from Microsoft, under the MIT license. Since 2.1.4 the binaries are
-  published framework-dependent single-file (`--no-self-contained`,
-  `RunAsHelper.Installer.wixproj:55-56`), so the .NET runtime is not redistributed
+  published framework-dependent single-file (`--no-self-contained` on the three
+  `dotnet publish` lines of the `PublishApps` target in
+  `RunAsHelper.Installer/RunAsHelper.Installer.wixproj`), so the .NET runtime is not redistributed
   inside the MSI; the installer assumes the .NET 10 x64 Runtime is present.
 - **WiX Toolset v4** builds the installer. WiX is licensed under the Microsoft
   Reciprocal License (MS-RL); it is a build-time tool and no WiX code ships in

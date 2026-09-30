@@ -217,7 +217,10 @@ try {
         Assert-True (-not (Test-Path $crash)) 'crash.log absent'
     }
 
-    Invoke-Case -Id 'R16' -Name 'validate dialog, tray panes, dark mode' -Tags @('gui') -Test { }
+    Invoke-Case -Id 'R16' -Name 'validate dialog, tray panes, dark mode' -Tags @('gui') -Test {
+        # Never a vacuous PASS: with the gui tag removed this still records a SKIP.
+        Skip-Case -Reason 'GUI only; manual coverage recorded in BACKLOG NT-07'
+    }
 } finally {
     if ($scratchKeyWritten) {
         # Remove the R4 scratch key through the service (the key is HKLM).

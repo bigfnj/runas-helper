@@ -305,7 +305,7 @@ the GUI binary and is silent from a shell (see below).
 | `/as:ti`      | Run as TrustedInstaller (default)                                              |
 | `/as:system`  | Run as plain LocalSystem                                                       |
 | `/capture`    | Stream child stdout/stderr back through the pipe; CLI blocks until child exits |
-| `/timeout:N`  | Hard ceiling in seconds; on timeout the capture exits **124** (the child follows normal job semantics, so check `/jobs`) |
+| `/timeout:N`  | Hard ceiling in seconds, with `/capture`: on timeout the capture exits **124**; the child keeps running and is no longer tracked (it leaves `/jobs`), so use it for children that finish on their own, or end the child yourself. Without `/capture` it is ignored and one line says so. `0` = no ceiling |
 | `/ps:5`, `/ps:7` | For a `.ps1` target, pin the PowerShell host to 5.1 or 7 (see below)         |
 | `/jobs`       | List launches holding a slot (id, elapsed, account, source, PID, command)      |
 | `/kill:<id>`  | Terminate the process behind an in-flight job                                  |
@@ -315,7 +315,7 @@ the GUI binary and is silent from a shell (see below).
 | `/trusted:remove`| Remove a user by SID or name (needs an elevated shell)                       |
 
 Non-executable targets are launched via their host automatically (`.msc`→`mmc`,
-`.cpl`→`control`, `.bat`/`.cmd`→`cmd /c`, `.ps1`→`powershell`, `.reg`→`regedit /s`, and any
+`.cpl`→`control`, `.bat`/`.cmd`→`cmd /c`, `.ps1`→PowerShell (see the host rule below), `.reg`→`regedit /s`, and any
 other document via its registered handler), and a bare name
 (e.g. `notepad.exe`, `lusrmgr.msc`) is resolved on the PATH — including when
 arguments follow, so targets outside `System32` such as `powershell.exe` launch
@@ -381,11 +381,13 @@ runs and a warning line says so.
 #### Exit codes
 
 Without `/capture` the CLI exits 0 when the launch was accepted, 1 on a RunAsHelper
-failure (service unreachable, caller not trusted with the gate closed, launch denied, or
-no such job). With `/capture` the CLI blocks and exits with the **child's own exit code**,
-so a script that fails propagates its code to the caller. A `/timeout` expiry exits
-**124**. RunAsHelper's own failures still exit **1**, which a
-child can also return, so read the streamed log lines to tell them apart.
+failure (service unreachable, caller not trusted with the gate closed, launch denied, no
+such job, or a switch that does not parse, such as `/timeout:abc` or a bare `/p:`, which
+prints a usage line to stderr). With `/capture` the CLI blocks and exits with the
+**child's own exit code**, so a script that fails propagates its code to the caller. A
+`/timeout` expiry exits **124** (`/timeout` applies with `/capture` only). RunAsHelper's
+own failures still exit **1**, which a child can also return, so read the streamed log
+lines to tell them apart.
 
 #### Passing arguments
 
@@ -499,7 +501,9 @@ The harness needs the installed service and, for non-elevated launches, this acc
 user SID in the trusted command-line users or the session gate open. Its elevation model,
 the witness rule, and what cannot be tested on a single box are documented in
 [`tests/README.md`](tests/README.md). `.github/workflows/ci.yml` runs the build, the unit
-tests and an MSI-content check on every push.
+tests and an MSI-content check (file set and the version the build stamped from the git
+tag) on every push; `release.yml` runs the same MSI-content check on the installer it
+publishes.
 
 ### Signing
 
@@ -588,6 +592,40 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
 Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
+
+## What's new in 2.3.1
+
+Fixes from the post-release audit of 2.3.0. No new features; the wire format is
+unchanged and a 2.2.0 client still works against this service.
+
+- **Arguments of a `.ps1` target are expanded again.** 2.3.0 moved the PowerShell host
+  choice to the client and expanded `%VARS%` only in the script path, so a saved entry
+  with `-Out %ProgramData%\a.log` reached the script unexpanded. The arguments are now
+  expanded with the same rule as the path (in the caller's environment, as the path
+  already was in 2.3.0).
+- **Malformed switches are rejected.** `/timeout:abc`, a negative timeout, a bare `/p:`
+  or `/p:9` used to become the launch target and fail on the service with a misleading
+  log line. They now print a usage line to stderr and exit 1 without touching the pipe.
+  `/timeout:0` means no ceiling.
+- **`/timeout` without `/capture` says so.** The ceiling is enforced only while output
+  is captured; a fire-and-forget launch that passes `/timeout` now prints one line
+  saying it is ignored, and the help and README say the same.
+- **Wording fixes.** `/ps:` overrides a `#Requires` line (the help said the reverse);
+  `/trusted:remove` takes a SID or `DOMAIN\user` everywhere it is documented; a timed-out
+  capture child keeps running and is no longer listed by `/jobs` (the help, the README
+  and the launcher's Ctrl+C line promised otherwise); `/h` and `/validate` are listed.
+- **The tray no longer names a vendor.** The Activate button, its menu item and the
+  not-elevated status text say "run elevated (UAC)".
+- **Capture pump: CR handling.** _(slice S; lead to confirm)_ A carriage return inside
+  captured output no longer splits or drops a line.
+- **Capture pump: lifetime.** _(slice S; lead to confirm)_ The pump and its handles are
+  released when the capture ends or times out, so a finished job holds nothing back.
+- **One more ASCII log line.** The last service log frame with an em dash (`/kill` on a
+  missing job) and the client's connection-timeout line are ASCII, and a unit test now
+  keeps every string that reaches the pipe or the console ASCII.
+- **CI checks the version it builds.** `ci.yml` passes the tag version to the MSI-content
+  check (the two version cases used to skip on every run) and `release.yml` runs that
+  check on the MSI it publishes.
 
 ## What's new in 2.3.0
 

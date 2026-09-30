@@ -265,9 +265,9 @@ namespace RunAsHelper
                 btnActivate.Visible  = true;
                 menuActivate.Visible = true;
                 NativeMethods.SendMessage(btnActivate.Handle, NativeMethods.BCM_SETSHIELD, IntPtr.Zero, new IntPtr(1));
-                lblNotAdmin.Text    = "Not elevated — click Activate to elevate with Avecto.";
+                lblNotAdmin.Text    = "Not elevated: click Activate to run elevated (UAC).";
                 lblNotAdmin.Visible = true;
-                AppendLog("Not elevated. Click Activate to relaunch elevated (Avecto); the window then becomes fully functional.");
+                AppendLog("Not elevated. Click Activate to relaunch elevated (UAC); the window then becomes fully functional.");
                 return;
             }
 

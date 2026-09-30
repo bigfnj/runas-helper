@@ -32,7 +32,7 @@
                   DowngradeErrorMessage="A newer version of RunAS Helper is already installed." />
 
     <!-- ── .NET 10 Desktop Runtime prerequisite ──────────────────────────────
-      Both EXEs are framework-dependent as of 2.1.4, so the runtime has to be on
+      All three binaries are framework-dependent (since 2.1.4), so the runtime has to be on
       the machine already. Without this check the MSI would install cleanly and
       then the service would fail to start with only an event-log entry to show
       for it, which is a miserable thing to debug.

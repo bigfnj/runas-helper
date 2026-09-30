@@ -34,9 +34,18 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: MSI content
+        # Directory.Build.props stamps the binaries from `git describe --tags --abbrev=0`
+        # (that is what the fetch-depth 0 checkout is for). Derive the same value here and
+        # hand it to the content check, so M6 (three binaries at that version) and M7
+        # (ProductVersion) run on every push instead of skipping, and a checkout that
+        # resolved 1.0.0.0 fails the job.
         shell: pwsh
         run: |
-          pwsh -NoProfile -File tests\Invoke-MsiContent.ps1 -MsiPath RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi
+          $tag = (git describe --tags --abbrev=0).Trim()
+          if ($LASTEXITCODE -or -not $tag) { Write-Error 'git describe found no tag; the version stamp cannot be checked.'; exit 1 }
+          $v = $tag.TrimStart('v')
+          Write-Host "Expecting MSI version $v (from tag $tag)"
+          pwsh -NoProfile -File tests\Invoke-MsiContent.ps1 -MsiPath RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi -ExpectedVersion $v
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4

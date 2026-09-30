@@ -17,9 +17,14 @@ Harness (pwsh 7; run from the repo root):
 pwsh -File tests\Invoke-Regression.ps1        # 2.2.0 behavior that must not change
 pwsh -File tests\Invoke-Smoke.ps1 -Baseline   # new-feature cases; must fail on 2.2.0
 pwsh -File tests\Invoke-Smoke.ps1 -Phase All -ExpectedVersion 2.3.0   # integration
-pwsh -File tests\Invoke-Mutations.ps1         # harness self-test
+pwsh -File tests\Invoke-Mutations.ps1 [-BaselineMsi <2.2.0 msi>]   # harness self-test
 pwsh -File tests\Invoke-MsiContent.ps1 -MsiPath <msi> [-ExpectedVersion X.Y.Z]
 ```
+
+`Invoke-Mutations.ps1` needs a copy of the 2.2.0 release MSI for its two MSI cases
+(MUT4, CTRL2); without one they SKIP with a reason and the rest of the self-test still
+runs. Its reconciliation counts only assertion failures as fired mutations: a case that
+failed with `harness error:` is listed separately and fails the run.
 
 Every runner prints one line per case (`PASS`/`FAIL`/`SKIP <id> <name>`) and a final
 `RESULT: n pass / m fail / k skip`, and exits 1 on any fail or when only skips ran.
@@ -34,8 +39,21 @@ Every runner prints one line per case (`PASS`/`FAIL`/`SKIP <id> <name>`) and a f
   its own `out.txt`/`rc.txt` (`-Verb RunAs` cannot combine with `-RedirectStandardOutput`).
   On this box UAC auto-consents, so elevation is silent. Elevated cases are tagged
   `needs-elevated` and skipped unless `-AllowElevated`.
-- `/jobs`, `/kill`, `/joblog`, `setcli` and `/trusted` require the installed
-  `RunAsHelper.exe` running elevated; from a Medium shell they return exit 1.
+- `/jobs`, `/kill`, `/joblog` and `/trusted` require the installed `RunAsHelper.exe`
+  running elevated; from a Medium shell they return exit 1. (The `setcli` pipe verb has
+  the same gate, but only the tray sends it; there is no CLI switch for it.)
+- A raw pipe client (`lib/RawPipe.ps1`, `Send-RawPipeRequest`) sends one hand-built
+  frame to `\\.\pipe\RunAsHelper` and returns the reply frames, for cases the shipped
+  client cannot express (B13 sends an unknown verb).
+
+## Where the installed build is
+
+`lib/Env.ps1` resolves the install folder from `RAH_INSTALL_DIR` in the environment,
+then the `InstallFolder` value the MSI writes under `HKLM\SOFTWARE\RunAsHelper`, then
+`C:\Program Files\RunAsHelper`. Set `RAH_INSTALL_DIR` to a scratch folder holding a
+freshly built `RunAsHelper.exe` next to a copy of the installed `RunAsHelper.com` to smoke
+a client change against the installed service without installing anything (the launcher
+looks for the exe in its own folder).
 
 ## The PATH refresh rule
 
@@ -77,7 +95,10 @@ build in CI, which is the alarm we want. Keep `PowerShellHost.cs`, `CliLaunchRes
 - UAC-prompting machines and AppCompat disabled by policy: this box auto-consents.
 - Windows Terminal: not installed; conhost is the only terminal backstop.
 - Tray saved-entry `.ps1` host rule, the `/validate` dialog, dark mode: GUI, covered by
-  the manual screenshot pass in the audit and by unit tests U4/B8 for the shared logic.
+  the manual screenshot pass in the audit; the shared host logic is covered by the
+  PowerShellHostTests unit tests and by harness cases U4 (install cycle) and B8 (smoke).
+  The GUI placeholders B9 and R16 always record SKIP (their body is `Skip-Case`), never a
+  vacuous PASS.
 
 ## Integration and release runs
 
@@ -97,6 +118,9 @@ pwsh -File tests\Invoke-ReleaseVerify.ps1 -Tag vX.Y.Z      # after the release w
 policy, stop and start the service, and start the tray through the launcher. `-Only A1,B8`
 runs a subset. The install cycle, the audit probes and the release verify change machine
 state (the installed product, the service, the machine PATH); `-DryRun` prints their steps.
+`Invoke-InstallCycle.ps1 -UninstallOnly` removes the installed product (snapshot, stop the
+tray, `msiexec /x`, verify the removal) and stops, for taking a dev build off the box
+before installing a release of the same version.
 
 Two lessons from the first integration run, both now built into the harness: a script
 that starts the tray must wait on its child process with `WaitForExit()` rather than

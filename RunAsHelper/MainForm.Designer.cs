@@ -256,7 +256,7 @@ namespace RunAsHelper
             // instance takes over (invisible Dock=Top controls take no space).
             btnActivate.Dock      = DockStyle.Top;
             btnActivate.Height    = 30;
-            btnActivate.Text      = "Activate — elevate with Avecto";
+            btnActivate.Text      = "Activate: run elevated (UAC)";
             btnActivate.FlatStyle = FlatStyle.System;
             btnActivate.Visible   = false;
 
@@ -280,7 +280,7 @@ namespace RunAsHelper
             panelBottom.Controls.Add(btnActivate);
 
             // ── Tray menu ────────────────────────────────────────────────────
-            menuActivate.Text    = "Activate — elevate with Avecto";
+            menuActivate.Text    = "Activate: run elevated (UAC)";
             menuActivate.Visible = false;
             menuActivate.Font    = new System.Drawing.Font(menuActivate.Font, System.Drawing.FontStyle.Bold);
 
