@@ -17,7 +17,7 @@ jobs:
         with:
           fetch-depth: 0   # lets Directory.Build.props stamp the tag version, not 1.0.0.0
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
