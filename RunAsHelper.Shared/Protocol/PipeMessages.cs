@@ -20,7 +20,17 @@ public sealed record LaunchRequest(
     int    TimeoutSeconds   = 0,          // 0 = wait forever; > 0 = hard ceiling before closing the output stream
     int    GateMinutes      = 30);        // "setcli on": minutes before the CLI gate auto-closes (0 = no expiry)
 
-/// <summary>Sent by the service back to the client: either a streaming log line or the final result.</summary>
+/// <summary>
+/// Sent by the service back to the client: either a streaming line or the final result.
+/// <c>Type</c> is one of: <c>log</c> (a service log line), <c>stdout</c> (one captured
+/// child output line), <c>pid</c> (the launched process id), <c>result</c> (Success or
+/// Failed, always last), <c>gate</c> (setcli deadline in minutes, 0 = none),
+/// <c>trustedcaller</c> (one policy SID), <c>job</c> (a JobInfo as JSON), <c>slots</c>
+/// (N/M slot usage), <c>exit</c> (the child's exit code as an unsigned int, capture only),
+/// and <c>timeout</c> (the elapsed TimeoutSeconds, capture only). A client that does not
+/// know a type ignores it, so <c>exit</c> and <c>timeout</c> are additive: a 2.2.0 client
+/// drops them and behaves as before.
+/// </summary>
 public sealed record PipeMessage(string Type, string Content);
 
 /// <summary>

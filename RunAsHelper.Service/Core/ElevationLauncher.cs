@@ -98,7 +98,7 @@ internal sealed class ElevationLauncher
                 return (0, IntPtr.Zero, null);
             }
             closeSource = true;
-            log?.Invoke("Account=system — launching with the LocalSystem token (no TrustedInstaller group).");
+            log?.Invoke("Account=system - launching with the LocalSystem token (no TrustedInstaller group).");
         }
         else
         {
@@ -109,7 +109,7 @@ internal sealed class ElevationLauncher
                 return (0, IntPtr.Zero, null);
             }
             source = _hElevatedToken;
-            log?.Invoke("Account=trustedinstaller — launching with the TrustedInstaller token.");
+            log?.Invoke("Account=trustedinstaller - launching with the TrustedInstaller token.");
         }
 
         try
@@ -704,7 +704,7 @@ internal sealed class ElevationLauncher
             string? docCommand = ResolveDocumentCommand(app.Trim().Trim('"'), log);
             if (docCommand is null)
             {
-                log?.Invoke("Cannot open this file — no registered handler. Point at a program instead.");
+                log?.Invoke("Cannot open this file - no registered handler. Point at a program instead.");
                 return (0, IntPtr.Zero, null);
             }
             commandLine  = string.IsNullOrEmpty(args) ? docCommand : $"{docCommand} {args}";
@@ -717,7 +717,7 @@ internal sealed class ElevationLauncher
             commandLine  = BuildHostCommand(host, app, args);
             args         = string.Empty;   // take the PATH-resolved (null app) branch
             consoleProbe = host;           // console state follows the host
-            log?.Invoke($"Non-executable target — launching via {host}: {commandLine}");
+            log?.Invoke($"Non-executable target - launching via {host}: {commandLine}");
         }
 
         // Console-subsystem programs (cmd, powershell) launched from a service
@@ -728,12 +728,12 @@ internal sealed class ElevationLauncher
         if (captureOutput)
         {
             creationFlags |= NativeMethods.CREATE_NO_WINDOW;
-            log?.Invoke("Output capture mode — no console window; stdout/stderr piped back to caller.");
+            log?.Invoke("Output capture mode - no console window; stdout/stderr piped back to caller.");
         }
         else if (IsConsoleSubsystem(consoleProbe))
         {
             creationFlags |= NativeMethods.CREATE_NEW_CONSOLE;
-            log?.Invoke("Console application detected — allocating an interactive console window.");
+            log?.Invoke("Console application detected - allocating an interactive console window.");
         }
 
         // Working directory: empty = inherit; expand env vars (e.g. %USERPROFILE%).
@@ -811,7 +811,7 @@ internal sealed class ElevationLauncher
                         {
                             if (app.Contains('%')) app = ExpandEnvVars(app);
                             string launchApp = ResolveExecutable(app) ?? app;
-                            log?.Invoke($"Args detected — app={launchApp}  args={args}");
+                            log?.Invoke($"Args detected - app={launchApp}  args={args}");
                             callResult = NativeMethods.CreateProcessAsUserExW(
                                 hToken, launchApp, commandLine,
                                 IntPtr.Zero, IntPtr.Zero, true,
@@ -860,7 +860,7 @@ internal sealed class ElevationLauncher
                     // most other tools do not, so they failed with FILE_NOT_FOUND once
                     // arguments were present. Resolve to a full path via PATH first.
                     string launchApp = ResolveExecutable(app) ?? app;
-                    log?.Invoke($"Args detected — app={launchApp}  args={args}");
+                    log?.Invoke($"Args detected - app={launchApp}  args={args}");
 
                     callResult = NativeMethods.CreateProcessAsUserW(
                         hToken, launchApp, commandLine,
@@ -961,7 +961,7 @@ internal sealed class ElevationLauncher
             if (hWrite == NativeMethods.INVALID_HANDLE_VALUE)
             {
                 hWrite = IntPtr.Zero;
-                log?.Invoke($"Capture pipe: opening the write end failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())} — falling back to fire-and-forget.");
+                log?.Invoke($"Capture pipe: opening the write end failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())} - falling back to fire-and-forget.");
                 server.Dispose();
                 server = null;
                 return false;
@@ -969,7 +969,7 @@ internal sealed class ElevationLauncher
 
             if (!connect.Wait(5_000))
             {
-                log?.Invoke("Capture pipe: the write end did not connect within 5s — falling back to fire-and-forget.");
+                log?.Invoke("Capture pipe: the write end did not connect within 5s - falling back to fire-and-forget.");
                 NativeMethods.CloseHandle(hWrite);
                 hWrite = IntPtr.Zero;
                 server.Dispose();
@@ -981,7 +981,7 @@ internal sealed class ElevationLauncher
         }
         catch (Exception ex)
         {
-            log?.Invoke($"Capture pipe setup failed ({ex.GetType().Name}: {ex.Message}) — falling back to fire-and-forget.");
+            log?.Invoke($"Capture pipe setup failed ({ex.GetType().Name}: {ex.Message}) - falling back to fire-and-forget.");
             if (hWrite != IntPtr.Zero) { NativeMethods.CloseHandle(hWrite); hWrite = IntPtr.Zero; }
             server?.Dispose();
             server = null;
@@ -1088,7 +1088,7 @@ internal sealed class ElevationLauncher
         if (!string.IsNullOrWhiteSpace(command))
         {
             string built = SubstituteShellArgs(command!, path);
-            log?.Invoke($"Document type {ext} → registered command: {built}");
+            log?.Invoke($"Document type {ext} -> registered command: {built}");
             return built;
         }
 
@@ -1096,7 +1096,7 @@ internal sealed class ElevationLauncher
         string? exe = AssocQuery(NativeMethods.ASSOCSTR_EXECUTABLE, ext);
         if (!string.IsNullOrWhiteSpace(exe))
         {
-            log?.Invoke($"Document type {ext} → handler: {exe}");
+            log?.Invoke($"Document type {ext} -> handler: {exe}");
             return $"\"{exe}\" \"{path}\"";
         }
 

@@ -29,7 +29,7 @@ internal static class CrashLogger
     private static readonly string LogPath = Path.Combine(LogDir, "crash.log");
 
     // Matches the event source the installer registers for the service; a client
-    // event ID distinct from the service's 1001–1005 range.
+    // event ID distinct from the service's 1001-1006 range.
     private const string EventSource  = "RunAsHelper";
     private const int    ClientEventId = 1099;
 

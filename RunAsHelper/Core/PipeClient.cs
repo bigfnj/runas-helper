@@ -143,32 +143,46 @@ internal sealed class PipeClient
     /// The output a capture job has produced so far (a bounded tail kept by the service),
     /// so the tray can show what a job is doing rather than only what it was asked to run.
     /// </summary>
-    public async Task<IReadOnlyList<string>> JobOutputAsync(int jobId, CancellationToken ct = default)
+    public async Task<(bool Ok, IReadOnlyList<string> Lines)> JobOutputAsync(int jobId, CancellationToken ct = default)
     {
         var lines = new List<string>();
         // logStdout: false — these lines are being collected for the caller to render.
         // Without it they would ALSO go out through LogMessage, and a CLI that prints
         // both the stream and the returned list shows every line twice.
-        await SendAsync(new LaunchRequest(jobId.ToString(), NativeMethods.NORMAL_PRIORITY_CLASS, "joblog"), ct,
+        bool ok = await SendAsync(new LaunchRequest(jobId.ToString(), NativeMethods.NORMAL_PRIORITY_CLASS, "joblog"), ct,
             onMessage: msg => { if (msg.Type == "stdout") lines.Add(msg.Content); },
             logStdout: false);
-        return lines;
+        return (ok, lines);
     }
 
-    /// <summary>Launch from the command line (tagged Source="cli", gated by the service).</summary>
-    public Task<bool> LaunchFromCliAsync(string commandLine, uint priority, string account, CancellationToken ct = default)
-        => SendAsync(new LaunchRequest(commandLine, priority, "launch", "", 1, account, "cli"), ct);
-
     /// <summary>
-    /// CLI launch with output capture: the child's stdout/stderr streams back through
-    /// the pipe as "stdout" messages and appears in the caller's console (or the tray
-    /// log area). The call blocks until the child exits or <paramref name="timeoutSeconds"/>
-    /// elapses (0 = wait forever).
+    /// CLI launch. With <paramref name="captureOutput"/> the child's stdout/stderr stream
+    /// back through the pipe as "stdout" messages and appear in the caller's console, and the
+    /// call blocks until the child exits or <paramref name="timeoutSeconds"/> elapses (0 =
+    /// wait forever). The returned <see cref="CliLaunchResult"/> carries the child's exit code
+    /// and whether the timeout fired, read from the service's "exit"/"timeout" frames (absent
+    /// against a 2.2.0 service). <paramref name="psHost"/> and <paramref name="callerShell"/>
+    /// steer the PowerShell host rule for a .ps1 target.
     /// </summary>
-    public Task<bool> LaunchFromCliAsync(string commandLine, uint priority, string account,
-        bool captureOutput, int timeoutSeconds = 0, CancellationToken ct = default)
-        => SendAsync(new LaunchRequest(commandLine, priority, "launch", "", 1, account, "cli",
-            CaptureOutput: captureOutput, TimeoutSeconds: timeoutSeconds), ct);
+    public async Task<CliLaunchResult> LaunchFromCliAsync(string commandLine, uint priority, string account,
+        bool captureOutput, int timeoutSeconds = 0,
+        PowerShellEdition psHost = PowerShellEdition.Unspecified, Func<CallerShellHint?>? callerShell = null,
+        CancellationToken ct = default)
+    {
+        uint? exit = null;
+        bool timedOut = false;
+        bool ok = await SendAsync(
+            new LaunchRequest(commandLine, priority, "launch", "", 1, account, "cli",
+                CaptureOutput: captureOutput, TimeoutSeconds: timeoutSeconds),
+            ct,
+            onMessage: m =>
+            {
+                if (m.Type == "exit" && uint.TryParse(m.Content, out uint c)) exit = c;
+                else if (m.Type == "timeout") timedOut = true;
+            },
+            psHost: psHost, callerShell: callerShell);
+        return new CliLaunchResult(ok, exit, timedOut);
+    }
 
     // Extensions the service already knows how to host, plus the directly-runnable ones.
     // Anything else with an extension is a document and needs its handler resolved here.
@@ -207,7 +221,8 @@ internal sealed class PipeClient
     }
 
     private async Task<bool> SendAsync(LaunchRequest request, CancellationToken ct,
-        Action<PipeMessage>? onMessage = null, bool logStdout = true)
+        Action<PipeMessage>? onMessage = null, bool logStdout = true,
+        PowerShellEdition psHost = PowerShellEdition.Unspecified, Func<CallerShellHint?>? callerShell = null)
     {
         // Single choke point: every launch, from the tray or the CLI, passes through here.
         if (request.Verb == "launch")
@@ -215,6 +230,22 @@ internal sealed class PipeClient
             string resolved = ResolveDocumentTarget(request.CommandLine);
             if (!ReferenceEquals(resolved, request.CommandLine))
                 request = request with { CommandLine = resolved };
+
+            // PowerShell host rule for a .ps1 target. Picks the host by /ps:, then #Requires,
+            // then the caller's shell (CLI only), then Windows PowerShell 5.1, and rewrites the
+            // command line to "<host>" -ExecutionPolicy Bypass -File "<script>" <args>. Emitted
+            // before ConnectAsync so the chosen host is logged even when the service is down.
+            // Tray callers pass the defaults, so only #Requires and the 5.1 default apply there.
+            string? psRewrite = PowerShellScriptRewrite.TryRewrite(
+                request.CommandLine, request.WorkingDirectory, psHost, callerShell,
+                PowerShellHostProbes.Resolver, Environment.ExpandEnvironmentVariables, out var choice);
+            if (choice is not null)
+            {
+                if (choice.Warning is not null) Log($"PowerShell host: {choice.Warning}");
+                Log($"PowerShell host: {choice.Label} ({choice.Reason}) -> \"{choice.HostPath}\"");
+            }
+            if (psRewrite is not null)
+                request = request with { CommandLine = psRewrite };
         }
 
         // Identification lets the service cross-check the authenticated pipe

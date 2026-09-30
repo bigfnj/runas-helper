@@ -217,6 +217,50 @@ namespace RunAsHelper.Core
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool AllowSetForegroundWindow(uint dwProcessId);
 
+        // ── Caller shell detection ────────────────────────────────────────────
+        // Walks the parent-process chain to find the shell that invoked the CLI, so a
+        // .ps1 target can be hosted by the same PowerShell edition the caller is using.
+        internal const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
+        internal const int  ProcessBasicInformation           = 0;
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct PROCESS_BASIC_INFORMATION
+        {
+            public IntPtr ExitStatus;
+            public IntPtr PebBaseAddress;
+            public IntPtr AffinityMask;
+            public IntPtr BasePriority;
+            public IntPtr UniqueProcessId;
+            public IntPtr InheritedFromUniqueProcessId;
+        }
+
+        [LibraryImport("ntdll.dll")]
+        internal static unsafe partial int NtQueryInformationProcess(
+            IntPtr hProcess, int infoClass, PROCESS_BASIC_INFORMATION* info, uint infoLength, uint* returnLength);
+
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        internal static partial IntPtr OpenProcess(
+            uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
+
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool CloseHandle(IntPtr hObject);
+
+        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static unsafe partial bool QueryFullProcessImageNameW(
+            IntPtr hProcess, uint dwFlags, char* lpExeName, ref uint lpdwSize);
+
+        // Process times as FILETIME (Int64 ticks). Only the creation time is used, as a
+        // guard against PID reuse: a parent must be older than its child.
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool GetProcessTimes(
+            IntPtr hProcess, out long creation, out long exit, out long kernel, out long user);
+
+        [LibraryImport("kernel32.dll")]
+        internal static partial IntPtr GetCurrentProcess();
+
         // ── Installer lookup (post-install validation recovery) ───────────────
 
         // Finds an installed ProductCode from the stable UpgradeCode so the

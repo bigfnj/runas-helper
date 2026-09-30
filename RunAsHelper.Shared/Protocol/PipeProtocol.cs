@@ -34,9 +34,14 @@ public static class PipeProtocol
 
     private static async Task WriteFrameAsync(Stream stream, byte[] json, CancellationToken ct)
     {
-        byte[] len = BitConverter.GetBytes(json.Length);
-        await stream.WriteAsync(len, ct);
-        await stream.WriteAsync(json, ct);
+        // Length prefix and body go out in ONE WriteAsync. Two writes could be observed
+        // as a torn frame by a reader that wakes between them, and the previous split also
+        // left a window where a second concurrent writer's length prefix could land between
+        // this frame's prefix and body. One buffer, one write, closes both.
+        byte[] frame = new byte[4 + json.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(frame, json.Length);
+        json.CopyTo(frame, 4);
+        await stream.WriteAsync(frame, ct);
         await stream.FlushAsync(ct);
     }
 
@@ -55,4 +60,25 @@ public static class PipeProtocol
 
         return body;
     }
+}
+
+/// <summary>
+/// One writer per pipe connection. Every frame the service sends to a client goes
+/// through this so a frame written from a background task (the stdout pump) can never
+/// interleave with one written from the request handler (the exit or timeout line).
+/// A single frame is already atomic on the wire (WriteFrameAsync issues one WriteAsync);
+/// this serialises the two producers so their frames also stay whole relative to each other.
+/// </summary>
+public sealed class PipeMessageWriter(Stream stream) : IDisposable
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    public async Task WriteAsync(PipeMessage msg, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try { await PipeProtocol.WriteAsync(stream, msg, ct); }
+        finally { _gate.Release(); }
+    }
+
+    public void Dispose() => _gate.Dispose();
 }

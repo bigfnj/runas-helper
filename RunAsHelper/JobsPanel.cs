@@ -248,7 +248,7 @@ namespace RunAsHelper
 
             try
             {
-                var lines = await _client.JobOutputAsync(id);
+                var (_, lines) = await _client.JobOutputAsync(id);
                 if (IsDisposed || !IsHandleCreated || SelectedJobId() != id) return;
 
                 string text = lines.Count == 0
