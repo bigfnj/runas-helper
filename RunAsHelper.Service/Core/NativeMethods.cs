@@ -6,7 +6,6 @@ namespace RunAsHelper.Service.Core;
 internal static partial class NativeMethods
 {
     // ── Access rights ────────────────────────────────────────────────────
-    internal const uint READ_CONTROL              = 0x00020000;
     internal const uint STANDARD_RIGHTS_REQUIRED  = 0x000F0000;
     internal const uint MAXIMUM_ALLOWED           = 0x02000000;
     internal const uint TOKEN_ASSIGN_PRIMARY      = 0x00000001;
@@ -24,7 +23,6 @@ internal static partial class NativeMethods
         TOKEN_ADJUST_PRIVILEGES | TOKEN_ADJUST_GROUPS | TOKEN_ADJUST_DEFAULT |
         TOKEN_ADJUST_SESSIONID;
 
-    internal const uint SYNCHRONIZE                      = 0x00100000;
     internal const uint PROCESS_DUP_HANDLE               = 0x00000040;
     internal const uint PROCESS_QUERY_INFORMATION        = 0x00000400;
     // Lighter-weight than PROCESS_QUERY_INFORMATION; sufficient for
@@ -44,7 +42,6 @@ internal static partial class NativeMethods
     internal const uint SE_PRIVILEGE_ENABLED  = 0x00000002;
 
     // ── Process creation ─────────────────────────────────────────────────
-    internal const uint LOGON_WITH_PROFILE        = 0x00000001;
     internal const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     // Allocate a fresh console for the child. Required for console-subsystem
     // programs (cmd.exe, powershell.exe) launched from a service — without it
