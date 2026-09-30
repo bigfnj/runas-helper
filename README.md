@@ -593,6 +593,24 @@ Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
 
+## What's new in 2.3.2
+
+One service fix, found by reviewing the test harness. No new features; the wire format is
+unchanged.
+
+- **A trusted-user change reaches the pipe at once.** After `/trusted:add` or
+  `/trusted:remove` the service rebuilt its listener with the new pipe DACL, but Windows
+  keeps one security descriptor per pipe name while any instance of it is open, and the
+  instance that carried the change was still open. The new DACL applied only when that
+  instance happened to close first, and otherwise waited for a service restart. The
+  service now applies the DACL to the pipe explicitly on every new listener. Who may
+  launch was never affected (the service checks its trusted list on every request); what
+  changed late was who could connect, which matters for a newly trusted caller running
+  with a restricted token.
+
+The test harness gained a live check of the pipe DACL (smoke B16, and B4 after each trust
+change) and a sweep of its own checks; see `BACKLOG.md` (HS and HR rows).
+
 ## What's new in 2.3.1
 
 Fixes from the post-release audit of 2.3.0. No new features; the wire format is

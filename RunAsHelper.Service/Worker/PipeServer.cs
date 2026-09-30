@@ -23,9 +23,10 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
     private readonly TrustedCallerStore _trustedCallers = new(logger);
 
     // A policy mutation changes the pipe DACL. Cancel the one outstanding accept
-    // so RunAsync immediately creates a fresh instance with the new ACL; otherwise
-    // the old listener could continue admitting a removed SID (or reject a newly
-    // added SID) until some unrelated client happened to connect.
+    // so RunAsync immediately creates a fresh instance, and CreatePipe applies the
+    // new ACL to the pipe name (a new instance's own descriptor is ignored while the
+    // handler's instance is open); otherwise the old DACL could keep admitting a
+    // removed SID or keep out a newly added one until the service restarted.
     private readonly object _pipeRefreshSync = new();
     private CancellationTokenSource _pipeRefresh = new();
 
@@ -490,7 +491,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                 AccessControlType.Allow));
         }
 
-        return NamedPipeServerStreamAcl.Create(
+        var pipe = NamedPipeServerStreamAcl.Create(
             PipeName,
             PipeDirection.InOut,
             NamedPipeServerStream.MaxAllowedServerInstances,
@@ -498,7 +499,18 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
             PipeOptions.Asynchronous,
             inBufferSize:  4096,
             outBufferSize: 4096,
-            pipeSecurity:  security);
+            pipeSecurity:  security,
+            additionalAccessRights: PipeAccessRights.ChangePermissions);
+        // A named pipe keeps one security descriptor per name, taken from the instance that
+        // created the name: the descriptor given for a later instance is ignored while any
+        // instance is still open. During a policy change the handler that made it still
+        // holds its own instance, so the rebuilt listener used to keep the old DACL until
+        // the service restarted, unless that handler happened to close first (a trusted-user
+        // add or remove did not reach the pipe; BL-48). Applying it explicitly updates the
+        // descriptor for the name, on every new listener.
+        try { pipe.SetAccessControl(security); }
+        catch { pipe.Dispose(); throw; }
+        return pipe;
     }
 
     private async Task HandleConnectionAsync(NamedPipeServerStream pipe, CancellationToken ct)
