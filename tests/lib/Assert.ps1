@@ -20,7 +20,10 @@ function Get-CaseSkipReason {
     $f = $global:RahRun.Filter
     if ($f.ContainsKey('Only') -and @($f.Only) -notcontains $Id) { return "not in -Only set" }
     if ($Tags -contains 'gui') { return "GUI-only, not automatable headless" }
-    if ($Tags -contains 'integration-only') { return "integration-only (needs the installed 2.3.0 build or a tray)" }
+    # Integration-only cases run when the runner says the installed build under test is
+    # the new one (Filter.Integration); on a 2.2.0 box they skip.
+    $integration = $f.ContainsKey('Integration') -and $f.Integration
+    if (($Tags -contains 'integration-only') -and -not $integration) { return "integration-only (needs the installed 2.3.0 build or a tray)" }
     if ($f.ContainsKey('OnTwoTwoZero') -and $f.OnTwoTwoZero -and ($Tags -contains 'changed-in-2.3.0')) {
         return "changed-in-2.3.0 (behavior deliberately differs from 2.2.0)"
     }

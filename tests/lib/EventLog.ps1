@@ -23,3 +23,11 @@ function Get-RunAsHelperEvents {
         throw
     }
 }
+
+function Get-RunAsHelperEventText {
+    # The RunAsHelper source registers no message file, so Get-WinEvent leaves Message
+    # empty; the text the service wrote is the event's first string property.
+    param([Parameter(Mandatory)]$Event)
+    if ($Event.Message) { return [string]$Event.Message }
+    (@($Event.Properties | ForEach-Object { [string]$_.Value }) -join "`n")
+}

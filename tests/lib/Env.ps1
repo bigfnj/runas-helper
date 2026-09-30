@@ -17,7 +17,15 @@ function Get-MachinePath { [Environment]::GetEnvironmentVariable('Path', 'Machin
 function Get-UserPath { [Environment]::GetEnvironmentVariable('Path', 'User') }
 
 function Get-MachinePathEntries {
-    @(Get-MachinePath -split ';' | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') })
+    # Parenthesize the call: "Get-MachinePath -split ';'" would hand -split to the
+    # function as an argument and return the whole PATH as one entry.
+    @((Get-MachinePath) -split ';' | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') })
+}
+
+function Get-MachinePathValueKind {
+    # The machine PATH must stay REG_EXPAND_SZ ('ExpandString'): entries such as
+    # %SystemRoot%\system32 stop resolving if an installer rewrites it as REG_SZ.
+    (Get-Item 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').GetValueKind('Path').ToString()
 }
 
 function Get-RefreshedPath {

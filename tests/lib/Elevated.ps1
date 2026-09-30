@@ -38,7 +38,11 @@ $out = & $a.FilePath @($a.Args) 2>&1
     $exited = $proc.WaitForExit($TimeoutSec * 1000)
     if (-not $exited) { try { $proc.Kill() } catch { } ; throw "elevated run timed out after $TimeoutSec s" }
 
-    $rc = if (Test-Path $rcFile) { [int](Get-Content -Raw $rcFile).Trim() } else { $proc.ExitCode }
+    # rc.txt is empty when the runner's & did not wait for a GUI target (PowerShell sets
+    # no $LASTEXITCODE then), so prefer the console launcher for elevated calls and fall
+    # back to the runner's own exit code here rather than failing on a null string.
+    $rcText = if (Test-Path $rcFile) { [string](Get-Content -Raw $rcFile) } else { '' }
+    $rc = if ($rcText.Trim() -match '^-?\d+$') { [int]$rcText.Trim() } else { $proc.ExitCode }
     $output = if (Test-Path $outFile) { @(Get-Content $outFile) } else { @() }
     try { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue } catch { }
     [pscustomobject]@{ ExitCode = $rc; Output = $output; Text = ($output -join "`n") }

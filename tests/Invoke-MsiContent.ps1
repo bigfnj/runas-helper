@@ -55,17 +55,22 @@ Invoke-Case -Id 'M5' -Name 'Environment table has a PATH row for the install fol
 
 Invoke-Case -Id 'M6' -Name 'binary versions match ExpectedVersion' -Tags @('needs-expected') -Test {
     if (-not $ExpectedVersion) { Skip-Case -Reason 'no -ExpectedVersion given' }
-    $want = "$ExpectedVersion.0"
+    # MSI pads File.Version to four parts, so compare as versions, not strings.
+    $want = ConvertTo-FourPartVersion $ExpectedVersion
     foreach ($name in 'RunAsHelper.com', 'RunAsHelper.exe', 'RunAsHelper.Service.exe') {
         $row = @($vers | Where-Object { $_.FileName -eq $name })
         Assert-True ($row.Count -ge 1) "$name has a File.Version row"
-        Assert-Equal $want $row[0].Version "$name version"
+        Assert-Equal $want (ConvertTo-FourPartVersion $row[0].Version) "$name version"
     }
 }
 
 Invoke-Case -Id 'M7' -Name 'ProductVersion property matches ExpectedVersion' -Tags @('needs-expected') -Test {
     if (-not $ExpectedVersion) { Skip-Case -Reason 'no -ExpectedVersion given' }
-    Assert-Equal $ExpectedVersion (Get-MsiProperty -Database $db -Name 'ProductVersion') 'ProductVersion'
+    # The package version binds to the service exe's FileVersion, which is four parts
+    # ("2.2.90.0"); a release built with -p:ProductVersion=2.3.0 reports "2.3.0.0" too.
+    $got = Get-MsiProperty -Database $db -Name 'ProductVersion'
+    Assert-True ($null -ne $got) 'ProductVersion property present'
+    Assert-Equal (ConvertTo-FourPartVersion $ExpectedVersion) (ConvertTo-FourPartVersion $got) 'ProductVersion'
 }
 
 Finish-Run -Title 'msi-content'

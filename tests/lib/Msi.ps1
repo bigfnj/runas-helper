@@ -55,6 +55,26 @@ function Get-MsiFileVersions {
     $out
 }
 
+function Get-InstalledProductCode {
+    # The ProductCode of the installed RunAS Helper, from the per-machine Uninstall key,
+    # or $null when it is not installed. Needed for msiexec /x.
+    $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSObject.Properties.Name -contains 'DisplayName' -and $_.DisplayName -eq 'RunAS Helper' } |
+        Select-Object -First 1
+    if ($null -eq $p) { return $null }
+    $p.PSChildName
+}
+
+function ConvertTo-FourPartVersion {
+    # MSI stores ProductVersion and File.Version as up to four numeric parts, and the
+    # FileVersion bind pads to four ("2.2.90" becomes "2.2.90.0"), so compare as [Version]
+    # padded to four parts rather than as strings.
+    param([Parameter(Mandatory)][string]$Text)
+    $parts = @(($Text.Trim() -split '\.') | ForEach-Object { [int]$_ })
+    while ($parts.Count -lt 4) { $parts += 0 }
+    [Version]::new($parts[0], $parts[1], $parts[2], $parts[3])
+}
+
 function Test-MsiEnvironmentPath {
     # Returns the matching Environment rows (Name, Value) that set a PATH entry to the
     # install folder, or an empty array. An absent Environment table throws inside the
