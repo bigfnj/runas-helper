@@ -1,16 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Build: Build the solution in VS (Release|x64). The installer project
-  publishes both apps as self-contained single-file win-x64 binaries
-  before the WiX compiler runs, so no external .NET runtime is required
-  on target machines.
+  publishes the service, the tray/CLI client and the RunAsHelper.com console
+  launcher as framework-dependent single-file win-x64 binaries before the WiX
+  compiler runs (the .NET 10 Desktop Runtime x64 must be present, see the launch
+  condition below).
 
   Install silently:  msiexec /i RunAsHelper-Setup.msi /passive
+                     (open a new shell afterwards to pick up the PATH entry)
   Uninstall:         msiexec /x RunAsHelper-Setup.msi /passive
 -->
 
-<?define ServiceExe = "publish\service\RunAsHelper.Service.exe" ?>
-<?define ClientExe  = "publish\client\RunAsHelper.exe" ?>
+<?define ServiceExe  = "publish\service\RunAsHelper.Service.exe" ?>
+<?define ClientExe   = "publish\client\RunAsHelper.exe" ?>
+<?define LauncherCom = "publish\launcher\RunAsHelper.com" ?>
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
@@ -133,6 +136,47 @@
                 KeyPath="yes" />
         </Component>
 
+        <!-- Console-subsystem launcher. PATHEXT lists .COM before .EXE, so a bare
+             "RunAsHelper" from cmd or PowerShell resolves to this file; it runs
+             RunAsHelper.exe with inherited standard handles and relays its exit code,
+             so the shell waits and captures output. Anything that names
+             RunAsHelper.exe explicitly is unaffected. -->
+        <Component Id="LauncherComponent" Guid="5F6E7D8C-9BA0-4123-B456-789ABCDEF012">
+          <File Id="LauncherCom"
+                Source="$(var.LauncherCom)"
+                KeyPath="yes" />
+        </Component>
+
+        <!-- Machine PATH entry so "RunAsHelper" works by bare name. An Environment
+             element cannot be a component KeyPath, so this component is keyed on a
+             registry value that doubles as a scriptable install-location lookup
+             (HKLM\Software\RunAsHelper\InstallFolder). Part="last" appends
+             "[~];[INSTALLFOLDER]", the MSI-documented safe form for editing PATH.
+             Permanent="no" with Action="set" means the matching
+             RemoveEnvironmentStrings deletes exactly this entry on uninstall and
+             leaves the rest of PATH alone. The registry value lives in the same
+             HKLM\Software\RunAsHelper key as the service's AllowedCallerSids, and a
+             component removal deletes only its own value, so the trusted-caller
+             policy survives an uninstall. msiexec broadcasts WM_SETTINGCHANGE at
+             InstallFinalize, so new shells see the entry; shells already open keep
+             their old PATH. -->
+        <Component Id="PathComponent" Guid="9A8B7C6D-5E4F-4321-A0B1-C2D3E4F50617">
+          <RegistryValue Root="HKLM"
+                         Key="Software\RunAsHelper"
+                         Name="InstallFolder"
+                         Type="string"
+                         Value="[INSTALLFOLDER]"
+                         KeyPath="yes" />
+          <Environment Id="RunAsHelperPath"
+                       Name="PATH"
+                       Value="[INSTALLFOLDER]"
+                       Part="last"
+                       Action="set"
+                       System="yes"
+                       Permanent="no"
+                       Separator=";" />
+        </Component>
+
         <!-- Marker that tells the tray app to run its post-install validation
              popup the first time it starts after this install. The tray reads
              it, validates, then records the version under HKCU so it shows once. -->
@@ -146,7 +190,7 @@
         </Component>
 
         <!-- Registers the event source so EventLogHelper can write structured
-             entries (IDs 1001–1005) to the Application log without requiring
+             entries (IDs 1001-1006) to the Application log without requiring
              CreateEventSource at runtime. ForceDeleteOnUninstall removes the
              key (and its log entries) when the product is uninstalled. -->
         <Component Id="EventSourceComponent" Guid="2B3C4D5E-6F70-8192-A3B4-C5D6E7F80912">
@@ -198,6 +242,8 @@
     <Feature Id="Complete" Level="1">
       <ComponentRef Id="ServiceComponent" />
       <ComponentRef Id="ClientComponent" />
+      <ComponentRef Id="LauncherComponent" />
+      <ComponentRef Id="PathComponent" />
       <ComponentRef Id="StartMenuComponent" />
       <ComponentRef Id="ValidationFlagComponent" />
       <ComponentRef Id="EventSourceComponent" />

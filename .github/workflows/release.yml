@@ -1,7 +1,7 @@
 name: Release
 
-# Builds the self-contained MSI on a Windows runner and, when triggered by a
-# version tag (e.g. v1.2.3), publishes it as a GitHub Release asset.
+# Builds the framework-dependent MSI on a Windows runner and, when triggered by
+# a version tag (e.g. v1.2.3), publishes it as a GitHub Release asset.
 #
 #   Tag a release:   git tag v1.2.3 && git push origin v1.2.3
 #   Dry run / test:  Actions tab -> Release -> Run workflow (uploads an
@@ -124,13 +124,14 @@ jobs:
           Write-Host "signtool: $($st.FullName)"
 
       - name: Build MSI
-        # The installer project restores the WiX SDK via NuGet and publishes both
-        # apps self-contained, so no separate WiX install is needed on the runner.
+        # The installer project restores the WiX SDK via NuGet and publishes the
+        # three apps framework-dependent single-file, so no separate WiX install is
+        # needed on the runner.
         #
         # The three signing properties are what switch the installer project's
-        # sign targets on: the published EXEs are signed before WiX packs them and
-        # the MSI is signed after link. Omitting them produces an unsigned build,
-        # which is what happens when there is no secret.
+        # sign targets on: the published binaries are signed before WiX packs them
+        # and the MSI is signed after link. Omitting them produces an unsigned
+        # build, which is what happens when there is no secret.
         shell: pwsh
         run: |
           $props = @('-c', 'Release', "-p:ProductVersion=${{ steps.ver.outputs.version }}")
@@ -145,6 +146,16 @@ jobs:
           dotnet build RunAsHelper.sln @props
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Unit tests
+        # The solution build above already compiled RunAsHelper.Tests, so run it
+        # here without rebuilding. These are the pure-logic tests (launcher
+        # classification, argv[0] stripping, host rule, exit-code mapping); they
+        # need no elevation and no installed service.
+        shell: pwsh
+        run: |
+          dotnet test RunAsHelper.Tests\RunAsHelper.Tests.csproj -c Release --no-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify signature
         if: steps.signing.outputs.thumbprint != ''
         shell: pwsh
@@ -152,7 +163,8 @@ jobs:
           $targets = @(
             'RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi',
             'RunAsHelper.Installer\publish\client\RunAsHelper.exe',
-            'RunAsHelper.Installer\publish\service\RunAsHelper.Service.exe'
+            'RunAsHelper.Installer\publish\service\RunAsHelper.Service.exe',
+            'RunAsHelper.Installer\publish\launcher\RunAsHelper.com'
           )
 
           $failed = $false
@@ -215,13 +227,14 @@ jobs:
           name: RunAsHelper-Setup
           path: ${{ steps.stage.outputs.asset }}
           if-no-files-found: error
-          # The MSI is ~65MB and this copy exists only so a dry run can be
+          # The MSI is ~1.5 MB now that it is framework-dependent (it was ~65 MB
+          # when self-contained) and this copy exists only so a dry run can be
           # downloaded. GitHub's default retention is 90 days, and an artifact's
           # expiry is fixed when it is created, so lowering the repository setting
           # later does not shorten anything already uploaded: ten dry runs from
-          # June were still holding 649MB in late August, which is what filled the
-          # account's artifact quota and blocked a release. Seven days is longer
-          # than anyone needs a dry-run build.
+          # June, back when each was ~65 MB, were still holding 649MB in late
+          # August, which is what filled the account's artifact quota and blocked
+          # a release. Seven days is longer than anyone needs a dry-run build.
           retention-days: 7
 
       - name: Publish GitHub Release
