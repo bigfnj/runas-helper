@@ -25,19 +25,25 @@
                       AdditionalProperties="Platform=AnyCPU" />
     <ProjectReference Include="..\RunAsHelper.Service\RunAsHelper.Service.csproj"
                       AdditionalProperties="Platform=AnyCPU" />
+    <ProjectReference Include="..\RunAsHelper.Launcher\RunAsHelper.Launcher.csproj"
+                      AdditionalProperties="Platform=AnyCPU" />
   </ItemGroup>
 
   <!--
-    Framework-dependent single-file publish of both apps into this installer
-    project's own publish\service\ and publish\client\ folders (git-ignored).
+    Framework-dependent single-file publish of the three apps into this installer
+    project's own publish\service\, publish\client\ and publish\launcher\ folders
+    (git-ignored). The launcher publishes as RunAsHelper.com: its own csproj renames
+    the single-file bundle after Publish (RenameLauncherToCom), so the file the
+    installer packages and signs is the exact one that ships.
 
     Hooked BeforeTargets="CoreCompile" — that is the target that invokes the
     WiX linker and resolves the File @Source paths. The previous hook,
     BeforeTargets="Build", ran AFTER CoreCompile had already tried (and failed)
     to find the EXEs, which is why the installer never built from a clean tree.
 
-    The relative Source paths in Package.wxs (publish\service\…, publish\client\…)
-    resolve against the installer project directory, a default WiX bind path.
+    The relative Source paths in Package.wxs (publish\service\…, publish\client\…,
+    publish\launcher\…) resolve against the installer project directory, a default
+    WiX bind path.
 
     ** The .NET 10 Desktop Runtime (x64) IS required on the target machine. **
     These were self-contained through 2.1.3, which meant each EXE carried its own
@@ -54,6 +60,7 @@
   <Target Name="PublishApps" BeforeTargets="CoreCompile">
     <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Service\RunAsHelper.Service.csproj&quot; -c $(Configuration) -r win-x64 --no-self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\service\&quot;" />
     <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper\RunAsHelper.csproj&quot; -c $(Configuration) -r win-x64 --no-self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\client\&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\RunAsHelper.Launcher\RunAsHelper.Launcher.csproj&quot; -c $(Configuration) -r win-x64 --no-self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ProductVersion=$(ProductVersion) -o &quot;$(MSBuildThisFileDirectory)publish\launcher\&quot;" />
   </Target>
 
   <!--
@@ -63,9 +70,10 @@
     unsigned local/CI builds still work — the service trusts the installed tray by
     image path, not by signature.
 
-    The published EXEs are signed after PublishApps but before CoreCompile (the
-    WiX link that packs them), so the signed binaries are what ends up inside the
-    MSI; the MSI itself is signed after Build. Timestamping is included when
+    The published binaries (both EXEs and RunAsHelper.com) are signed after
+    PublishApps but before CoreCompile (the WiX link that packs them), so the
+    signed binaries are what ends up inside the MSI; the MSI itself is signed
+    after Build. Timestamping is included when
     -p:SignTimestampUrl is non-empty (default via the wrapper).
   -->
   <PropertyGroup Condition="'$(SigningCertThumbprint)' != '' and '$(SignToolPath)' != ''">
@@ -76,8 +84,8 @@
   <Target Name="SignPublishedApps"
           AfterTargets="PublishApps" BeforeTargets="CoreCompile"
           Condition="'$(SigningCertThumbprint)' != '' and '$(SignToolPath)' != ''">
-    <Message Importance="high" Text="Signing published EXEs with cert $(SigningCertThumbprint)..." />
-    <Exec Command="&quot;$(SignToolPath)&quot; $(_SignArgs) &quot;$(MSBuildThisFileDirectory)publish\service\RunAsHelper.Service.exe&quot; &quot;$(MSBuildThisFileDirectory)publish\client\RunAsHelper.exe&quot;" />
+    <Message Importance="high" Text="Signing published binaries with cert $(SigningCertThumbprint)..." />
+    <Exec Command="&quot;$(SignToolPath)&quot; $(_SignArgs) &quot;$(MSBuildThisFileDirectory)publish\service\RunAsHelper.Service.exe&quot; &quot;$(MSBuildThisFileDirectory)publish\client\RunAsHelper.exe&quot; &quot;$(MSBuildThisFileDirectory)publish\launcher\RunAsHelper.com&quot;" />
   </Target>
 
   <Target Name="SignMsi"
