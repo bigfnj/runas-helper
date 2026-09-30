@@ -1,7 +1,10 @@
 #Requires -Version 7
 # Reads the RunAsHelper Application event-log entries a case needs to check. The
-# service writes its events under the source "RunAsHelper"; ids used by the design:
-# 1001 launch, 1002 result, 1003 denied/unknown, 1005 install, 1006 kill, 1099 crash.
+# service writes under the source "RunAsHelper" (EventLogHelper.cs): 1001 launch
+# requested, 1002 launch succeeded (a failed launch writes 1003, not 1002), 1003 denied
+# (gate closed or expired, tray-only verb, unknown verb, launch failure) or identity
+# mismatch, 1004 token failure, 1005 service start or stop (there is no install event),
+# 1006 job ended by an operator. The client's CrashLogger writes 1099 under the same source.
 Set-StrictMode -Version Latest
 
 function Get-RunAsHelperEvents {

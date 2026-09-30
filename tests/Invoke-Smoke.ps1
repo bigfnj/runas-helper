@@ -6,7 +6,9 @@
 .DESCRIPTION
   -Baseline runs the new-feature cases against the installed 2.2.0 build, where every
   one of them must FAIL because the feature is not there yet. That FAIL set is the
-  mutation evidence for the suite and is pasted into tests/MUTATIONS.md.
+  mutation evidence for the suite and is pasted into tests/MUTATIONS.md. The elevated
+  new-feature cases (B6, B10, B12) go through Invoke-Elevated, which needs the console
+  launcher, so on 2.2.0 they SKIP; their evidence is the integration run.
 
   -Integration runs against the installed 2.3.0 build and expects passes. It enables
   the integration-only cases (service stop/start, policy edits, the tray start through
@@ -25,6 +27,9 @@ param(
     [switch]$AllowElevated,
     [switch]$KeepArtifacts,
     [string[]]$Only,
+    # The signer A13 expects; Invoke-ReleaseVerify passes its own, so a release signed with
+    # a different certificate is checked against that one instead of failing here.
+    [string]$ExpectedThumbprint = '0EEBB64DCE430D98D2CA19DC3DC715DB9999BAD5',
     [switch]$Relaunched,
     [string]$ResultFile
 )
@@ -45,25 +50,30 @@ $com = Get-InstalledCom
 $svc = Get-InstalledService
 $comp = @{ __COMPAT_LAYER = 'RunAsInvoker' }
 $cn = Get-ComputerNameLocal
-$expectedThumbprint = '0EEBB64DCE430D98D2CA19DC3DC715DB9999BAD5'
 
 # ConPTY relaunch guard: only when a ConPTY case will run (the .com is installed and
-# this is not a baseline run) and this process's stdout is not a console.
+# this is not a baseline run) and either standard stream of this process is redirected.
+# Stderr counts too: with it redirected, a console child's stderr lands in that redirect
+# instead of the pseudo console, and A7 asserts on a line the launcher writes to stderr.
 $conPtyWillRun = (Test-Path $com) -and (-not $Baseline) -and ($Phase -in 'A', 'All')
-if ($conPtyWillRun -and [Console]::IsOutputRedirected -and -not $Relaunched) {
+if ($conPtyWillRun -and ([Console]::IsOutputRedirected -or [Console]::IsErrorRedirected) -and -not $Relaunched) {
     $rf = Join-Path ([IO.Path]::GetTempPath()) ("rah-smoke-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + ".log")
-    $childArgs = @('-NoProfile', '-File', $PSCommandPath, '-Phase', $Phase, '-Relaunched', '-ResultFile', $rf)
+    # Paths quoted: Start-Process joins -ArgumentList with plain spaces, so a clone or a
+    # TEMP folder with a space would hand the child half a path.
+    $childArgs = @('-NoProfile', '-File', ('"' + $PSCommandPath + '"'), '-Phase', $Phase, '-Relaunched', '-ResultFile', ('"' + $rf + '"'))
     if ($ExpectedVersion) { $childArgs += @('-ExpectedVersion', $ExpectedVersion) }
     if ($Integration) { $childArgs += '-Integration' }
     if ($AllowElevated) { $childArgs += '-AllowElevated' }
     if ($KeepArtifacts) { $childArgs += '-KeepArtifacts' }
     if ($Only) { $childArgs += @('-Only', ($Only -join ',')) }
+    $childArgs += @('-ExpectedThumbprint', $ExpectedThumbprint)
     # WaitForExit on the process itself, not Start-Process -Wait: -Wait also waits for
     # every descendant, and A6 starts the tray, which would keep this parent waiting
     # until the tray closes.
     $p = Start-Process pwsh -WindowStyle Hidden -PassThru -ArgumentList $childArgs
     $p.WaitForExit()
     if (Test-Path $rf) { Get-Content $rf | ForEach-Object { Write-Host $_ }; if (-not $KeepArtifacts) { Remove-Item $rf -ErrorAction SilentlyContinue } }
+    else { Write-Host "relaunched smoke runner exited $($p.ExitCode) without writing its results file $rf" }
     exit $p.ExitCode
 }
 
@@ -93,8 +103,17 @@ $fx = New-Fixtures -WorkDir $W
 
 function Get-Launcher {
     # Integration uses the installed .com; baseline has none, so the installed exe stands
-    # in (which shows the 2.3.0 pipe-level behavior absent on 2.2.0).
+    # in for the Invoke-Console cases (which shows the 2.3.0 pipe-level behavior absent on
+    # 2.2.0). It cannot stand in for Invoke-Elevated, which cannot read a GUI exe's exit
+    # code, so the elevated cases skip when there is no .com.
     if (Test-Path $com) { $com } else { $exe }
+}
+
+function ConvertTo-PsLiteral {
+    # A single-quoted PowerShell literal for splicing a path into a -Command string: an
+    # apostrophe in the path (C:\Users\O'Brien\...) is doubled instead of ending the string.
+    param([Parameter(Mandatory)][string]$Text)
+    "'" + $Text.Replace("'", "''") + "'"
 }
 
 function Invoke-AdminPwsh {
@@ -154,6 +173,8 @@ try {
 
         Invoke-Case -Id 'A7' -Name 'Ctrl+C to the .com ends the child and exits 0xC000013A' -Test {
             Assert-True (Test-Path $com) "installed RunAsHelper.com present (2.3.0 launcher)"
+            # The hint below is a stderr line, so the witness (which covers stderr) runs first.
+            Test-ConPtyWitness | Out-Null
             $r = Invoke-ConPty -CommandLine ('"' + $com + '" /capture /timeout:20 cmd /c "ping -n 15 127.0.0.1 >nul"') -TimeoutMs 12000 -CtrlCAfterMs 2000
             Assert-Equal (-1073741510) $r.ExitCode 'Ctrl+C exit code 0xC000013A'
             Assert-Match 'still be running' $r.Text 'hint line about the elevated target'
@@ -268,8 +289,8 @@ try {
         }
 
         Invoke-Case -Id 'B6' -Name 'elevated /joblog on a missing job exits 1' -Tags @('needs-elevated') -Test {
-            $l = Get-Launcher
-            $r = Invoke-Elevated -FilePath $l -ArgumentList @('/joblog:999999')
+            if (-not (Test-Path $com)) { Skip-Case -Reason "no RunAsHelper.com: Invoke-Elevated cannot read the GUI exe's exit code" }
+            $r = Invoke-Elevated -FilePath $com -ArgumentList @('/joblog:999999')
             Assert-ExitCode 1 $r.ExitCode
         }
 
@@ -298,30 +319,37 @@ try {
             Assert-True (Test-Path $com) "installed RunAsHelper.com present (host rule is a 2.3.0 client feature)"
             $v = $fx.Version
             $env2 = Get-RefreshedPathEnv
-            $r = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& '$com' /capture /timeout:30 '$v'")
+            # Paths go into -Command text as escaped literals, so an apostrophe in the profile
+            # path (C:\Users\O'Brien\...) cannot end the string early.
+            $qc = ConvertTo-PsLiteral $com
+            $qv = ConvertTo-PsLiteral $v
+            $r = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& $qc /capture /timeout:30 $qv")
             Assert-Match 'PSV=7' $r.Stdout 'pwsh caller selects pwsh 7'
             Assert-Match 'PowerShell host: pwsh' $r.Stdout 'client host line names pwsh'
-            $r2 = Invoke-Console -FilePath 'powershell' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "& '$com' /capture /timeout:30 '$v'")
+            $r2 = Invoke-Console -FilePath 'powershell' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "& $qc /capture /timeout:30 $qv")
             Assert-Match 'PSV=5' $r2.Stdout 'Windows PowerShell caller selects 5.1'
-            $r3 = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& '$com' /capture /timeout:30 /ps:5 '$v'")
+            $r3 = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& $qc /capture /timeout:30 /ps:5 $qv")
             Assert-Match 'PSV=5' $r3.Stdout '/ps:5 pins 5.1 from pwsh'
-            $r4 = Invoke-Console -FilePath 'powershell' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "& '$com' /capture /timeout:30 '$($fx.Requires7)'")
+            $r4 = Invoke-Console -FilePath 'powershell' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "& $qc /capture /timeout:30 $(ConvertTo-PsLiteral $fx.Requires7)")
             Assert-Match 'PSV=7' $r4.Stdout '#Requires -Version 7 picks pwsh from Windows PowerShell'
-            $r5 = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& '$com' /capture /timeout:30 '$($fx.Desktop)'")
+            $r5 = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& $qc /capture /timeout:30 $(ConvertTo-PsLiteral $fx.Desktop)")
             Assert-Match 'PSV=5' $r5.Stdout '#Requires -PSEdition Desktop picks 5.1 from pwsh'
-            # cmd /c mangles a command line that starts with a quote and holds more quotes
-            # (it strips the first and last), and ArgumentList would escape the inner
-            # quotes with backslashes, so the cmd row runs a small .cmd wrapper from the
-            # space-free work dir instead. The caller of the .com is then cmd.exe.
+            # cmd /c strips the first and last quote of a command line that starts with a
+            # quote and holds more, and ArgumentList would escape inner quotes with
+            # backslashes, so the cmd row runs a small .cmd wrapper by relative path from the
+            # work dir (.\ because agent shells set NoDefaultCurrentDirectoryInExePath, which
+            # stops cmd finding a bare name there). The script path travels as %1 on cmd's
+            # UTF-16 command line, never through the ASCII file, which would turn a letter
+            # such as u-umlaut into '?'. The caller of the .com is then cmd.exe.
             $wrap = Join-Path $W 'via-cmd.cmd'
-            Set-Content -LiteralPath $wrap -Encoding ASCII -Value ('@"' + $com + '" /capture /timeout:30 "' + $v + '"')
-            $r6 = Invoke-Console -FilePath 'cmd' -TimeoutSec 40 -Env $env2 -ArgumentList @('/d', '/c', $wrap)
+            Set-Content -LiteralPath $wrap -Encoding ASCII -Value ('@"' + $com + '" /capture /timeout:30 %1')
+            $r6 = Invoke-Console -FilePath 'cmd' -TimeoutSec 40 -Env $env2 -WorkingDirectory $W -ArgumentList @('/d', '/c', '.\via-cmd.cmd', $v)
             Assert-Match 'PSV=5' $r6.Stdout 'cmd caller falls back to 5.1'
             Assert-Match '\(default\)' $r6.Stdout 'reason is default for a cmd caller'
-            $r7 = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& '$com' /capture /timeout:30 '$($fx.Args)' alpha 'b c'")
+            $r7 = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& $qc /capture /timeout:30 $(ConvertTo-PsLiteral $fx.Args) alpha 'b c'")
             Assert-Match 'ARGC=2' $r7.Stdout 'two arguments reach the script'
             Assert-Match 'ARG=\[b c\]' $r7.Stdout 'a quoted argument survives the rewrite'
-            $r8 = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& '$com' /capture /timeout:30 powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$v'")
+            $r8 = Invoke-Console -FilePath 'pwsh' -TimeoutSec 40 -Env $env2 -ArgumentList @('-NoProfile', '-Command', "& $qc /capture /timeout:30 powershell.exe -NoProfile -ExecutionPolicy Bypass -File $qv")
             Assert-Match 'PSV=5' $r8.Stdout 'an explicit host runs as given'
             Assert-NotMatch 'PowerShell host:' $r8.Stdout 'no host line when the target is not a .ps1'
         }
@@ -331,13 +359,29 @@ try {
             Skip-Case -Reason 'GUI only; manual coverage recorded in BACKLOG NT-07'
         }
 
-        Invoke-Case -Id 'B10' -Name '/trusted: elevated list shows the caller, group refused, Medium denied' -Tags @('needs-elevated') -Test {
-            $l = Get-Launcher
+        Invoke-Case -Id 'B10' -Name '/trusted: elevated list shows the caller, a group is refused by the client and by the service, Medium denied' -Tags @('needs-elevated') -Test {
+            if (-not (Test-Path $com)) { Skip-Case -Reason "no RunAsHelper.com: Invoke-Elevated cannot read the GUI exe's exit code" }
+            $l = $com
             $r = Invoke-Elevated -FilePath $l -ArgumentList @('/trusted')
             Assert-ExitCode 0 $r.ExitCode
             Assert-Match ([regex]::Escape((Get-CallerSid))) $r.Text 'trusted list shows the caller SID'
+            # A group NAME is refused by the client before any pipe traffic (it resolves the
+            # name and finds no user). A group SID is forwarded unchecked, so only the SID form
+            # reaches the service's own user-only check, and the refusal text below is that
+            # check's (TrustedCallerStore): the witness that the service, not the client, refused.
             $g = Invoke-Elevated -FilePath $l -ArgumentList @('/trusted:add', 'BUILTIN\Administrators')
             Assert-ExitCode 1 $g.ExitCode
+            $groupSid = 'S-1-5-32-544'
+            try {
+                $g2 = Invoke-Elevated -FilePath $l -ArgumentList @('/trusted:add', $groupSid)
+                Assert-ExitCode 1 $g2.ExitCode
+                Assert-Match 'does not resolve to a user account' $g2.Text 'the service refused the group SID'
+                Assert-NotMatch ([regex]::Escape($groupSid)) (Invoke-Elevated -FilePath $l -ArgumentList @('/trusted')).Text 'group SID not in the trusted list'
+            } finally {
+                # A faulty service that accepted the group must never leave it trusted.
+                $after = Invoke-Elevated -FilePath $l -ArgumentList @('/trusted')
+                if ($after.Text -match [regex]::Escape($groupSid)) { Invoke-Elevated -FilePath $l -ArgumentList @('/trusted:remove', $groupSid) | Out-Null }
+            }
             $m = Invoke-Console -FilePath $l -ArgumentList @('/trusted') -TimeoutSec 20 -Env $comp
             Assert-ExitCode 1 $m.ExitCode
             Assert-Match 'elevated' ($m.Stdout + $m.Stderr) 'Medium caller is told an elevated shell is needed'
@@ -353,9 +397,9 @@ try {
         }
 
         Invoke-Case -Id 'B12' -Name 'elevated capture is treated as the tray identity' -Tags @('needs-elevated') -Test {
-            $l = Get-Launcher
+            if (-not (Test-Path $com)) { Skip-Case -Reason "no RunAsHelper.com: Invoke-Elevated cannot read the GUI exe's exit code" }
             $t = Get-Date
-            $r = Invoke-Elevated -FilePath $l -ArgumentList @('/capture', '/timeout:10', 'cmd', '/c', "echo", "WITNESS-$cn")
+            $r = Invoke-Elevated -FilePath $com -ArgumentList @('/capture', '/timeout:10', 'cmd', '/c', "echo", "WITNESS-$cn")
             Assert-ExitCode 0 $r.ExitCode
             $ev = @(Get-RunAsHelperEvents -Id 1001 -Since $t)
             Assert-True ($ev.Count -ge 1) '1001 launch event present'
@@ -407,6 +451,15 @@ try {
             $r = Invoke-Console -FilePath $l -TimeoutSec 20 -Env $comp -ArgumentList @('/timeout:5', 'cmd', '/c', 'exit', '0')
             Assert-ExitCode 0 $r.ExitCode
             Assert-Match 'applies with /capture' $r.Stdout 'the ignored-timeout line'
+        }
+
+        Invoke-Case -Id 'B16' -Name 'pipe DACL: NETWORK denied first; only INTERACTIVE and trusted users get read/write; no other principal' -Tags @('baseline-control') -Test {
+            # The remote-access row of "What cannot be tested" rests on this deny ACE, so it is
+            # read from the live pipe rather than from PipeServer.cs.
+            $reg = Get-ItemProperty 'HKLM:\SOFTWARE\RunAsHelper' -ErrorAction SilentlyContinue
+            $trusted = @(if ($reg -and ($reg.PSObject.Properties.Name -contains 'AllowedCallerSids')) { $reg.AllowedCallerSids })
+            $bad = @(Get-PipeDaclViolations -TrustedSids $trusted)
+            Assert-Equal 0 $bad.Count "departures from the designed DACL: $($bad -join '; ')"
         }
     }
 } finally {

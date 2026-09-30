@@ -10,12 +10,14 @@
   the set of mutations, and every control must pass. Exit 0 when they match.
 #>
 param(
-    # With the new build installed, also run the integration mutations (MUT7-MUT13): each
-    # feeds a wrong expectation to the same operation an integration case performs.
+    # With the new build installed, also run the integration mutations (MUT7-MUT16) and
+    # controls (CTRL3, CTRL5): each mutation feeds a wrong expectation to the same operation
+    # an integration case performs. MUT14 and CTRL5 make elevated calls.
     [switch]$Integration,
-    # A copy of the 2.2.0 release MSI for MUT4 and CTRL2 (the MSI-version checks). The
-    # default is the maintainer's backup; when the file is absent both cases SKIP with a
-    # reason and leave the expected sets, so the self-test still passes off this box.
+    # A copy of the 2.2.0 release MSI for MUT4 (the MSI-version mutation), CTRL2 (a File-row
+    # count) and CTRL4 (the version reader on a known MSI). The default is the maintainer's
+    # backup; when the file is absent all three SKIP with a reason and leave the expected
+    # sets, so the self-test still passes off this box.
     [string]$BaselineMsi = 'D:\.ai-work\_backups\runas-helper-2.2.0-baseline\RunAsHelper-Setup-2.2.0.msi'
 )
 Set-StrictMode -Version Latest
@@ -26,6 +28,8 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Process.ps1')
 . (Join-Path $here 'lib\Msi.ps1')
 . (Join-Path $here 'lib\EventLog.ps1')
+. (Join-Path $here 'lib\Elevated.ps1')
+. (Join-Path $here 'lib\RawPipe.ps1')
 
 $exe = Get-InstalledExe
 $com = Get-InstalledCom
@@ -70,7 +74,9 @@ Invoke-Case -Id 'MUT4-wrong-version' -Name 'wrong expected MSI version fires one
     $db = Open-MsiDatabase -MsiPath $msi
     $vers = @(Get-MsiFileVersions -Database $db)
     $exeVer = @($vers | Where-Object { $_.FileName -eq 'RunAsHelper.exe' })
-    Assert-True ($exeVer.Count -ge 1) 'exe has a version row'
+    # A throw, not an assertion: a missing row means the reader broke, and an assertion
+    # failure here would count as the mutation firing.
+    if ($exeVer.Count -lt 1) { throw 'no RunAsHelper.exe version row; the MSI reader is broken' }
     Assert-Equal '9.9.9.0' $exeVer[0].Version 'RunAsHelper.exe version (deliberately wrong)'
 }
 
@@ -100,9 +106,19 @@ Invoke-Case -Id 'CTRL2-version-ok' -Name 'control: correct MSI-row count passes'
     Assert-Equal 1 @($files | Where-Object { $_ -eq 'RunAsHelper.exe' }).Count 'exe file rows'
 }
 
+Invoke-Case -Id 'CTRL4-msi-version-ok' -Name 'control: the MSI version reader returns 2.2.0.0 for the 2.2.0 exe' -Test {
+    # CTRL2 counts File rows and never runs the version reader, so without this a reader
+    # that returned nothing useful would still let MUT4 fire and the self-test pass.
+    if (-not $haveMsi) { Skip-Case -Reason "no baseline MSI at '$msi' (pass -BaselineMsi)" }
+    $db = Open-MsiDatabase -MsiPath $msi
+    $exeVer = @(@(Get-MsiFileVersions -Database $db) | Where-Object { $_.FileName -eq 'RunAsHelper.exe' })
+    if ($exeVer.Count -lt 1) { throw 'no RunAsHelper.exe version row; the MSI reader is broken' }
+    Assert-Equal (ConvertTo-FourPartVersion '2.2.0') (ConvertTo-FourPartVersion $exeVer[0].Version) 'RunAsHelper.exe version'
+}
+
 $expectedFail = @('MUT1-wrong-text', 'MUT2-wrong-exit', 'MUT3-pathext', 'MUT5-bogus-hkcu', 'MUT6-wrong-source')
 $expectedPass = @('CTRL1-help-ok')
-if ($haveMsi) { $expectedFail += 'MUT4-wrong-version'; $expectedPass += 'CTRL2-version-ok' }
+if ($haveMsi) { $expectedFail += 'MUT4-wrong-version'; $expectedPass += @('CTRL2-version-ok', 'CTRL4-msi-version-ok') }
 
 if ($Integration) {
     # The same operations the integration cases perform, each with one wrong expectation.
@@ -126,7 +142,9 @@ if ($Integration) {
         $t = Get-Date
         Invoke-Console -FilePath $com -TimeoutSec 20 -Env $comp -ArgumentList @('/capture', '/timeout:10', 'cmd', '/c', 'echo', "WITNESS-$cn") | Out-Null
         $ev = @(Get-RunAsHelperEvents -Id 1001 -Since $t)
-        Assert-True ($ev.Count -ge 1) '1001 event present'
+        # A throw, not an assertion: a missing event means the launch or the reader failed,
+        # which must not count as the mutation firing.
+        if ($ev.Count -lt 1) { throw 'no 1001 event; the launch or the event reader failed' }
         Assert-Match 'Source: tray' (Get-RunAsHelperEventText $ev[0]) 'event Source (deliberately wrong)'
     }
 
@@ -145,16 +163,50 @@ if ($Integration) {
         Assert-ExitCode 0 $r.ExitCode
     }
 
+    Invoke-Case -Id 'MUT14-elevated-wrong-exit' -Name 'an elevated exit 7 is not reported as 8 (Invoke-Elevated logic)' -Test {
+        $r = Invoke-Elevated -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-Command', 'exit 7') -TimeoutSec 60
+        Assert-ExitCode 8 $r.ExitCode
+    }
+
+    Invoke-Case -Id 'MUT15-witness-echo-only' -Name 'a child that prints nothing does not satisfy the child-computed witness (R3/R14 logic)' -Test {
+        # rem prints nothing, so the only WITNESS text left is the service's echo of the
+        # command, which keeps the literal %COMPUTERNAME%. If the echo ever carried the
+        # expanded name, this would stop firing and the witness would be void again.
+        $r = Invoke-Console -FilePath $com -TimeoutSec 30 -Env $comp -ArgumentList @('/capture', '/timeout:10', '/as:system', 'cmd', '/c', 'rem', 'WITNESS-%COMPUTERNAME%')
+        Assert-Match "WITNESS-$cn" $r.Stdout 'child witness (deliberately absent: the child prints nothing)'
+    }
+
+    $reg = Get-ItemProperty 'HKLM:\SOFTWARE\RunAsHelper' -ErrorAction SilentlyContinue
+    $trustedSids = @(if ($reg -and ($reg.PSObject.Properties.Name -contains 'AllowedCallerSids')) { $reg.AllowedCallerSids })
+    Invoke-Case -Id 'MUT16-dacl-trusted-withheld' -Name 'the pipe DACL check reports trusted-user ACEs when the trusted list is withheld (B16 logic)' -Test {
+        if ($trustedSids.Count -eq 0) { Skip-Case -Reason 'no trusted SIDs on this box, so there is nothing to withhold' }
+        $bad = @(Get-PipeDaclViolations -TrustedSids @())
+        Assert-Equal 0 $bad.Count "DACL departures with the trusted list withheld (deliberately wrong): $($bad -join '; ')"
+    }
+
     Invoke-Case -Id 'CTRL3-installed-version-ok' -Name 'control: the three installed binaries share one FileVersion' -Test {
         $v = ConvertTo-FourPartVersion (Get-FileVersionOf $com)
         Assert-Equal $v (ConvertTo-FourPartVersion (Get-FileVersionOf $exe)) 'exe FileVersion'
         Assert-Equal $v (ConvertTo-FourPartVersion (Get-FileVersionOf $svc)) 'service FileVersion'
     }
 
-    $expectedFail += @('MUT7-wrong-installed-version', 'MUT8-folder-not-on-path', 'MUT10-wrong-event-source', 'MUT11-guard-exit-zero', 'MUT12-wrong-child-exit', 'MUT13-timeout-not-zero')
+    Invoke-Case -Id 'CTRL5-elevated-unmeasured' -Name 'control: an elevated call that records no exit code throws and leaves no work folder (BL-45)' -Test {
+        # The installed exe is GUI-subsystem, so the elevated runner records no exit code
+        # for it; the helper must say so instead of returning a number, and clean up.
+        $before = @(Get-ChildItem $env:TEMP -Filter 'rah-tests-*' -Directory -ErrorAction SilentlyContinue | ForEach-Object Name)
+        $err = $null
+        try { Invoke-Elevated -FilePath $exe -ArgumentList @('/trusted') -TimeoutSec 60 | Out-Null } catch { $err = $_.Exception.Message }
+        $left = @(Get-ChildItem $env:TEMP -Filter 'rah-tests-*' -Directory -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Name })
+        foreach ($d in $left) { Remove-Item -Recurse -Force $d.FullName -ErrorAction SilentlyContinue }
+        Assert-Equal 0 $left.Count 'work folders left behind'
+        Assert-Match 'recorded no exit code' $err 'error from the helper'
+    }
+
+    $expectedFail += @('MUT7-wrong-installed-version', 'MUT8-folder-not-on-path', 'MUT10-wrong-event-source', 'MUT11-guard-exit-zero', 'MUT12-wrong-child-exit', 'MUT13-timeout-not-zero', 'MUT14-elevated-wrong-exit', 'MUT15-witness-echo-only')
+    if ($trustedSids.Count -gt 0) { $expectedFail += 'MUT16-dacl-trusted-withheld' }
     $trayOpen = @(Get-Process RunAsHelper -ErrorAction SilentlyContinue | ForEach-Object { $_.MainWindowTitle } | Where-Object { $_ }).Count -gt 0
     if ($trayOpen) { $expectedFail += 'MUT9-wrong-tray-title' }
-    $expectedPass += 'CTRL3-installed-version-ok'
+    $expectedPass += @('CTRL3-installed-version-ok', 'CTRL5-elevated-unmeasured')
 }
 
 # --- Reconciliation ---

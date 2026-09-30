@@ -21,8 +21,8 @@ function Invoke-Elevated {
         ConvertTo-Json -Depth 5 | Set-Content -Path $argsFile -Encoding UTF8
 
     # The runner captures 2>&1 so both streams reach out.txt, and records the exit
-    # code of the child. & waits for a console child; for a GUI exe the caller passes
-    # the installed exe and the runner still returns once it exits.
+    # code of the child. & waits for a console child and sets $LASTEXITCODE; a GUI exe
+    # records no exit code (measured), so callers pass the console launcher.
     $runnerBody = @'
 $ErrorActionPreference = 'Continue'
 $a = Get-Content -Raw -LiteralPath "__ARGS__" | ConvertFrom-Json
@@ -33,17 +33,28 @@ $out = & $a.FilePath @($a.Args) 2>&1
     $runnerBody = $runnerBody.Replace('__ARGS__', $argsFile).Replace('__OUT__', $outFile).Replace('__RC__', $rcFile)
     Set-Content -Path $runner -Value $runnerBody -Encoding UTF8
 
+    # Start-Process joins -ArgumentList with plain spaces, so the runner path (under %TEMP%,
+    # which can hold a space) is quoted here or pwsh gets half a path and exits 64.
     $proc = Start-Process pwsh -Verb RunAs -WindowStyle Hidden -PassThru `
-        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runner
+        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $runner + '"')
     $exited = $proc.WaitForExit($TimeoutSec * 1000)
-    if (-not $exited) { try { $proc.Kill() } catch { } ; throw "elevated run timed out after $TimeoutSec s" }
+    if (-not $exited) {
+        try { $proc.Kill() } catch { }
+        try { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue } catch { }
+        throw "elevated run timed out after $TimeoutSec s"
+    }
 
-    # rc.txt is empty when the runner's & did not wait for a GUI target (PowerShell sets
-    # no $LASTEXITCODE then), so prefer the console launcher for elevated calls and fall
-    # back to the runner's own exit code here rather than failing on a null string.
-    $rcText = if (Test-Path $rcFile) { [string](Get-Content -Raw $rcFile) } else { '' }
-    $rc = if ($rcText.Trim() -match '^-?\d+$') { [int]$rcText.Trim() } else { $proc.ExitCode }
+    # $LASTEXITCODE is set only for a console target that & waited on. A GUI-subsystem
+    # target (the installed RunAsHelper.exe) or one that failed to start leaves rc.txt
+    # empty, and then the target's exit code is unknown: throw rather than return a number.
+    # The runner's own exit code only says the runner ran, so returning it would let an
+    # "exit 0" assertion pass without measuring the target. Read with ReadAllText: [string]
+    # of Get-Content -Raw on an empty file is $null in pwsh 7, not ''.
+    $rcText = if (Test-Path $rcFile) { [IO.File]::ReadAllText($rcFile).Trim() } else { '' }
     $output = if (Test-Path $outFile) { @(Get-Content $outFile) } else { @() }
     try { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue } catch { }
-    [pscustomobject]@{ ExitCode = $rc; Output = $output; Text = ($output -join "`n") }
+    if ($rcText -notmatch '^-?\d+$') {
+        throw "elevated run of $FilePath recorded no exit code (runner exit $($proc.ExitCode)); a GUI-subsystem target is not waited on, so call the console launcher"
+    }
+    [pscustomobject]@{ ExitCode = [int]$rcText; Output = $output; Text = ($output -join "`n") }
 }

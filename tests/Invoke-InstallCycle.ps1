@@ -68,6 +68,9 @@ if ($DryRun) {
     exit 0
 }
 
+# Every check below is against the folder the MSI installs to; a staged RAH_INSTALL_DIR
+# would point them at a different folder while msiexec writes the real one.
+if ($env:RAH_INSTALL_DIR) { throw 'RAH_INSTALL_DIR is set: unset it before running the install cycle' }
 if (-not $UninstallOnly) {
     if (-not (Test-Path $MsiPath)) { throw "MSI not found: $MsiPath" }
     $MsiPath = (Resolve-Path $MsiPath).Path
@@ -104,18 +107,25 @@ function Get-Snapshot {
 function Invoke-AdminRunner {
     # Runs a PowerShell script block with administrator rights and returns the exit code
     # it recorded. The block receives no arguments; bake values in with string formatting.
+    # The work folder goes on every path, a timeout included. A runner that recorded no
+    # number is an error: its own exit code only says the runner ran.
     param([Parameter(Mandatory)][string]$Body, [int]$TimeoutSec = 600)
     $dir = New-WorkDir
-    $rcFile = Join-Path $dir 'rc.txt'
-    $runner = Join-Path $dir 'runner.ps1'
-    $script = $Body.Replace('__RC__', $rcFile)
-    Set-Content -Path $runner -Value $script -Encoding UTF8
-    $p = Start-Process pwsh -Verb RunAs -WindowStyle Hidden -PassThru `
-        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runner
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) { try { $p.Kill() } catch { }; throw "administrator runner timed out after $TimeoutSec s" }
-    $rc = if (Test-Path $rcFile) { [int](Get-Content -Raw $rcFile).Trim() } else { $p.ExitCode }
-    try { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue } catch { }
-    $rc
+    try {
+        $rcFile = Join-Path $dir 'rc.txt'
+        $runner = Join-Path $dir 'runner.ps1'
+        $script = $Body.Replace('__RC__', $rcFile)
+        Set-Content -Path $runner -Value $script -Encoding UTF8
+        # Quoted: Start-Process joins -ArgumentList with plain spaces, and %TEMP% can hold one.
+        $p = Start-Process pwsh -Verb RunAs -WindowStyle Hidden -PassThru `
+            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $runner + '"')
+        if (-not $p.WaitForExit($TimeoutSec * 1000)) { try { $p.Kill() } catch { }; throw "administrator runner timed out after $TimeoutSec s" }
+        $rcText = if (Test-Path $rcFile) { [IO.File]::ReadAllText($rcFile).Trim() } else { '' }
+        if ($rcText -notmatch '^-?\d+$') { throw "administrator runner recorded no exit code (runner exit $($p.ExitCode))" }
+        [int]$rcText
+    } finally {
+        try { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue } catch { }
+    }
 }
 
 function Invoke-Msiexec {
@@ -282,8 +292,17 @@ if ($StartTray) {
         $title = @(Get-Process RunAsHelper -ErrorAction SilentlyContinue | ForEach-Object { $_.MainWindowTitle } | Where-Object { $_ })[0]
         Assert-Match ('RunAS Helper - v' + [regex]::Escape($ExpectedVersion)) $title 'tray title'
     }
-    Invoke-Case -Id 'T2' -Name 'HKCU Run entry still names the installed exe after the tray start' -Test {
-        Assert-Equal ([string]$before.HkcuRun) ([string](Get-Snapshot).HkcuRun) 'HKCU Run value'
+    Invoke-Case -Id 'T2' -Name 'HKCU Run entry names the installed exe after the tray start' -Test {
+        # The tray writes the Run value on load when Start with Windows is on (the default,
+        # and what a settings.json without StartWithWindows means) and deletes it when it is
+        # off. Comparing with the value from before the cycle failed on a profile where no
+        # tray had run yet, or where the value named another copy of the exe.
+        $s = if (Test-Path $settingsPath) { Get-Content -Raw $settingsPath | ConvertFrom-Json } else { $null }
+        $startWithWindows = -not ($s -and ($s.PSObject.Properties.Name -contains 'StartWithWindows') -and -not $s.StartWithWindows)
+        $want = if ($startWithWindows) { '"' + $exe + '" --tray' } else { '<absent>' }
+        $got = [string](Get-Snapshot).HkcuRun
+        if (-not $got) { $got = '<absent>' }
+        Assert-Equal $want $got "HKCU Run value after the tray start (StartWithWindows $startWithWindows)"
     }
 }
 

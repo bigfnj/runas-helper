@@ -137,7 +137,7 @@ The five skips: A10, A12, A14 (covered by Invoke-MsiContent and the install cycl
 
 | Case | First run | Cause | Fix |
 |---|---|---|---|
-| R5, R13 | `harness error: You cannot call a method on a null-valued expression` | the elevated runner's `&` does not wait for a GUI exe and records no exit code, so rc.txt was empty | elevated calls use RunAsHelper.com; the runner falls back to its own exit code |
+| R5, R13 | `harness error: You cannot call a method on a null-valued expression` | the elevated runner's `&` does not wait for a GUI exe and records no exit code, so rc.txt was empty | elevated calls use RunAsHelper.com. (This row first said the runner also falls back to its own exit code. It never did: see BL-45 in the hand-off section.) |
 | R7 | (would have failed) | the design used `/listtrustedcallers` as a CLI switch, which never existed | rewritten on `/trusted`, tagged changed-in-2.3.0 |
 
 `Invoke-AuditProbes.ps1 -SoakLaunches 30`: 5 pass. Handles 440 -> 463 (+23) -> 427 (-36)
@@ -313,3 +313,69 @@ Service hardening on the released 2.3.1: 6 pass / 0 fail. H1 and H2 process hand
 and 0 after (total handles 408, 400, 398 across the two, information only); H3 returned in
 3.4 s; H4 dropped the silent connection at 30.0 s; H5 three CRLF-terminated redraw lines and
 no embedded CR; H6 five pieces totalling 5,242,880 bytes, the longest 1,048,576.
+
+## Hand-off (2026-09-30)
+
+BL-45, `Invoke-Elevated` in tests/lib/Elevated.ps1. Nine `rah-tests-*` work folders were
+left in %TEMP% after the release verify. The helper read rc.txt with
+`[string](Get-Content -Raw ...)`, which is `$null` for an empty file in pwsh 7 (checked
+directly), so `.Trim()` threw before the folder was removed; the timeout path also threw
+before its cleanup. rc.txt is empty whenever the target records no exit code: a
+GUI-subsystem target such as the installed exe, or a target that never started (the
+release-verify2 suites ran with nothing installed). The comment above the code promised a
+fallback to the runner's own exit code. That line could never run, and if it had, it would
+have returned the runner's 0 for a target that was never measured. The helper now removes
+its folder on every path and throws "recorded no exit code" instead of returning a number.
+
+Proof (session scratchpad `p7\elevated-proof.ps1`): E1, a console target running `exit 7`,
+returns 7; E2, the installed exe, and E3, a missing path, both throw the named error and
+report runner exit 0; no case leaves a folder. The same proof against the HEAD copy of the
+helper: E1 PASS, E2 and E3 FAIL on "work folders left behind" with the old error "You cannot
+call a method on a null-valued expression".
+
+BL-46, the release prune. `.github/scripts/Remove-OldReleases.ps1` (session scratchpad
+`p7\prune-proof.ps1`, never with `-Apply`): P1 a dry run on the real repo lists v2.1.5 and
+v2.1.4 and deletes nothing; P2 `-Keep 10` prints "nothing to delete"; P3 a release whose tag
+is not on the remote is skipped. 3 pass. Mutant M1 without the tag guard fails P3; mutant M2
+without the dry-run guard (its delete command replaced by a print, and refused if it still
+held one) fails P1. Each mutant: 2 pass / 1 fail. Every release tag is on the remote.
+
+### Harness sweep
+
+Dispositions are BACKLOG HS-01 to HS-32. Proofs (session scratchpad `p7\sweep-proofs.ps1`,
+the function under test taken verbatim from each tree), run against the fixed harness and
+against a worktree at d2610ad:
+
+| Proof | Fixed harness | d2610ad |
+|---|---|---|
+| S-K2 Invoke-Elevated, TEMP holding a space | exit 7 | exit 64 |
+| S-C13a Invoke-AdminRunner timeout | throws, no folder left | throws, rah-tests-68c642fb left |
+| S-C13b runner that recorded no exit code | throws "recorded no exit code (runner exit 0)" | returned 0 |
+| S-C5 Get-ActiveJobIds on a refused /jobs | throws "did not answer (exit 1)" | no ids, no error |
+| S-C6 service identity | stable across reads; 49632 to 54004 across a restart | SKIP (no pin) |
+| S-C12 help latency, missing launcher | throws "failed (exit -1)" | "median 6 ms" |
+| S-K3 default folder, ProgramW6432 = D:\Program Files | `D:\Program Files\RunAsHelper` | `C:\Program Files\RunAsHelper` |
+| S-K4 silent private pipe server, 3 s deadline | back after 3.0 s, 0 frames | SKIP (no -PipeName) |
+| S-C2C3 release verify, a repo gh cannot find | V1 and V2 fail as assertions | V1 and V2 "harness error: The property ... cannot be found" |
+| S-K1 smoke from a clone path with a space | A1 PASS and the RESULT line | exit 64, no output |
+| S-K5 B8, TEMP with a space, an apostrophe, u-umlaut | PASS | FAIL at the pwsh row |
+| S-K6 A13, wrong then real -ExpectedThumbprint | FAIL, then PASS | SKIP (no parameter) |
+| S-W1 old marker form, child prints nothing | PASS on the echo alone (the weakness) | same |
+| S-W2 child-computed marker | expanded in the child line, literal in the echo | same |
+
+Fixed harness 14 pass / 0 fail; d2610ad 2 pass / 9 fail / 3 skip, the nine failures being
+exactly the nine mutation proofs. The first fixed run failed S-K5 on the fix itself: the cmd row
+called its wrapper by bare name, and agent shells set `NoDefaultCurrentDirectoryInExePath=1`,
+which stops cmd searching its working directory. `.\via-cmd.cmd` passed in four folder
+shapes (plain, space, apostrophe, u-umlaut), then S-K5 passed.
+
+T2 on the real box (`p7\t2-proof.ps1`): uninstall, remove the HKCU Run value, install from
+the bare profile. The d2610ad harness: 11 pass / 1 fail, T2 "HKCU Run value expected [] got
+["C:\Program Files\RunAsHelper\RunAsHelper.exe" --tray]". After a second uninstall the fixed
+harness: 12 pass / 0 fail. Both uninstalls ran through the rewritten Invoke-AdminRunner (5
+pass each), and the Run value ended as it started.
+
+Final rerun on the fixed harness against that fresh 2.3.1 install: smoke 25 pass / 0 fail / 5
+skip (30 cases with B16; A6 skips because T1 left a tray open), regression 15 / 0 / 1,
+hardening 6 / 0 / 0, self-test 16 mutations fired of 16 expected and 5 controls passed of 5
+(new: MUT14, MUT15, MUT16, CTRL4, CTRL5). No `rah-*` entry left in %TEMP%.

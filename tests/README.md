@@ -16,18 +16,21 @@ Harness (pwsh 7; run from the repo root):
 ```
 pwsh -File tests\Invoke-Regression.ps1        # 2.2.0 behavior that must not change
 pwsh -File tests\Invoke-Smoke.ps1 -Baseline   # new-feature cases; must fail on 2.2.0
-pwsh -File tests\Invoke-Smoke.ps1 -Phase All -ExpectedVersion 2.3.0   # integration
-pwsh -File tests\Invoke-Mutations.ps1 [-BaselineMsi <2.2.0 msi>]   # harness self-test
+pwsh -File tests\Invoke-Smoke.ps1 -Phase All -ExpectedVersion X.Y.Z -Integration   # integration
+pwsh -File tests\Invoke-Mutations.ps1 [-BaselineMsi <2.2.0 msi>] [-Integration]   # harness self-test
 pwsh -File tests\Invoke-MsiContent.ps1 -MsiPath <msi> [-ExpectedVersion X.Y.Z]
 ```
 
-`Invoke-Mutations.ps1` needs a copy of the 2.2.0 release MSI for its two MSI cases
-(MUT4, CTRL2); without one they SKIP with a reason and the rest of the self-test still
-runs. Its reconciliation counts only assertion failures as fired mutations: a case that
-failed with `harness error:` is listed separately and fails the run.
+`Invoke-Mutations.ps1` needs a copy of the 2.2.0 release MSI for its three MSI cases
+(MUT4, CTRL2, CTRL4); without one they SKIP with a reason and the rest of the self-test
+still runs. Its reconciliation counts only assertion failures as fired mutations: a case
+that failed with `harness error:` is listed separately and fails the run.
 
-Every runner prints one line per case (`PASS`/`FAIL`/`SKIP <id> <name>`) and a final
-`RESULT: n pass / m fail / k skip`, and exits 1 on any fail or when only skips ran.
+Every runner except the self-test prints one line per case (`PASS`/`FAIL`/`SKIP <id>
+<name>`) and a final `RESULT [<title>]: n pass / m fail / k skip`, and exits 1 on any
+fail or when only skips ran. `Invoke-Mutations.ps1` prints a FAIL line for every mutation
+by design, exits 0 only when the fired set equals the expected set and every control
+passed, and ends with its own RESULT sentence.
 
 ## Elevation model
 
@@ -38,7 +41,11 @@ Every runner prints one line per case (`PASS`/`FAIL`/`SKIP <id> <name>`) and a f
 - Elevated cases use `Invoke-Elevated`, which starts a hidden elevated pwsh that writes
   its own `out.txt`/`rc.txt` (`-Verb RunAs` cannot combine with `-RedirectStandardOutput`).
   On this box UAC auto-consents, so elevation is silent. Elevated cases are tagged
-  `needs-elevated` and skipped unless `-AllowElevated`.
+  `needs-elevated` and skipped unless `-AllowElevated` (smoke: or `-Integration`).
+  `Invoke-Elevated` returns only an exit code the target recorded. A GUI-subsystem target
+  such as `RunAsHelper.exe` records none, so the helper throws "recorded no exit code"
+  rather than substitute a number, and elevated cases call `RunAsHelper.com` (on 2.2.0,
+  which has no `.com`, they skip).
 - `/jobs`, `/kill`, `/joblog` and `/trusted` require the installed `RunAsHelper.exe`
   running elevated; from a Medium shell they return exit 1. (The `setcli` pipe verb has
   the same gate, but only the tray sends it; there is no CLI switch for it.)
@@ -49,9 +56,11 @@ Every runner prints one line per case (`PASS`/`FAIL`/`SKIP <id> <name>`) and a f
 ## Where the installed build is
 
 `lib/Env.ps1` resolves the install folder from `RAH_INSTALL_DIR` in the environment,
-then the `InstallFolder` value the MSI writes under `HKLM\SOFTWARE\RunAsHelper`, then
-`C:\Program Files\RunAsHelper`. Set `RAH_INSTALL_DIR` to a scratch folder holding a
-freshly built `RunAsHelper.exe` next to a copy of the installed `RunAsHelper.com` to smoke
+then the `InstallFolder` value the MSI writes under `HKLM\SOFTWARE\RunAsHelper` (2.2.0
+wrote none), then the MSI's default folder, `[ProgramFiles6432Folder]RunAsHelper`, read
+from `%ProgramW6432%`. The install cycle refuses to run with `RAH_INSTALL_DIR` set.
+Set `RAH_INSTALL_DIR` to a scratch folder holding a freshly built `RunAsHelper.exe`
+next to a copy of the installed `RunAsHelper.com` to smoke
 a client change against the installed service without installing anything (the launcher
 looks for the exe in its own folder).
 
@@ -66,13 +75,20 @@ rebuild PATH from the registry. In real use, open a new terminal after installin
 
 The service echoes the command line back in its `Args detected` line, so a literal
 marker in the command matches that echo, not the child. Assert only on values the
-CHILD computes: `%COMPUTERNAME%` expansion, `PSV=n`, SIDs from `whoami /all`. Under
-ConPTY a run whose witness (`cmd /c echo CONPTY-OK`) does not render is a harness
-failure (`WITNESS-MISSING`), never a `PASS` or `FAIL`. Any script that uses ConPTY
-must run with a real console: when its own stdout is redirected it re-launches itself
-through `Start-Process pwsh -WindowStyle Hidden -Wait` and prints a results file
-(see the relaunch guard in `Invoke-Smoke.ps1`). A run recording
-`harness-stdout-is-console = False` is discarded.
+CHILD computes: a marker passed as `WITNESS-%COMPUTERNAME%` for the child's cmd to
+expand (R3, R14; the echo keeps the literal, and self-test MUT15 stops firing if that
+ever changes), `PSV=n`, SIDs from `whoami /all`, or a line matched with `^...$` anchors,
+which the echo line cannot satisfy (H3, R12). A case that only claims the launch was
+authorized (R7, B4) may use a literal marker: the echo appears only for an authorized
+launch.
+
+Under ConPTY every case first renders a witness: cmd echoing `CONPTY-OK` to stdout and
+`CONPTY-ERR` to stderr. A missing witness throws `WITNESS-MISSING`, which is recorded as
+`FAIL ... harness error` and counted as a fail. Any script that uses ConPTY needs a real
+console on both streams: when its stdout or stderr is redirected it re-launches itself
+through `Start-Process pwsh -WindowStyle Hidden -PassThru`, waits with `$p.WaitForExit()`
+(not `-Wait`, which also waits for the tray that A6 starts) and prints the results file
+(see the relaunch guard in `Invoke-Smoke.ps1`).
 
 ## Linked-source purity rule (for slice A/B files)
 
@@ -88,15 +104,18 @@ build in CI, which is the alarm we want. Keep `PowerShellHost.cs`, `CliLaunchRes
 - Standard-user and explicitly denied-user rows: no second account; creating one is a
   machine change. The SID-removed window (a `/trusted:remove` then re-add) proves the
   same authorization predicate for this user instead.
-- Remote pipe access: single machine. The deny-NETWORK ACE is checked locally with
-  `accesschk -nobanner \pipe\RunAsHelper`.
+- Remote pipe access: single machine. Smoke B16 reads the live pipe's DACL and checks
+  that NETWORK is denied first and that no principal beyond the designed ones is allowed.
 - Restricted tokens, the 128-entry trusted-list limit, a domain user, PID-reuse churn.
-- A machine without pwsh: pwsh is installed; simulated only via an environment override.
+- A machine without pwsh: pwsh is installed. The unit test
+  `Resolve_FallsBackTo51_WhenPwshMissing` covers the fallback (the resolver is given no
+  pwsh); no harness case simulates it.
 - UAC-prompting machines and AppCompat disabled by policy: this box auto-consents.
 - Windows Terminal: not installed; conhost is the only terminal backstop.
 - Tray saved-entry `.ps1` host rule, the `/validate` dialog, dark mode: GUI, covered by
   the manual screenshot pass in the audit; the shared host logic is covered by the
-  PowerShellHostTests unit tests and by harness cases U4 (install cycle) and B8 (smoke).
+  PowerShellHostTests unit tests and by smoke B8 (the rewrite is shared with the CLI
+  path, PipeClient.SendAsync).
   The GUI placeholders B9 and R16 always record SKIP (their body is `Skip-Case`), never a
   vacuous PASS.
 
@@ -113,11 +132,13 @@ pwsh -File tests\Invoke-AuditProbes.ps1
 pwsh -File tests\Invoke-ReleaseVerify.ps1 -Tag vX.Y.Z      # after the release workflow is green
 ```
 
-`-Integration` (smoke) and `-NewBuild` (regression) enable the cases tagged
-`integration-only` and `needs-elevated`, including the ones that edit the trusted-caller
-policy, stop and start the service, and start the tray through the launcher. `-Only A1,B8`
-runs a subset. The install cycle, the audit probes and the release verify change machine
-state (the installed product, the service, the machine PATH); `-DryRun` prints their steps.
+`-Integration` (smoke) enables the cases tagged `integration-only` and `needs-elevated`,
+including the ones that edit the trusted-caller policy, stop and start the service, and
+start the tray through the launcher. `-NewBuild` (regression) enables `integration-only`
+and `changed-in-2.3.0`; its `needs-elevated` cases still need `-AllowElevated`, as in the
+command above. `-Only A1,B8` runs a subset. The install cycle, the audit probes and the
+release verify change machine state (the installed product, the service, the machine
+PATH); `-DryRun` prints their steps.
 `Invoke-InstallCycle.ps1 -UninstallOnly` removes the installed product (snapshot, stop the
 tray, `msiexec /x`, verify the removal) and stops, for taking a dev build off the box
 before installing a release of the same version.

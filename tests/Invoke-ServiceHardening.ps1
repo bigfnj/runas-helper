@@ -79,8 +79,21 @@ function Start-CaptureAndDropClient {
 }
 
 function Get-ActiveJobIds {
+    # A refused or unanswered listing must not read as "no jobs": every real listing prints
+    # the "Slots in use:" header, while a refusal is exit 1 and one line on stderr.
     $r = Invoke-Elevated -FilePath $com -ArgumentList @('/jobs')
+    if ($r.ExitCode -ne 0 -or $r.Text -notmatch 'Slots in use:') { throw "/jobs did not answer (exit $($r.ExitCode)): $($r.Text)" }
     @($r.Output | Where-Object { $_ -match '^\s*(\d+)\s+\d+:\d\d' } | ForEach-Object { [int]$Matches[1] })
+}
+
+function Get-ServiceIdentity {
+    # PID and creation time of the one service process, read through CIM: from a
+    # non-elevated shell Get-Process returns a null StartTime, so a pin on that could never
+    # fail. A service that crashed and was restarted by the SCM mid-case starts with an empty
+    # job table and no handles, which would pass H1 and H2 on a fresh process.
+    $c = @(Get-CimInstance Win32_Process -Filter "Name='RunAsHelper.Service.exe'")
+    if ($c.Count -ne 1) { throw "expected one RunAsHelper.Service process, found $($c.Count)" }
+    '{0}@{1:o}' -f $c[0].ProcessId, $c[0].CreationDate
 }
 
 function Assert-NoProcessHandleLeak {
@@ -94,6 +107,7 @@ $W = New-WorkDir
 try {
     Invoke-Case -Id 'H1' -Name 'client dropped mid-stream: no job left, slot released, no process-handle leak (L3-14, L3-01)' -Tags @('needs-elevated') -Test {
         Wait-Until -TimeoutSec 60 -Condition { @(Get-ServiceChildren).Count -eq 0 } | Out-Null
+        $svc0 = Get-ServiceIdentity
         $t0 = Get-ServiceHandleCount
         $p0 = Get-ServiceProcessHandleCount
         $ended = 0
@@ -106,11 +120,13 @@ try {
         Assert-True $none 'no job is still listed 15 s after the clients dropped (2.3.0 keeps them until /kill)'
         Wait-Until -TimeoutSec 60 -Condition { @(Get-ServiceChildren).Count -eq 0 } | Out-Null
         Start-Sleep -Seconds 3
+        Assert-Equal $svc0 (Get-ServiceIdentity) 'service process unchanged across the case (a restart would reset what it measures)'
         Assert-NoProcessHandleLeak -Before $p0 -After (Get-ServiceProcessHandleCount) -TotalBefore $t0 -TotalAfter (Get-ServiceHandleCount) -Runs 5 -Label 'dropped clients'
     }
 
     Invoke-Case -Id 'H2' -Name 'timeout fires with the client gone: no process-handle leak (L3-02)' -Tags @('needs-elevated') -Test {
         Wait-Until -TimeoutSec 60 -Condition { @(Get-ServiceChildren).Count -eq 0 } | Out-Null
+        $svc0 = Get-ServiceIdentity
         $t0 = Get-ServiceHandleCount
         $p0 = Get-ServiceProcessHandleCount
         foreach ($i in 1..5) {
@@ -119,6 +135,7 @@ try {
         }
         Wait-Until -TimeoutSec 60 -Condition { @(Get-ServiceChildren).Count -eq 0 } | Out-Null
         Start-Sleep -Seconds 3
+        Assert-Equal $svc0 (Get-ServiceIdentity) 'service process unchanged across the case (a restart would reset what it measures)'
         Assert-NoProcessHandleLeak -Before $p0 -After (Get-ServiceProcessHandleCount) -TotalBefore $t0 -TotalAfter (Get-ServiceHandleCount) -Runs 5 -Label 'timeouts with the client gone'
     }
 
@@ -127,7 +144,8 @@ try {
         $r = Invoke-Console -FilePath $com -TimeoutSec 40 -Env $comp -ArgumentList @('/capture', '/timeout:20', '/as:system', 'cmd', '/c', 'start /b ping -n 20 127.0.0.1 >nul & echo parent-done')
         $sw.Stop()
         Write-Host ("  returned after {0:n1} s, exit {1}" -f $sw.Elapsed.TotalSeconds, $r.ExitCode)
-        Assert-Match 'parent-done' $r.Stdout 'the parent output arrived'
+        # Anchored: the service's "Args detected" line echoes the command, parent-done included.
+        Assert-Match '(?m)^parent-done\r?$' $r.Stdout 'the parent output arrived'
         Assert-True ($sw.Elapsed.TotalSeconds -lt 8) 'returned within 8 s (3 s drain grace plus slack; 2.3.0 waits for the 20 s ping)'
         Assert-ExitCode 0 $r.ExitCode
         Assert-Match 'still held open' $r.Stdout 'the detach note is printed'
@@ -177,7 +195,10 @@ try {
     }
 } finally {
     if ($AllowElevated) {
-        foreach ($id in @(Get-ActiveJobIds)) { Invoke-Elevated -FilePath $com -ArgumentList @("/kill:$id") | Out-Null }
+        # Reported, not thrown: a failed listing must not skip the folder removal or the
+        # RESULT line.
+        try { foreach ($id in @(Get-ActiveJobIds)) { Invoke-Elevated -FilePath $com -ArgumentList @("/kill:$id") | Out-Null } }
+        catch { Write-Host "  cleanup: could not list or end leftover jobs: $($_.Exception.Message)" }
     }
     Remove-Item -Recurse -Force $W -ErrorAction SilentlyContinue
 }

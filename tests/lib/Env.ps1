@@ -6,7 +6,8 @@ Set-StrictMode -Version Latest
 # Where the product is installed. Precedence: RAH_INSTALL_DIR in the environment (a
 # staged folder holding a built RunAsHelper.exe next to a copy of RunAsHelper.com, for a
 # dev smoke against the installed service), then the InstallFolder value the MSI writes
-# (HKLM\SOFTWARE\RunAsHelper, Package.wxs), then the default folder.
+# (HKLM\SOFTWARE\RunAsHelper, Package.wxs; 2.2.0 wrote none), then the MSI's default
+# folder, [ProgramFiles6432Folder]RunAsHelper, which is not always C:\Program Files.
 $script:InstallDir = $null
 
 function Get-InstallDir {
@@ -19,7 +20,7 @@ function Get-InstallDir {
         $fromReg = if ($props -and ($props.PSObject.Properties.Name -contains 'InstallFolder')) { $props.InstallFolder } else { $null }
         $script:InstallDir = if ($fromEnv) { $fromEnv.TrimEnd('\') }
                              elseif ($fromReg) { ([string]$fromReg).TrimEnd('\') }
-                             else { 'C:\Program Files\RunAsHelper' }
+                             else { Join-Path ($env:ProgramW6432 ?? $env:ProgramFiles) 'RunAsHelper' }
     }
     $script:InstallDir
 }

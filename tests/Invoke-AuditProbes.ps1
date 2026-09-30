@@ -3,8 +3,8 @@
 .SYNOPSIS
   Audit measurements against the installed build: service handle-count soak, launch-slot
   saturation, --help latency through the launcher and the exe, event-count consistency,
-  and a leftover-process scan. Each probe prints a number; the soak and saturation
-  probes also carry a pass/fail threshold so a regression fails the run.
+  and a leftover-process scan. Each probe prints its numbers and asserts a threshold, so
+  a regression fails the run.
 .DESCRIPTION
   Drives many launches, so run it from the integration owner's serial cycle against the
   installed 2.3.0 build (this account must be a trusted command-line caller). -DryRun
@@ -32,9 +32,9 @@ $client = if (Test-Path $com) { $com } else { $exe }
 
 $plan = @(
     "Handle soak: service HandleCount before/after $SoakLaunches captures + $SoakLaunches fire-and-forget launches + 30 denied /jobs calls, two rounds; growth that repeats in round two is a leak",
-    "Slot saturation: 10 concurrent captures hold every slot; an 11th request is told the service is busy and exits 1 within 40 s",
-    "--help latency: median over $Runs runs through the .com and through the exe (RunAsInvoker, piped)",
-    "Event consistency: the 1001 count for the soak equals the launches driven; 1003 count equals the denials; no 1099",
+    "Slot saturation: 10 concurrent captures hold every slot; an 11th request is told the service is busy and exits 1 after 25-45 s",
+    "--help latency: median over $Runs runs through the .com and through the exe (RunAsInvoker, piped); every run must print the help; launcher overhead under 150 ms",
+    "Event consistency: five fresh captures write five 1001 and five 1002 events; no 1099 since the probes started",
     "Leftover scan: no service child processes remain once the soak has finished"
 )
 
@@ -43,6 +43,9 @@ function Measure-HelpLatency {
     $times = @()
     for ($i = 0; $i -lt $Runs; $i++) {
         $r = Invoke-Console -FilePath $Path -ArgumentList @('--help') -TimeoutSec 30 -Env $Env
+        # A launcher that fails fast, misroutes --help or is missing would otherwise post a
+        # short time and pass the overhead check on nothing. COMMAND LINE is a help heading.
+        if ($r.ExitCode -ne 0 -or $r.Stdout -notmatch 'COMMAND LINE') { throw "--help via $Path failed (exit $($r.ExitCode))" }
         $times += $r.DurationMs
     }
     $sorted = @($times | Sort-Object)

@@ -2,8 +2,10 @@
 <#
 .SYNOPSIS
   The 2.2.0 behavior suite: what must not change in v2.3.0. Every case not tagged
-  [changed-in-2.3.0] must PASS against the installed 2.2.0 build, and everything must
-  pass against the installed 2.3.0 build with -NewBuild.
+  [changed-in-2.3.0] must PASS against the installed 2.2.0 build, except R5 and R13: they
+  make elevated calls through the 2.3.0 console launcher (Invoke-Elevated cannot read a
+  GUI exe's exit code) and SKIP where there is none. Everything must pass against the
+  installed 2.3.0 build with -NewBuild.
 .DESCRIPTION
   Read-only cases run by default. Cases that write persistent machine state (R4 writes
   an HKLM scratch key, removed afterwards) need -AllowMachineWrites; cases that need the
@@ -62,8 +64,10 @@ try {
     }
 
     Invoke-Case -Id 'R3' -Name 'capture echo witness as system, warns without timeout' -Test {
+        # The child's cmd expands the marker, not the harness: the service's "Args detected"
+        # echo keeps the literal %COMPUTERNAME%, so only child output can match (witness rule).
         $r = Invoke-Console -FilePath $exe -TimeoutSec 30 -Env $comp `
-            -ArgumentList @('/capture', '/as:system', 'cmd', '/c', "echo", "WITNESS-$cn")
+            -ArgumentList @('/capture', '/as:system', 'cmd', '/c', 'echo', 'WITNESS-%COMPUTERNAME%')
         Assert-ExitCode 0 $r.ExitCode
         Assert-Match "WITNESS-$cn" $r.Stdout 'child witness'
         Assert-Match '\[warning\] /capture used without /timeout' $r.Stdout 'no-timeout warning'
@@ -87,6 +91,7 @@ try {
     }
 
     Invoke-Case -Id 'R5' -Name 'elevated /jobs lists an in-flight capture' -Tags @('needs-elevated') -Test {
+        if (-not (Test-Path $com)) { Skip-Case -Reason "no RunAsHelper.com: Invoke-Elevated cannot read the GUI exe's exit code (2.2.0)" }
         $job = Start-Job -ScriptBlock {
             param($exe)
             $env:__COMPAT_LAYER = 'RunAsInvoker'
@@ -94,10 +99,7 @@ try {
         } -ArgumentList $exe
         try {
             Start-Sleep -Seconds 3
-            # Elevated calls go through the console launcher when it exists: the elevated
-            # runner cannot rely on waiting for a GUI exe or reading its exit code.
-            $client = if (Test-Path $com) { $com } else { $exe }
-            $r = Invoke-Elevated -FilePath $client -ArgumentList @('/jobs')
+            $r = Invoke-Elevated -FilePath $com -ArgumentList @('/jobs')
             Assert-ExitCode 0 $r.ExitCode
             Assert-Match 'Slots in use:' $r.Text 'jobs header'
             Assert-Match 'ping -n 12' $r.Text 'job command'
@@ -167,19 +169,28 @@ try {
             Start-Job -ScriptBlock {
                 param($exe)
                 $env:__COMPAT_LAYER = 'RunAsInvoker'
-                & $exe /capture /timeout:15 /as:system cmd /c "ping -n 6 127.0.0.1 >nul" | Out-Null
+                # Piped on, not left last in the pipeline: PowerShell waits for a GUI exe and
+                # reads its stdout only when its output goes to another command.
+                & $exe /capture /timeout:15 /as:system cmd /c "ping -n 6 127.0.0.1 >nul & echo R12-DONE" | ForEach-Object { $_ }
             } -ArgumentList $exe
         }
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $jobs | Wait-Job -Timeout 30 | Out-Null
         $sw.Stop()
+        $out = @($jobs | Receive-Job -ErrorAction SilentlyContinue)
         $jobs | Remove-Job -Force -ErrorAction SilentlyContinue
+        # Each child line proves one full 6 s ping finished, so three inside 14 s prove the
+        # runs overlapped (serialized they take 15 s or more). Anchored, because the
+        # service's "Args detected" echo of the command also contains R12-DONE.
+        $done = @($out | Where-Object { "$_" -match '^R12-DONE\s*$' }).Count
+        Assert-Equal 3 $done 'captures whose child line arrived'
         Assert-InRange $sw.Elapsed.TotalSeconds 0 14 'wall clock for three parallel 6s pings'
     }
 
     Invoke-Case -Id 'R13' -Name 'elevated /kill ends a job and logs 1006' -Tags @('needs-elevated') -Test {
+        if (-not (Test-Path $com)) { Skip-Case -Reason "no RunAsHelper.com: Invoke-Elevated cannot read the GUI exe's exit code (2.2.0)" }
         $t = Get-Date
-        $client = if (Test-Path $com) { $com } else { $exe }
+        $client = $com
         $job = Start-Job -ScriptBlock {
             param($client)
             $env:__COMPAT_LAYER = 'RunAsInvoker'
@@ -208,8 +219,10 @@ try {
         if (-not (Test-Path $backup)) { Skip-Case -Reason "no 2.2.0 client backup at $backup" }
         $client = Join-Path $W 'old-client.exe'
         Copy-Item $backup $client -Force
+        # Child-computed marker, as in R3: the old client prints the service's log frames,
+        # echo included, so a harness-expanded marker would match with no child output at all.
         $r = Invoke-Console -FilePath $client -TimeoutSec 30 -Env $comp `
-            -ArgumentList @('/capture', '/timeout:20', '/as:system', 'cmd', '/c', "echo", "WITNESS-$cn")
+            -ArgumentList @('/capture', '/timeout:20', '/as:system', 'cmd', '/c', 'echo', 'WITNESS-%COMPUTERNAME%')
         Assert-ExitCode 0 $r.ExitCode
         Assert-Match "WITNESS-$cn" $r.Stdout 'old client witness'
         $j = Invoke-Console -FilePath $client -ArgumentList @('/jobs') -TimeoutSec 20 -Env $comp

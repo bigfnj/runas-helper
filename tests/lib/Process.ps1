@@ -16,10 +16,12 @@ function Invoke-Console {
         [Parameter(Mandatory)][string]$FilePath,
         [string[]]$ArgumentList = @(),
         [int]$TimeoutSec = 60,
-        [hashtable]$Env
+        [hashtable]$Env,
+        [string]$WorkingDirectory
     )
     $psi = [Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $FilePath
+    if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
     foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true

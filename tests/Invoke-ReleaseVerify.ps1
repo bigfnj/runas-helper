@@ -35,7 +35,7 @@ $steps = @(
     "Invoke-MsiContent.ps1 -ExpectedVersion $ver on the downloaded MSI",
     "Administrative image (msiexec /a ... TARGETDIR=...): the three binaries inside are Valid and timestamped with the same thumbprint",
     "Invoke-InstallCycle.ps1 -MsiPath <downloaded> -ExpectedVersion $ver -StartTray (upgrade over the dev build)",
-    "Invoke-Smoke.ps1 -Phase All -ExpectedVersion $ver -Integration; Invoke-Regression.ps1 -NewBuild -AllowElevated -AllowMachineWrites -ExpectedVersion $ver"
+    "Invoke-Smoke.ps1 -Phase All -ExpectedVersion $ver -Integration -ExpectedThumbprint $ExpectedThumbprint; Invoke-Regression.ps1 -NewBuild -AllowElevated -AllowMachineWrites -ExpectedVersion $ver"
 )
 if ($DryRun) {
     Write-Host "DRY RUN Invoke-ReleaseVerify for $Tag (no download, no install):"
@@ -54,13 +54,16 @@ Write-Host "Release verify: $Repo $Tag (work dir $WorkDir)"
 Invoke-Case -Id 'V1' -Name "release.yml run for $Tag concluded success" -Test {
     $runs = @(gh run list --repo $Repo --workflow=release.yml --limit 5 --json databaseId,conclusion,headBranch,event | ConvertFrom-Json)
     $mine = @($runs | Where-Object { $_.headBranch -eq $Tag })
-    Assert-True ($mine.Count -ge 1) "a release.yml run for $Tag exists (recent runs: $($runs.headBranch -join ','))"
+    # A pipeline, not $runs.headBranch: member access on an empty array throws under
+    # StrictMode, which would report a missing run as a harness error.
+    Assert-True ($mine.Count -ge 1) "a release.yml run for $Tag exists (recent runs: $(@($runs | ForEach-Object { $_.headBranch }) -join ','))"
     Assert-Equal 'success' $mine[0].conclusion 'run conclusion'
     Write-Host "  run id $($mine[0].databaseId)"
 }
 
 Invoke-Case -Id 'V2' -Name "release $Tag has exactly one asset, $asset; downloaded" -Test {
     $rel = gh release view $Tag --repo $Repo --json assets,tagName | ConvertFrom-Json
+    Assert-True ($null -ne $rel) "gh release view $Tag returned no release (exit $LASTEXITCODE)"
     Assert-Equal $Tag $rel.tagName 'release tag'
     $names = @($rel.assets | ForEach-Object { $_.name })
     Assert-Equal 1 $names.Count "asset count (got: $($names -join ','))"
@@ -88,7 +91,7 @@ Invoke-Case -Id 'V5' -Name 'the three binaries inside the MSI are signed and tim
     $p = Start-Process msiexec.exe -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$adm`"", '/l*v', "`"$log`"") -Wait -PassThru -WindowStyle Hidden
     Assert-ExitCode 0 $p.ExitCode
     $files = @(Get-ChildItem $adm -Recurse -File | Where-Object { $_.Name -in 'RunAsHelper.com', 'RunAsHelper.exe', 'RunAsHelper.Service.exe' })
-    Assert-Equal 3 $files.Count "binaries found in the administrative image (got: $($files.Name -join ','))"
+    Assert-Equal 3 $files.Count "binaries found in the administrative image (got: $(@($files | ForEach-Object { $_.Name }) -join ','))"
     foreach ($f in $files) {
         $s = Get-AuthenticodeSignature $f.FullName
         Assert-Equal 'Valid' $s.Status.ToString() "$($f.Name) signature status"
@@ -104,7 +107,7 @@ if (-not $SkipInstall) {
         Assert-ExitCode 0 $LASTEXITCODE
     }
     Invoke-Case -Id 'V7' -Name 'smoke suite passes on the released build' -Test {
-        pwsh -NoProfile -File (Join-Path $here 'Invoke-Smoke.ps1') -Phase All -ExpectedVersion $ver -Integration | ForEach-Object { Write-Host "  $_" }
+        pwsh -NoProfile -File (Join-Path $here 'Invoke-Smoke.ps1') -Phase All -ExpectedVersion $ver -Integration -ExpectedThumbprint $ExpectedThumbprint | ForEach-Object { Write-Host "  $_" }
         Assert-ExitCode 0 $LASTEXITCODE
     }
     Invoke-Case -Id 'V8' -Name 'regression suite passes on the released build' -Test {
