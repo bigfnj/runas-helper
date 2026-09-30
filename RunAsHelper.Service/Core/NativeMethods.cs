@@ -66,8 +66,6 @@ internal static partial class NativeMethods
     // Attribute key for UpdateProcThreadAttribute: restrict handle inheritance to
     // an explicit list so only the pipe write-end reaches the child.
     internal const nuint  PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002;
-    // SetHandleInformation mask: controls whether a handle can be inherited.
-    internal const uint   HANDLE_FLAG_INHERIT    = 0x00000001;
     // WaitForSingleObject return values / timeout sentinel.
     internal const uint   WAIT_OBJECT_0          = 0x00000000;
     internal const uint   WAIT_TIMEOUT           = 0x00000102;
@@ -550,16 +548,6 @@ internal static partial class NativeMethods
 
     // ── Pipe / output capture ────────────────────────────────────────────
 
-    // Creates an anonymous pipe. The write end is passed to the child via
-    // STARTUPINFOEX; the read end stays in the service.
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static unsafe partial bool CreatePipe(
-        out IntPtr             hReadPipe,
-        out IntPtr             hWritePipe,
-        SECURITY_ATTRIBUTES*   lpPipeAttributes,
-        uint                   nSize);
-
     // Opens the client (write) end of the capture pipe. Anonymous pipes cannot be
     // opened for overlapped I/O, so capture uses a uniquely-named pipe instead; this
     // opens its write end as an *inheritable, synchronous* handle for the child.
@@ -593,15 +581,6 @@ internal static partial class NativeMethods
         uint                   dwFlagsAndAttributes,
         IntPtr                 hTemplateFile);
 
-    // Controls handle attributes; used to clear HANDLE_FLAG_INHERIT on the
-    // read end so only the write end reaches the child.
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool SetHandleInformation(
-        IntPtr hObject,
-        uint   dwMask,
-        uint   dwFlags);
-
     // Attribute list lifetime management for PROC_THREAD_ATTRIBUTE_HANDLE_LIST.
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -628,6 +607,18 @@ internal static partial class NativeMethods
     // Block the calling thread until the process signals or the timeout expires.
     [LibraryImport("kernel32.dll", SetLastError = true)]
     internal static partial uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+    // Exit code of a process WaitForSingleObject has already reported signalled, so it
+    // cannot still be STILL_ACTIVE (259). The handle needs PROCESS_QUERY_LIMITED_INFORMATION;
+    // the CreateProcessAsUser handle carries full access. Read this BEFORE CloseHandle.
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
+
+    // The console OEM code page (437 on a US box, 850/852/... elsewhere). Captured output
+    // that is not valid UTF-8 (cmd.exe, Windows PowerShell 5.1) is decoded with this.
+    [LibraryImport("kernel32.dll")]
+    internal static partial uint GetOEMCP();
 
     // CreateProcessAsUserW overload that accepts a STARTUPINFOEXW (used when
     // EXTENDED_STARTUPINFO_PRESENT is set in dwCreationFlags). Declared with a
