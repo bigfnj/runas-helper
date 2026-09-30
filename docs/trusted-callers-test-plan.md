@@ -152,3 +152,35 @@ from the installed elevated tray and confirm they succeed.
 - Build both Debug and Release, run the normal installation validation, and
   smoke-test the tray in light and dark themes at 100%, 150%, and 200% display
   scaling so the SID column, warning, and management buttons remain usable.
+
+## Automated coverage (tests/)
+
+The `tests/` harness automates the rows that this box can prove without a second
+account, a domain, or token crafting. Case IDs are from `tests/Invoke-Smoke.ps1` and
+`tests/Invoke-Regression.ps1`.
+
+| Matrix row / property | Automated case | Notes |
+|---|---|---|
+| Installed elevated tray: launch, jobs, edit trusted users all allowed | B10, B12, R5, R7 | Elevated installed exe gets the tray identity (`Source: tray`) |
+| Allowed user (this account's SID), gate closed: launch allowed | R3, R10, R11, R14 and every non-elevated capture case | The caller SID is a trusted command-line user (added Phase 0) |
+| Allowed user, gate closed: jobs/gate/policy denied | R6 (Medium /jobs -> exit 1), A4 | The same predicate as the "installed elevated exe required" check |
+| Non-elevated / non-allowlisted, gate closed: launch denied | B4 | Uses the `/trusted:remove` window as the "untrusted caller" fixture (integration) |
+| `/trusted` list / add / remove round-trip | B10 | Add resolves a name to the same SID; remove revokes; idempotent |
+| Event records keep `Source: cli` for a CLI launch, `Source: tray` for the elevated tray | B11, B12 | |
+| Old client compatible with the new service | R14 | Old 2.2.0 client copy: capture, witness and `/jobs` |
+| Pipe DACL carries an ACE for the trusted SID only while trusted | B10 (accesschk) | `accesschk -nobanner \\pipe\RunAsHelper` after add and after remove |
+| Remote NETWORK deny ACE | recorded | Single machine; the deny-NETWORK ACE is checked locally with `accesschk`, not from a second host |
+
+Rows not automatable on this box, recorded rather than run (see `tests/README.md` and
+BACKLOG NT-01..NT-06):
+
+- `AllowedUser` / `DeniedUser` as distinct accounts: no second account, and creating one
+  is a machine change. The SID-removed window (a `/trusted:remove` then re-add on this
+  account) proves the same authorization predicate.
+- Restricted-token launch, the 128-entry limit, a domain user made temporarily
+  unresolvable, and PID-reuse churn: need token crafting, 128 real users, or a domain.
+- Remote pipe connection from another machine.
+- `Interactive caller, gate open` as a distinct row: there is no headless gate verb, so
+  the broad-gate path is GUI-only to toggle (BL-26).
+- Policy UI, the confirmation warning, and light/dark theme at each scaling: GUI, covered
+  by the manual screenshot pass in the audit.

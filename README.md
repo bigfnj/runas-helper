@@ -129,6 +129,11 @@ The installer:
 
 - installs the **RunASHelper** Windows service (LocalSystem, auto-start),
 - installs the tray app and a Start Menu shortcut,
+- installs **`RunAsHelper.com`**, a console launcher next to `RunAsHelper.exe`, so a
+  shell waits for the call and gets its output and exit code (see
+  [RunAsHelper.com vs RunAsHelper.exe](#runashelpercom-vs-runashelperexe)),
+- adds the install folder to the **machine PATH**, so `RunAsHelper` works by bare name
+  in any new terminal (already-open shells keep their old PATH until restarted),
 - optionally launches the tray right after install (Finish-dialog checkbox).
 
 The tray runs **non-elevated** and registers its own per-user login auto-start
@@ -139,7 +144,8 @@ The tray runs **non-elevated** and registers its own per-user login auto-start
 
 Released builds are **Authenticode-signed** by a self-signed *Serenity Software*
 certificate, RFC3161-timestamped, and the release workflow fails rather than
-publishing if the MSI or either EXE comes back unsigned, wrongly signed or
+publishing if the MSI or any of the three binaries (`RunAsHelper.exe`,
+`RunAsHelper.com`, `RunAsHelper.Service.exe`) comes back unsigned, wrongly signed or
 untimestamped.
 
 Self-signed means **Windows will report an unknown publisher**, and there is
@@ -176,7 +182,8 @@ rather than quietly rewritten.
 msiexec /x RunAsHelper-Setup-<version>.msi /passive
 ```
 …or via *Settings → Apps → RunAS Helper*. This stops and removes the service and
-the shortcut. The trusted-caller policy is runtime machine configuration rather
+the shortcut, and removes the install folder from the machine PATH. The
+trusted-caller policy is runtime machine configuration rather
 than an MSI-owned value, so upgrades preserve it; the normal MSI uninstall also
 leaves it available for a later reinstall. For a complete scrub, run the
 repository's elevated `uninstall.py`, which deletes
@@ -273,12 +280,19 @@ stored separately in `HKLM\SOFTWARE\RunAsHelper\AllowedCallerSids`.
 ### Command line
 
 ```
-RunAsHelper.exe [/capture] [/timeout:N] [/p:N] [/as:ACCOUNT] <path> [args]
-RunAsHelper.exe /jobs                 :: list launches holding a slot
-RunAsHelper.exe /kill:<id>            :: terminate one of them
-RunAsHelper.exe /joblog:<id>          :: show what one of them has printed
-RunAsHelper.exe -h | --help | /?      :: show full help
+RunAsHelper [/capture] [/timeout:N] [/p:N] [/as:ACCOUNT] [/ps:5|7] <path> [args]
+RunAsHelper /jobs                 :: list launches holding a slot
+RunAsHelper /kill:<id>            :: terminate one of them
+RunAsHelper /joblog:<id>          :: show what one of them has printed
+RunAsHelper /trusted              :: list trusted command-line users
+RunAsHelper /trusted:add <SID|DOMAIN\user>
+RunAsHelper /trusted:remove <SID|name>
+RunAsHelper -h | --help | /?      :: show full help
 ```
+
+Use the bare `RunAsHelper` name: the installer puts the folder on PATH and
+`RunAsHelper.com` is the console launcher that a shell waits for. `RunAsHelper.exe` is
+the GUI binary and is silent from a shell (see below).
 
 | Flag          | Meaning                                                                        |
 |---------------|--------------------------------------------------------------------------------|
@@ -291,10 +305,14 @@ RunAsHelper.exe -h | --help | /?      :: show full help
 | `/as:ti`      | Run as TrustedInstaller (default)                                              |
 | `/as:system`  | Run as plain LocalSystem                                                       |
 | `/capture`    | Stream child stdout/stderr back through the pipe; CLI blocks until child exits |
-| `/timeout:N`  | Hard ceiling in seconds; on timeout the stream closes, child is left running   |
+| `/timeout:N`  | Hard ceiling in seconds; on timeout the capture exits **124** (the child follows normal job semantics, so check `/jobs`) |
+| `/ps:5`, `/ps:7` | For a `.ps1` target, pin the PowerShell host to 5.1 or 7 (see below)         |
 | `/jobs`       | List launches holding a slot (id, elapsed, account, source, PID, command)      |
 | `/kill:<id>`  | Terminate the process behind an in-flight job                                  |
 | `/joblog:<id>`| Show the output an in-flight capture job has produced so far                   |
+| `/trusted`    | List trusted command-line users (needs an elevated shell)                      |
+| `/trusted:add`| Add a user by SID or `DOMAIN\user` (needs an elevated shell)                    |
+| `/trusted:remove`| Remove a user by SID or name (needs an elevated shell)                       |
 
 Non-executable targets are launched via their host automatically (`.msc`→`mmc`,
 `.cpl`→`control`, `.bat`/`.cmd`→`cmd /c`, `.ps1`→`powershell`, `.reg`→`regedit /s`, and any
@@ -305,26 +323,69 @@ correctly too.
 
 ```bat
 :: Open a TrustedInstaller command prompt
-RunAsHelper.exe cmd.exe
+RunAsHelper cmd.exe
 
 :: Launch regedit at high priority
-RunAsHelper.exe /p:3 regedit.exe
+RunAsHelper /p:3 regedit.exe
 
 :: Run as plain SYSTEM
-RunAsHelper.exe /as:system cmd.exe
+RunAsHelper /as:system cmd.exe
 
 :: Run a PowerShell command as SYSTEM (see "Passing arguments" below)
-RunAsHelper.exe /as:system powershell.exe -NoProfile -Command "Restart-Service WSLService -Force"
+RunAsHelper /as:system powershell.exe -NoProfile -Command "Restart-Service WSLService -Force"
 
 :: Stream child output back to the caller (blocks until the script exits)
-RunAsHelper.exe /capture /as:system powershell.exe -NoProfile -Command "Get-Service Wuauserv"
+RunAsHelper /capture /as:system powershell.exe -NoProfile -Command "Get-Service Wuauserv"
 
-:: Capture with a 30-second timeout; child is left running if it doesn't finish
-RunAsHelper.exe /capture /timeout:30 /as:system powershell.exe -NoProfile -File C:\scripts\fix.ps1
+:: Capture with a 30-second timeout; the capture exits 124 if the child does not finish
+RunAsHelper /capture /timeout:30 /as:system powershell.exe -NoProfile -File C:\scripts\fix.ps1
 
 :: Quote paths that contain spaces
-RunAsHelper.exe "C:\Program Files\Some Tool\tool.exe" --flag
+RunAsHelper "C:\Program Files\Some Tool\tool.exe" --flag
 ```
+
+#### RunAsHelper.com vs RunAsHelper.exe
+
+`RunAsHelper.exe` is a GUI-subsystem binary. A shell never waits for it, so a bare
+`& RunAsHelper.exe /capture ...` returns immediately with no output and no exit code,
+even with `/capture`. `RunAsHelper.com`, installed next to it, is a console launcher:
+the shell waits for it, its output streams, and `$LASTEXITCODE` / `%ERRORLEVEL%` is set.
+`PATHEXT` lists `.COM` before `.EXE`, so a bare `RunAsHelper` from cmd or PowerShell
+resolves to the `.com`. You no longer need `| Out-String` to make a call wait.
+
+Two notes:
+
+- **Git Bash** does not use `PATHEXT`, so type `RunAsHelper.com` explicitly there; a bare
+  `RunAsHelper` finds the silent `.exe`.
+- **PATH is read when a shell starts.** After installing, open a new terminal so the bare
+  name resolves; an already-open shell keeps its old PATH.
+
+#### PowerShell host for a `.ps1` target
+
+When the target is a `.ps1`, the host is chosen by the first rule that matches:
+
+1. `/ps:5` or `/ps:7` on the command line (`5`, `desktop`, `powershell` mean 5.1; `7`,
+   `core`, `pwsh` mean 7).
+2. A `#Requires` line in the script: `-PSEdition Desktop` means 5.1; `-PSEdition Core` or
+   `-Version 6`+ means pwsh.
+3. The caller's shell: a call from `pwsh` runs the script under pwsh, a call from
+   Windows PowerShell (or `cmd`, Git Bash, the tray) runs it under 5.1.
+4. Windows PowerShell 5.1, the historical default.
+
+Because rule 3 exists, the same command picks a different host from pwsh than from cmd.
+When that matters, pin it: `/ps:5` forces 5.1, `/ps:7` forces pwsh. The client prints one
+line naming the host that ran and why, for example
+`PowerShell host: pwsh 7.6.5 (caller shell)`. If pwsh is wanted but not installed, 5.1
+runs and a warning line says so.
+
+#### Exit codes
+
+Without `/capture` the CLI exits 0 when the launch was accepted, 1 on a RunAsHelper
+failure (service unreachable, caller not trusted with the gate closed, launch denied, or
+no such job). With `/capture` the CLI blocks and exits with the **child's own exit code**,
+so a script that fails propagates its code to the caller. A `/timeout` expiry exits
+**124**. RunAsHelper's own failures still exit **1**, which a
+child can also return, so read the streamed log lines to tell them apart.
 
 #### Passing arguments
 
@@ -415,6 +476,31 @@ To stamp a specific version into the MSI **and** the EXE `FileVersion`/`Assembly
 dotnet build RunAsHelper.sln -c Release -p:ProductVersion=1.2.3
 ```
 
+### Tests
+
+Unit tests (xunit) cover the pure logic (pipe framing, the PowerShell host rule, exit-code
+mapping, launcher argument handling, help-text completeness):
+
+```
+dotnet test RunAsHelper.Tests\RunAsHelper.Tests.csproj -c Release
+```
+
+The test project compiles the code under test with linked `Compile Include`, the same way
+the apps link the protocol files, so those sources must depend only on the base class
+library. An end-to-end PowerShell 7 harness under [`tests/`](tests) drives the installed
+build:
+
+```
+pwsh -File tests\Invoke-Regression.ps1        # behavior that must not change
+pwsh -File tests\Invoke-Smoke.ps1 -Phase All -ExpectedVersion <ver>
+```
+
+The harness needs the installed service and, for non-elevated launches, this account's
+user SID in the trusted command-line users or the session gate open. Its elevation model,
+the witness rule, and what cannot be tested on a single box are documented in
+[`tests/README.md`](tests/README.md). `.github/workflows/ci.yml` runs the build, the unit
+tests and an MSI-content check on every push.
+
 ### Signing
 
 Signing is opt-in at the MSBuild level. The installer's sign targets fire only
@@ -423,8 +509,9 @@ when `-p:SigningCertThumbprint` and `-p:SignToolPath` are supplied, so a plain
 install path, not by signature.
 
 **Released builds are signed by CI.** The release workflow imports the signing key
-from repository secrets, signs both published EXEs before WiX packs them and the
-MSI after link, then verifies all three came back valid, correctly signed and
+from repository secrets, signs all three published binaries (`RunAsHelper.exe`,
+`RunAsHelper.com`, `RunAsHelper.Service.exe`) before WiX packs them and the
+MSI after link, then verifies every one came back valid, correctly signed and
 timestamped before publishing anything. A build with no signing secret available
 produces an unsigned installer and a warning rather than failing, so a fork still
 works.
@@ -436,8 +523,8 @@ To sign locally, use the scripts in [`signing/`](signing):
 # user store and, with -TrustMachine (elevated), trust it on this machine.
 .\signing\New-SigningCert.ps1 -TrustMachine
 
-# Build a signed release. Resolves signtool + the cert, signs both EXEs before
-# WiX packs them, then signs the MSI (RFC3161-timestamped when reachable).
+# Build a signed release. Resolves signtool + the cert, signs the three binaries
+# before WiX packs them, then signs the MSI (RFC3161-timestamped when reachable).
 .\signing\Build-Signed.ps1 -Version 1.6.3
 ```
 
@@ -480,9 +567,11 @@ title to make this unambiguous.
 | Project | Output | Role |
 |---|---|---|
 | `RunAsHelper` | `RunAsHelper.exe` | Tray GUI + CLI client (WinForms) |
+| `RunAsHelper.Launcher` | `RunAsHelper.com` | Console launcher a shell waits for; relays the exe's output and exit code |
 | `RunAsHelper.Service` | `RunAsHelper.Service.exe` | LocalSystem Windows service; performs the elevation |
-| `RunAsHelper.Shared` | library | Named-pipe wire protocol (framed JSON) |
-| `RunAsHelper.Installer` | `RunAsHelper-Setup.msi` | WiX 4 installer; publishes both apps framework-dependent single-file and embeds them |
+| `RunAsHelper.Shared` | linked source | Named-pipe wire protocol (framed JSON); compiled into the apps with `Compile Include`, no built assembly |
+| `RunAsHelper.Tests` | test assembly | xunit unit tests over the pure logic; not shipped |
+| `RunAsHelper.Installer` | `RunAsHelper-Setup.msi` | WiX 4 installer; publishes the three binaries framework-dependent single-file and embeds them |
 
 ## Releasing
 
@@ -499,6 +588,29 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
 Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
+
+## What's new in 2.3.0
+
+- **`RunAsHelper.com` console launcher.** A bare `RunAsHelper` from any shell now waits,
+  streams output, and sets `$LASTEXITCODE`. The GUI `RunAsHelper.exe` no longer needs
+  `| Out-String` to be usable from a script. The install folder is added to the machine
+  PATH, so the bare name resolves in a new terminal.
+- **Real exit codes.** With `/capture` the CLI exits with the child's own exit code; a
+  `/timeout` expiry exits 124; RunAsHelper's own failures exit 1. `/joblog` on a missing
+  job exits 1.
+- **PowerShell host rule for `.ps1` targets.** The host is chosen by `/ps:5|7`, then a
+  `#Requires` line, then the caller's shell, then Windows PowerShell 5.1, and one log line
+  names the host that ran and why.
+- **`/trusted`, `/trusted:add`, `/trusted:remove`.** Manage trusted command-line users
+  from an elevated shell without the tray.
+- **Service fixes.** Pipe writes are serialized to end a message-corruption race on
+  timeout; unknown verbs are rejected instead of run as a launch; an identity mismatch
+  writes Event 1003; captured output decodes the OEM code page correctly; the service exe
+  refuses to start from a shell.
+- **Tests and CI.** A new xunit project, an end-to-end PowerShell harness under `tests/`,
+  and a `ci.yml` workflow that builds, unit-tests and checks MSI content on every push.
+- **Docs.** `--help` and the README are rewritten around the bare `RunAsHelper` name, and
+  the project backlog moves to [BACKLOG.md](BACKLOG.md).
 
 ## What's new in 2.2.0
 
@@ -898,7 +1010,7 @@ the docs now describe what the tool actually does. Everything delivered along th
   so it is always obvious which build is running.
 - **Self-signed code signing (opt-in)** — a build pipeline that Authenticode-signs
   both EXEs and the MSI under the **Serenity Software** publisher, with the author
-  recorded in the binaries' file metadata. See *Signed build* under *Build from
+  recorded in the binaries' file metadata. See *Signing* under *Build from
   source*. Unsigned builds remain fully supported.
 
 ## What's new in 1.5.0
@@ -942,7 +1054,9 @@ certificate is self-signed, so pinning it would reject any build made without th
 key: a local `dotnet build`, a fork, or a CI run with no access to the secret. The service
 identifies the tray by install path for exactly that reason.
 
-There is no separate backlog file; this section is it. Three things are open:
+The full item list, each with a disposition and evidence, is in
+[BACKLOG.md](BACKLOG.md); its Open section is empty. The three long-standing items this
+section has tracked are:
 
 - **A publicly trusted certificate.** Releases are signed by a self-signed certificate, so
   Windows reports an unknown publisher and SmartScreen warns on first download. The intended
