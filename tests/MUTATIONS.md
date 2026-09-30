@@ -87,9 +87,79 @@ Proven on this box via the hidden-console relaunch the harness lesson prescribes
 `harness-stdout-is-console=True`, rendered `CONPTY-OK`, relayed exit 7. A run whose
 witness is missing is a harness failure, not a product result (see PROBE-RESULTS.md).
 
-## Phase 0 encoding finding (recorded, fix owned by slice B)
+## Phase 0 encoding finding (recorded, fixed by slice B)
 
-The service writes the em dash in its log lines as one byte 0x97 (Windows-1252) when
-stdout is a pipe, which shows as a replacement character in a UTF-8 reader. Observed
-this session in R3's captured output. Cheapest durable fix: ASCII-only service log
-prose (slice B). BACKLOG BL-27.
+The 2.2.0 service wrote the em dash in its log lines as one byte 0x97 (Windows-1252) when
+stdout was a pipe, which shows as a replacement character in a UTF-8 reader. Observed in
+R3's captured output on 2.2.0. Fixed by ASCII-only service log prose (BL-27); the
+integrated build's R3/B1 output is ASCII.
+
+## Integration on the installed 2.2.90 build (2026-09-29)
+
+Merged tree = slices A + B + C on `integrate/v2.3.0`, built with `-p:ProductVersion=2.2.90`.
+
+Unit tests: 86 pass (19 launcher, 49 client/service, 18 protocol/help), including the
+HelpTextTests that were red on the 2.2.0 text.
+
+`Invoke-MsiContent.ps1 -ExpectedVersion 2.2.90`: first run FAILED M7 (`expected [2.2.90]
+got [2.2.90.0]`), a harness bug: MSI stores four-part versions. Fixed by comparing as
+versions; rerun 7 pass / 0 fail. The 2.2.0 MSI still fails M1/M4/M5 (the CI step's mutation).
+
+`Invoke-InstallCycle.ps1 -Cycle -StartTray` (install over 2.2.0, uninstall, reinstall,
+tray start): 23 pass / 3 fail on the first run. All three were harness defects, found
+because the cycle ran for the first time here:
+
+| Case | First run | Cause | Fix and rerun |
+|---|---|---|---|
+| I5/R5 install folder on machine PATH | FAIL, snapshot said `pathEntries=1` | `Get-MachinePath -split ';'` passed `-split` to the function and returned the whole PATH as one entry | `(Get-MachinePath) -split ';'`; A11 PASS and MUT8 fires |
+| T1 tray title | FAIL `got []` | title read from a variable set inside the wait's script block (different scope) | re-read after the wait; the tray title was `RunAS Helper - v2.2.90` all along (screenshot) |
+
+Machine facts checked directly at the same time: machine PATH kind still `ExpandString`
+(REG_EXPAND_SZ), 43 entries, `C:\Program Files\RunAsHelper\` present; AllowedCallerSids
+kept through the uninstall; every msiexec run exited 0.
+
+`Invoke-Smoke.ps1 -Phase All -ExpectedVersion 2.2.90 -Integration`: 23 pass / 3 fail /
+5 skip on the first run, then 4 pass on the rerun of the fixed cases:
+
+| Case | First run | Cause | Fix |
+|---|---|---|---|
+| B8 cmd row | FAIL `got []` | `cmd /c` strips the first and last quote of a command line that starts with a quote, and ArgumentList escapes inner quotes with backslashes | the cmd row runs a `.cmd` wrapper written to the space-free work dir |
+| B11, B12 event Source | FAIL `got []` | `Get-WinEvent` leaves `Message` empty for the RunAsHelper source (no message file) | `Get-RunAsHelperEventText` reads the string properties |
+| (parent run never returned) | hang | `Start-Process -Wait` waits for descendants, and A6 starts the tray through the .com | `WaitForExit()` on the child process |
+
+The five skips: A10, A12, A14 (covered by Invoke-MsiContent and the install cycle), A13
+(unsigned dev build; runs on the released MSI), B9 (GUI). B7 passed in both its forms
+(the original 400,000-line stream and the steady 100 ms stream that shipped).
+
+`Invoke-Regression.ps1 -NewBuild -AllowElevated -AllowMachineWrites -ExpectedVersion 2.2.90`:
+13 pass / 2 fail / 1 skip, then 2 pass on the rerun:
+
+| Case | First run | Cause | Fix |
+|---|---|---|---|
+| R5, R13 | `harness error: You cannot call a method on a null-valued expression` | the elevated runner's `&` does not wait for a GUI exe and records no exit code, so rc.txt was empty | elevated calls use RunAsHelper.com; the runner falls back to its own exit code |
+| R7 | (would have failed) | the design used `/listtrustedcallers` as a CLI switch, which never existed | rewritten on `/trusted`, tagged changed-in-2.3.0 |
+
+`Invoke-AuditProbes.ps1 -SoakLaunches 30`: 5 pass. Handles 440 -> 463 (+23) -> 427 (-36)
+across two rounds of 60 launches + 30 denials each (no repeating growth); the 11th
+concurrent capture is told busy after 30.5 s; `--help` median 315 ms via the .com vs 205 ms
+via the exe (110 ms overhead, under the 150 ms threshold; Phase 0 measured 71 ms and slice
+A 40 ms on a quieter box); 1001 = 1002 = 5 for 5 launches; no leftover children.
+
+`Invoke-Mutations.ps1 -Integration`: 13 mutations fired exactly once, 3 controls passed.
+The seven integration mutations feed a wrong expectation to the operation an integration
+case performs:
+
+| Mutation | Observed |
+|---|---|
+| MUT7 wrong installed FileVersion (I4) | expected [9.9.9.0] got [2.2.90.0] |
+| MUT8 folder not on PATH (A11/I5) | machine PATH contains a folder that is not there |
+| MUT9 wrong tray title (R8/T1) | did not match /RunAS Helper - v9\.9\.9/; got [RunAS Helper - v2.2.90] |
+| MUT10 Medium launch expecting Source: tray (B11) | got `Source: cli  ClientPID: ...` |
+| MUT11 service host from a shell expecting exit 0 (A9) | exit code expected 0 got 1 |
+| MUT12 /capture exit 3 expecting 4 (B1) | exit code expected 4 got 3 |
+| MUT13 /timeout expecting 0 (B2) | exit code expected 0 got 124 |
+
+Real-app check: the installed tray, started through `RunAsHelper.com` with no arguments
+(A6), shows `RunAS Helper - v2.2.90` in dark theme with the service running (PrintWindow
+screenshot taken from an elevated helper, because a Medium process cannot render an
+elevated window).
