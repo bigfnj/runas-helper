@@ -616,10 +616,21 @@ unchanged and a 2.2.0 client still works against this service.
   and the launcher's Ctrl+C line promised otherwise); `/h` and `/validate` are listed.
 - **The tray no longer names a vendor.** The Activate button, its menu item and the
   not-elevated status text say "run elevated (UAC)".
-- **Capture pump: CR handling.** _(slice S; lead to confirm)_ A carriage return inside
-  captured output no longer splits or drops a line.
-- **Capture pump: lifetime.** _(slice S; lead to confirm)_ The pump and its handles are
-  released when the capture ends or times out, so a finished job holds nothing back.
+- **Captured lines end on CR, LF or CRLF again**, as in 2.2.0, so progress redraws that
+  use a bare carriage return arrive as separate lines and no line carries a trailing CR.
+  A single line longer than 1 MiB is delivered in 1 MiB pieces instead of dropping the
+  client (2.3.0 exited 1 with nothing printed once a line passed the 4 MiB frame cap).
+- **`/timeout` is a ceiling even when a process the child started keeps the output open.**
+  The service drains for 3 s after the child exits, then detaches and reports the child's
+  own exit code with a `[timeout]` note. 2.3.0 waited for the last writer to close.
+- **Closing the client mid-capture no longer strands the launch.** When the client's pipe
+  closes (Ctrl+C, a closed terminal), the service detaches its output pipe and releases
+  the launch slot at once; the elevated child keeps running, as after a `/timeout`. 2.3.0
+  kept the slot and, when the timeout then fired with no client, leaked a process handle
+  per run. A connection that sends no request within 30 s is dropped.
+- **Event 1003 for a client identity mismatch says what happened**: the pipe and process
+  token SIDs differed, the caller's SID was treated as unknown and the request continued
+  on the installed-tray identity or the open gate only. It used to say "Launch denied".
 - **One more ASCII log line.** The last service log frame with an em dash (`/kill` on a
   missing job) and the client's connection-timeout line are ASCII, and a unit test now
   keeps every string that reaches the pipe or the console ASCII.
