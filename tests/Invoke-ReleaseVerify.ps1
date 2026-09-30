@@ -29,8 +29,8 @@ $ver = $Tag.TrimStart('v')
 $asset = "RunAsHelper-Setup-$ver.msi"
 
 $steps = @(
-    "gh run list --workflow=release.yml for $Tag: conclusion success",
-    "gh release view $Tag: exactly one asset, $asset; download it; record SHA-256",
+    "gh run list --workflow=release.yml for ${Tag}: conclusion success",
+    "gh release view ${Tag}: exactly one asset, $asset; download it; record SHA-256",
     "Get-AuthenticodeSignature on the MSI: Valid, thumbprint $ExpectedThumbprint, timestamped",
     "Invoke-MsiContent.ps1 -ExpectedVersion $ver on the downloaded MSI",
     "Administrative image (msiexec /a ... TARGETDIR=...): the three binaries inside are Valid and timestamped with the same thumbprint",
