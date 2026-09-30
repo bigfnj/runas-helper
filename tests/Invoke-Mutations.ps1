@@ -12,7 +12,11 @@
 param(
     # With the new build installed, also run the integration mutations (MUT7-MUT13): each
     # feeds a wrong expectation to the same operation an integration case performs.
-    [switch]$Integration
+    [switch]$Integration,
+    # A copy of the 2.2.0 release MSI for MUT4 and CTRL2 (the MSI-version checks). The
+    # default is the maintainer's backup; when the file is absent both cases SKIP with a
+    # reason and leave the expected sets, so the self-test still passes off this box.
+    [string]$BaselineMsi = 'D:\.ai-work\_backups\runas-helper-2.2.0-baseline\RunAsHelper-Setup-2.2.0.msi'
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -28,7 +32,8 @@ $com = Get-InstalledCom
 $svc = Get-InstalledService
 $comp = @{ __COMPAT_LAYER = 'RunAsInvoker' }
 $cn = Get-ComputerNameLocal
-$msi = 'D:\.ai-work\_backups\runas-helper-2.2.0-baseline\RunAsHelper-Setup-2.2.0.msi'
+$msi = $BaselineMsi
+$haveMsi = [bool]($msi -and (Test-Path $msi))
 
 Reset-Run
 
@@ -61,6 +66,7 @@ Invoke-Case -Id 'MUT3-pathext' -Name 'PATHEXT reorder changes bare-name resoluti
 }
 
 Invoke-Case -Id 'MUT4-wrong-version' -Name 'wrong expected MSI version fires one fail' -Test {
+    if (-not $haveMsi) { Skip-Case -Reason "no baseline MSI at '$msi' (pass -BaselineMsi)" }
     $db = Open-MsiDatabase -MsiPath $msi
     $vers = @(Get-MsiFileVersions -Database $db)
     $exeVer = @($vers | Where-Object { $_.FileName -eq 'RunAsHelper.exe' })
@@ -88,13 +94,15 @@ Invoke-Case -Id 'CTRL1-help-ok' -Name 'control: correct help expectation passes'
 }
 
 Invoke-Case -Id 'CTRL2-version-ok' -Name 'control: correct MSI-row count passes' -Test {
+    if (-not $haveMsi) { Skip-Case -Reason "no baseline MSI at '$msi' (pass -BaselineMsi)" }
     $db = Open-MsiDatabase -MsiPath $msi
     $files = @(Get-MsiFileNames -Database $db)
     Assert-Equal 1 @($files | Where-Object { $_ -eq 'RunAsHelper.exe' }).Count 'exe file rows'
 }
 
-$expectedFail = @('MUT1-wrong-text', 'MUT2-wrong-exit', 'MUT3-pathext', 'MUT4-wrong-version', 'MUT5-bogus-hkcu', 'MUT6-wrong-source')
-$expectedPass = @('CTRL1-help-ok', 'CTRL2-version-ok')
+$expectedFail = @('MUT1-wrong-text', 'MUT2-wrong-exit', 'MUT3-pathext', 'MUT5-bogus-hkcu', 'MUT6-wrong-source')
+$expectedPass = @('CTRL1-help-ok')
+if ($haveMsi) { $expectedFail += 'MUT4-wrong-version'; $expectedPass += 'CTRL2-version-ok' }
 
 if ($Integration) {
     # The same operations the integration cases perform, each with one wrong expectation.
@@ -150,8 +158,12 @@ if ($Integration) {
 }
 
 # --- Reconciliation ---
+# Only an ASSERTION failure counts as a fired mutation. Invoke-Case also records a FAIL
+# when the body threw something else ("harness error: ..."); that means the check never
+# ran, so it is listed separately and counted as "did not fire".
 $rows = $global:RahRun.Rows
-$actualFail = @($rows | Where-Object { $_.Verdict -eq 'FAIL' } | ForEach-Object { $_.Id })
+$harnessErrors = @($rows | Where-Object { $_.Verdict -eq 'FAIL' -and $_.Detail -like 'harness error:*' } | ForEach-Object { $_.Id })
+$actualFail = @($rows | Where-Object { $_.Verdict -eq 'FAIL' -and $_.Detail -notlike 'harness error:*' } | ForEach-Object { $_.Id })
 $actualPass = @($rows | Where-Object { $_.Verdict -eq 'PASS' } | ForEach-Object { $_.Id })
 
 $missingFail = @($expectedFail | Where-Object { $actualFail -notcontains $_ })
@@ -161,12 +173,14 @@ $missingPass = @($expectedPass | Where-Object { $actualPass -notcontains $_ })
 Write-Host ''
 Write-Host "Mutations that fired (expected $($expectedFail.Count)): $($actualFail.Count) -> $($actualFail -join ', ')"
 Write-Host "Controls that passed (expected $($expectedPass.Count)): $($actualPass.Count) -> $($actualPass -join ', ')"
+if ($harnessErrors.Count) { Write-Host "Harness errors (not counted as fired): $($harnessErrors -join ', ')" }
 
-$ok = ($missingFail.Count -eq 0) -and ($unexpectedFail.Count -eq 0) -and ($missingPass.Count -eq 0)
+$ok = ($missingFail.Count -eq 0) -and ($unexpectedFail.Count -eq 0) -and ($missingPass.Count -eq 0) -and ($harnessErrors.Count -eq 0)
 if (-not $ok) {
     if ($missingFail.Count) { Write-Host "MUTATIONS THAT DID NOT FIRE: $($missingFail -join ', ')" }
     if ($unexpectedFail.Count) { Write-Host "UNEXPECTED FAILURES: $($unexpectedFail -join ', ')" }
     if ($missingPass.Count) { Write-Host "CONTROLS THAT DID NOT PASS: $($missingPass -join ', ')" }
+    if ($harnessErrors.Count) { Write-Host "HARNESS ERRORS: $($harnessErrors -join ', ')" }
     Write-Host 'RESULT: mutation self-test FAILED'
     exit 1
 }

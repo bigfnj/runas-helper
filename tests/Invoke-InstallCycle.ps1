@@ -3,7 +3,9 @@
 .SYNOPSIS
   Install an MSI on this box with administrator rights, verify the result, and (with
   -Cycle) uninstall, verify the removal, and install again. Optionally start the
-  installed tray afterwards and check its window title.
+  installed tray afterwards and check its window title. -UninstallOnly removes the
+  installed product (snapshot, stop the tray, msiexec /x, verify removal) and stops,
+  for taking a dev build off the box before installing a release of the same version.
 .DESCRIPTION
   This changes machine state (the installed product, the service, the machine PATH),
   so it runs only from the integration owner's serial cycle, never from a parallel
@@ -16,10 +18,13 @@
   1603 are failures and the tail of the verbose log is printed.
 #>
 param(
-    [Parameter(Mandatory)][string]$MsiPath,
-    [Parameter(Mandatory)][string]$ExpectedVersion,
+    # -MsiPath and -ExpectedVersion are required for an install; -UninstallOnly needs
+    # neither (the ProductCode comes from the Uninstall registry key).
+    [string]$MsiPath,
+    [string]$ExpectedVersion,
     [switch]$Cycle,
     [switch]$StartTray,
+    [switch]$UninstallOnly,
     [switch]$DryRun,
     [string]$LogDir
 )
@@ -30,12 +35,23 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Env.ps1')
 . (Join-Path $here 'lib\Msi.ps1')
 
-$steps = @(
-    "Snapshot: machine PATH entries, AllowedCallerSids, HKCU Run, settings.json hash, service status, tray count",
-    "End any running tray instance (an open RunAsHelper.exe keeps msiexec from replacing the file)",
-    "Install: msiexec /i `"$MsiPath`" /qn /norestart /l*v <log>, with administrator rights; exit 0 required",
-    "Verify: service Running, pipe present, FileVersion of .com/.exe/.Service.exe = $ExpectedVersion, install folder on the machine PATH, InstallFolder registry value, AllowedCallerSids unchanged, HKCU Run unchanged, settings.json unchanged"
-)
+if ($UninstallOnly) {
+    if ($Cycle -or $StartTray) { throw '-UninstallOnly cannot combine with -Cycle or -StartTray' }
+    $steps = @(
+        "Snapshot: machine PATH entries, AllowedCallerSids, HKCU Run, settings.json hash, service status, tray count",
+        "End any running tray instance (an open RunAsHelper.exe keeps msiexec from removing the file)",
+        "Uninstall: msiexec /x {ProductCode} /qn /norestart /l*v <log>, with administrator rights; exit 0 required",
+        "Verify removal: service gone, binaries gone, PATH entry gone and every other entry intact, InstallFolder value gone, AllowedCallerSids still present"
+    )
+} else {
+    if (-not $MsiPath -or -not $ExpectedVersion) { throw '-MsiPath and -ExpectedVersion are required unless -UninstallOnly is given' }
+    $steps = @(
+        "Snapshot: machine PATH entries, AllowedCallerSids, HKCU Run, settings.json hash, service status, tray count",
+        "End any running tray instance (an open RunAsHelper.exe keeps msiexec from replacing the file)",
+        "Install: msiexec /i `"$MsiPath`" /qn /norestart /l*v <log>, with administrator rights; exit 0 required",
+        "Verify: service Running, pipe present, FileVersion of .com/.exe/.Service.exe = $ExpectedVersion, install folder on the machine PATH, InstallFolder registry value, AllowedCallerSids unchanged, HKCU Run unchanged, settings.json unchanged"
+    )
+}
 if ($Cycle) {
     $steps += @(
         "Uninstall: msiexec /x {ProductCode} /qn /norestart /l*v <log>, with administrator rights",
@@ -52,8 +68,10 @@ if ($DryRun) {
     exit 0
 }
 
-if (-not (Test-Path $MsiPath)) { throw "MSI not found: $MsiPath" }
-$MsiPath = (Resolve-Path $MsiPath).Path
+if (-not $UninstallOnly) {
+    if (-not (Test-Path $MsiPath)) { throw "MSI not found: $MsiPath" }
+    $MsiPath = (Resolve-Path $MsiPath).Path
+}
 if (-not $LogDir) { $LogDir = New-WorkDir }
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
@@ -61,7 +79,7 @@ $installDir = Get-InstallDir
 $exe = Get-InstalledExe
 $com = Get-InstalledCom
 $svcExe = Get-InstalledService
-$want = ConvertTo-FourPartVersion $ExpectedVersion
+$want = if ($ExpectedVersion) { ConvertTo-FourPartVersion $ExpectedVersion } else { $null }
 $policyKey = 'HKLM:\SOFTWARE\RunAsHelper'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $settingsPath = Join-Path $env:APPDATA 'RunAsHelper\settings.json'
@@ -164,10 +182,52 @@ function Test-Installed {
     }
 }
 
+function Test-Removed {
+    # The removal checks, shared by -Cycle (after its uninstall) and -UninstallOnly.
+    param([Parameter(Mandatory)]$Before)
+    Invoke-Case -Id 'U2' -Name 'service is gone after uninstall' -Test {
+        $gone = Wait-Until -TimeoutSec 30 -Condition { $null -eq (Get-Service RunASHelper -ErrorAction SilentlyContinue) }
+        Assert-True $gone 'service RunASHelper absent within 30 s'
+    }
+    Invoke-Case -Id 'U3' -Name 'binaries are gone after uninstall' -Test {
+        foreach ($f in $com, $exe, $svcExe) { Assert-True (-not (Test-Path $f)) "$f removed" }
+    }
+    Invoke-Case -Id 'U4' -Name 'PATH entry is gone and every other entry is intact' -Test {
+        $entries = @(Get-MachinePathEntries)
+        Assert-True ($entries -notcontains $installDir.TrimEnd('\')) 'install folder no longer on the machine PATH'
+        $others = @($Before.PathEntries | Where-Object { $_ -ine $installDir.TrimEnd('\') })
+        foreach ($e in $others) { Assert-True ($entries -contains $e) "PATH entry still present: $e" }
+    }
+    Invoke-Case -Id 'U5' -Name 'InstallFolder value is gone, AllowedCallerSids kept' -Test {
+        $reg = Get-ItemProperty $policyKey -ErrorAction SilentlyContinue
+        $hasFolder = $reg -and ($reg.PSObject.Properties.Name -contains 'InstallFolder')
+        Assert-True (-not $hasFolder) 'InstallFolder value removed'
+        $sids = @(if ($reg -and ($reg.PSObject.Properties.Name -contains 'AllowedCallerSids')) { $reg.AllowedCallerSids } else { @() })
+        Assert-Equal ($Before.AllowedCallerSids -join ';') ($sids -join ';') 'AllowedCallerSids after uninstall'
+    }
+}
+
 Reset-Run
-Write-Host "Install cycle: $MsiPath -> $ExpectedVersion (logs in $LogDir)"
 $before = Get-Snapshot
 Write-Host ("Before: service={0} tray={1} pathEntries={2} trusted={3}" -f $before.ServiceStatus, $before.TrayCount, $before.PathEntries.Count, $before.AllowedCallerSids.Count)
+
+if ($UninstallOnly) {
+    Write-Host "Uninstall only (logs in $LogDir)"
+    $code = Get-InstalledProductCode
+    $uninstallLog = Join-Path $LogDir 'uninstall-only.log'
+    Invoke-Case -Id 'U1' -Name 'msiexec /x exits 0' -Test {
+        Assert-True ($null -ne $code) 'ProductCode found in the Uninstall registry'
+        $left = Stop-TrayInstances
+        Assert-Equal 0 $left 'RunAsHelper.exe instances after the stop'
+        $rc = Invoke-Msiexec -MsiArgs @('/x', $code) -LogFile $uninstallLog
+        if ($rc -ne 0) { Show-LogTail $uninstallLog }
+        Assert-ExitCode 0 $rc
+    }
+    Test-Removed -Before $before
+    Finish-Run -Title 'uninstall only'
+}
+
+Write-Host "Install cycle: $MsiPath -> $ExpectedVersion (logs in $LogDir)"
 
 Invoke-Case -Id 'I0' -Name 'no tray instance is running before the install' -Test {
     $left = Stop-TrayInstances
@@ -193,26 +253,7 @@ if ($Cycle) {
         if ($rc -ne 0) { Show-LogTail $uninstallLog }
         Assert-ExitCode 0 $rc
     }
-    Invoke-Case -Id 'U2' -Name 'service is gone after uninstall' -Test {
-        $gone = Wait-Until -TimeoutSec 30 -Condition { $null -eq (Get-Service RunASHelper -ErrorAction SilentlyContinue) }
-        Assert-True $gone 'service RunASHelper absent within 30 s'
-    }
-    Invoke-Case -Id 'U3' -Name 'binaries are gone after uninstall' -Test {
-        foreach ($f in $com, $exe, $svcExe) { Assert-True (-not (Test-Path $f)) "$f removed" }
-    }
-    Invoke-Case -Id 'U4' -Name 'PATH entry is gone and every other entry is intact' -Test {
-        $entries = @(Get-MachinePathEntries)
-        Assert-True ($entries -notcontains $installDir.TrimEnd('\')) 'install folder no longer on the machine PATH'
-        $others = @($before.PathEntries | Where-Object { $_ -ine $installDir.TrimEnd('\') })
-        foreach ($e in $others) { Assert-True ($entries -contains $e) "PATH entry still present: $e" }
-    }
-    Invoke-Case -Id 'U5' -Name 'InstallFolder value is gone, AllowedCallerSids kept' -Test {
-        $reg = Get-ItemProperty $policyKey -ErrorAction SilentlyContinue
-        $hasFolder = $reg -and ($reg.PSObject.Properties.Name -contains 'InstallFolder')
-        Assert-True (-not $hasFolder) 'InstallFolder value removed'
-        $sids = @(if ($reg -and ($reg.PSObject.Properties.Name -contains 'AllowedCallerSids')) { $reg.AllowedCallerSids } else { @() })
-        Assert-Equal ($before.AllowedCallerSids -join ';') ($sids -join ';') 'AllowedCallerSids after uninstall'
-    }
+    Test-Removed -Before $before
 
     $reinstallLog = Join-Path $LogDir "reinstall-$ExpectedVersion.log"
     Invoke-Case -Id 'R1' -Name 'msiexec /i (reinstall) exits 0' -Test {

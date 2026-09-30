@@ -38,6 +38,7 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Fixtures.ps1')
 . (Join-Path $here 'lib\EventLog.ps1')
 . (Join-Path $here 'lib\ConPty.ps1')
+. (Join-Path $here 'lib\RawPipe.ps1')
 
 $exe = Get-InstalledExe
 $com = Get-InstalledCom
@@ -325,7 +326,10 @@ try {
             Assert-NotMatch 'PowerShell host:' $r8.Stdout 'no host line when the target is not a .ps1'
         }
 
-        Invoke-Case -Id 'B9' -Name 'tray saved-entry .ps1 host rule' -Tags @('gui') -Test { }
+        Invoke-Case -Id 'B9' -Name 'tray saved-entry .ps1 host rule' -Tags @('gui') -Test {
+            # Never a vacuous PASS: with the gui tag removed this still records a SKIP.
+            Skip-Case -Reason 'GUI only; manual coverage recorded in BACKLOG NT-07'
+        }
 
         Invoke-Case -Id 'B10' -Name '/trusted: elevated list shows the caller, group refused, Medium denied' -Tags @('needs-elevated') -Test {
             $l = Get-Launcher
@@ -356,6 +360,50 @@ try {
             $ev = @(Get-RunAsHelperEvents -Id 1001 -Since $t)
             Assert-True ($ev.Count -ge 1) '1001 launch event present'
             Assert-Match 'Source: tray' (Get-RunAsHelperEventText $ev[0]) 'elevated installed caller logs Source: tray'
+        }
+
+        Invoke-Case -Id 'B13' -Name 'raw pipe frame with an unknown verb is refused (BL-13)' -Test {
+            # The shipped client never sends an unknown verb, so this goes to the pipe
+            # directly. The 2.2.0 service ran the CommandLine as a launch instead; 2.3.0
+            # answers a log frame, result Failed and Event 1003 "unknown verb". The command
+            # is harmless on purpose: it is what the mutation (Verb=launch) would run.
+            $t = Get-Date
+            $json = '{"CommandLine":"cmd.exe /c exit 0","Priority":32,"Verb":"nonsense","WorkingDirectory":"","ShowWindow":1,"Account":"system","Source":"cli","CaptureOutput":false,"TimeoutSeconds":0,"GateMinutes":30}'
+            $frames = @(Send-RawPipeRequest -Json $json)
+            Assert-True ($frames.Count -ge 2) "frames received ($($frames.Count))"
+            $logs = @($frames | Where-Object { $_.Type -eq 'log' } | ForEach-Object { $_.Content })
+            Assert-Match 'Unknown request' ($logs -join "`n") 'log frame'
+            $result = @($frames | Where-Object { $_.Type -eq 'result' })
+            Assert-Equal 1 $result.Count 'result frames'
+            Assert-Equal 'Failed' $result[0].Content 'result'
+            $ev = @(Get-RunAsHelperEvents -Id 1003 -Since $t)
+            Assert-True ($ev.Count -ge 1) 'a 1003 event was written'
+            Assert-Match 'unknown verb' (Get-RunAsHelperEventText $ev[0]) '1003 event text'
+            $launched = @(Get-RunAsHelperEvents -Id 1001 -Since $t)
+            Assert-Equal 0 $launched.Count '1001 launch events (the verb must not run as a launch)'
+        }
+
+        Invoke-Case -Id 'B14' -Name 'malformed /timeout: and /p: exit 1 with a usage line and never reach the service' -Test {
+            # 2.3.0 let "/timeout:abc" and a bare "/p:" fall through as the launch target,
+            # which the service failed with an Event 1003; 2.3.1 rejects them client-side.
+            $l = Get-Launcher
+            $t = Get-Date
+            $r1 = Invoke-Console -FilePath $l -TimeoutSec 20 -Env $comp -ArgumentList @('/timeout:abc', 'cmd', '/c', 'exit', '0')
+            Assert-ExitCode 1 $r1.ExitCode
+            Assert-Match 'Usage: RunAsHelper' $r1.Stderr '/timeout:abc usage line on stderr'
+            $r2 = Invoke-Console -FilePath $l -TimeoutSec 20 -Env $comp -ArgumentList @('/p:', 'cmd')
+            Assert-ExitCode 1 $r2.ExitCode
+            Assert-Match 'Usage: RunAsHelper' $r2.Stderr '/p: usage line on stderr'
+            Assert-NotMatch 'Args detected' ($r1.Stdout + $r2.Stdout) 'no service log line (the pipe was never used)'
+            $ev = @(Get-RunAsHelperEvents -Id @(1001, 1003) -Since $t)
+            Assert-Equal 0 $ev.Count 'RunAsHelper 1001/1003 events since the case started'
+        }
+
+        Invoke-Case -Id 'B15' -Name '/timeout without /capture prints the ignored line and exits 0' -Test {
+            $l = Get-Launcher
+            $r = Invoke-Console -FilePath $l -TimeoutSec 20 -Env $comp -ArgumentList @('/timeout:5', 'cmd', '/c', 'exit', '0')
+            Assert-ExitCode 0 $r.ExitCode
+            Assert-Match 'applies with /capture' $r.Stdout 'the ignored-timeout line'
         }
     }
 } finally {
