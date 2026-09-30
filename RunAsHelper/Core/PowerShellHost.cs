@@ -236,6 +236,11 @@ internal static class PowerShellScriptRewrite
 
         string script = app.Trim().Trim('"');
         if (script.Contains('%')) script = expandEnvironment(script);
+        // The 2.2.0 service expanded the WHOLE command line of a hosted .ps1 (its host
+        // branch sends no separate arguments), so a saved entry's "-Out %ProgramData%\a.log"
+        // reached the script expanded. The rewritten line below carries arguments, which the
+        // service never expands, so expand them here with the same expander as the path.
+        if (args.Contains('%')) args = expandEnvironment(args);
 
         // The path used to READ the script for #Requires. Usually the same as the emitted
         // script path; when a working directory is set, the emitted path stays relative (the
