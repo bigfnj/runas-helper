@@ -163,3 +163,20 @@ Real-app check: the installed tray, started through `RunAsHelper.com` with no ar
 (A6), shows `RunAS Helper - v2.2.90` in dark theme with the service running (PrintWindow
 screenshot taken from an elevated helper, because a Medium process cannot render an
 elevated window).
+
+## Release v2.3.0 (2026-09-30, published from the tag)
+
+CI: `ci.yml` green on `integrate/v2.3.0` and on `main`; a throwaway branch with one
+deliberately failing unit test went red at the "Unit tests" step and was deleted (the CI
+gate's own mutation). `release.yml` run 36659942899 green: the signed MSI, the two exes
+and the `.com` all verified on the runner.
+
+`Invoke-ReleaseVerify.ps1 -Tag v2.3.0`: 8 pass / 0 fail. Asset `RunAsHelper-Setup-2.3.0.msi`
+(2,068,480 bytes, SHA-256 F3EAB58FFE0E736C78A9F9DD0444018A85CFC8C36ABE2B0CFF54F32DCF897A02),
+signature Valid with thumbprint 0EEBB64D...BAD5 and a timestamp; MSI content 7/7 at 2.3.0;
+the three binaries in the administrative image Valid and timestamped; install cycle over
+2.2.90 12/12 with the tray titled `RunAS Helper - v2.3.0`; smoke 22 pass / 4 skip (A13 now
+PASS on the signed build); regression 15 pass / 1 skip.
+
+Its first run failed to parse: `"$Tag:"` inside a double-quoted string reads as a scoped
+variable. Fixed with `${Tag}`, and every `tests/*.ps1` now passes `Parser.ParseFile`.

@@ -25,7 +25,7 @@ dev build skips it), CODE (verified by reading the code; no live case drives it)
 | C11 | The service refuses to start from a shell (exit 1, one line) | `RunAsHelper.Service/Program.cs:13` IsWindowsService guard | A9 | VERIFIED |
 | C12 | Unknown verbs are rejected, not run as a launch | `RunAsHelper.Service/Worker/PipeServer.cs:731-733` | no live case: the shipped client never sends an unknown verb; verified by reading the dispatch | CODE |
 | C13 | Project status is tracked in BACKLOG.md | BACKLOG.md | file present | VERIFIED |
-| C14 | Signing covers all three binaries and the release verifies all four | `RunAsHelper.Installer.wixproj:88` SignPublishedApps; `release.yml:167` verify list; slice A's local signed build (Valid, timestamped .com) | A13 skips on the unsigned dev build; runs on the released MSI | RELEASE |
+| C14 | Signing covers all three binaries and the release verifies all four | `RunAsHelper.Installer.wixproj:88` SignPublishedApps; `release.yml:167` verify list | release run 36659942899 green; V3/V5 on the published MSI; A13 PASS on the installed 2.3.0 | VERIFIED |
 | C15 | RunAsHelper.Shared is linked source, not a built assembly | `RunAsHelper/RunAsHelper.csproj:17-18` and the service csproj Compile Include; no csproj in the folder | Release build after the delete | VERIFIED |
 | C16 | Captured cmd / 5.1 output decodes correctly (OEM fallback) | `RunAsHelper.Service/Core/CaptureDecoder.cs` | CaptureDecoderTests (unit); live capture output in R3/B1 is ASCII | VERIFIED (unit) |
 | C17 | A Ctrl+C in the launcher ends the exe and exits 0xC000013A; the elevated target may keep running | `RunAsHelper.Launcher/Program.cs` OnCtrl | A7 | VERIFIED |
