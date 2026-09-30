@@ -132,18 +132,39 @@ jobs:
         # sign targets on: the published binaries are signed before WiX packs them
         # and the MSI is signed after link. Omitting them produces an unsigned
         # build, which is what happens when there is no secret.
+        #
+        # Step outputs reach the script through env, like the Resolve version step:
+        # none of these three is attacker-controlled (the version is regex-checked, the
+        # thumbprint comes from the repo's own certificate, the path from the runner),
+        # but one convention for every value is easier to audit than two.
         shell: pwsh
+        env:
+          VER:        ${{ steps.ver.outputs.version }}
+          THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
+          SIGNTOOL:   ${{ steps.signtool.outputs.path }}
         run: |
-          $props = @('-c', 'Release', "-p:ProductVersion=${{ steps.ver.outputs.version }}")
+          $props = @('-c', 'Release', "-p:ProductVersion=$env:VER")
 
-          if ('${{ steps.signing.outputs.thumbprint }}') {
-            $props += "-p:SigningCertThumbprint=${{ steps.signing.outputs.thumbprint }}"
-            $props += "-p:SignToolPath=${{ steps.signtool.outputs.path }}"
+          if ($env:THUMBPRINT) {
+            $props += "-p:SigningCertThumbprint=$env:THUMBPRINT"
+            $props += "-p:SignToolPath=$env:SIGNTOOL"
             $props += '-p:SignTimestampUrl=http://timestamp.digicert.com'
           }
 
           Write-Host "dotnet build RunAsHelper.sln $($props -join ' ')"
           dotnet build RunAsHelper.sln @props
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: MSI content
+        # The same check ci.yml runs on every push, here against the artefact that
+        # ships: RunAsHelper.com present, three binaries each in its own component at
+        # the resolved version, the PATH Environment row, ProductVersion. Before this
+        # step nothing in the release job looked inside the MSI.
+        shell: pwsh
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          pwsh -NoProfile -File tests\Invoke-MsiContent.ps1 -MsiPath RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi -ExpectedVersion $env:VER
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Unit tests
@@ -159,6 +180,8 @@ jobs:
       - name: Verify signature
         if: steps.signing.outputs.thumbprint != ''
         shell: pwsh
+        env:
+          THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
         run: |
           $targets = @(
             'RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi',
@@ -177,7 +200,7 @@ jobs:
             if ($sig.Status -ne 'Valid') {
               Write-Error "$t signature status is $($sig.Status)"; $failed = $true
             }
-            if ($sig.SignerCertificate.Thumbprint -ne '${{ steps.signing.outputs.thumbprint }}') {
+            if ($sig.SignerCertificate.Thumbprint -ne $env:THUMBPRINT) {
               Write-Error "$t was signed by an unexpected certificate"; $failed = $true
             }
             if (-not $sig.TimeStamperCertificate) {
@@ -193,20 +216,24 @@ jobs:
       - name: Remove signing certificate from the runner
         if: always() && steps.signing.outputs.thumbprint != ''
         shell: pwsh
+        env:
+          THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
         run: |
           # The runner is discarded anyway; this is so a self-hosted one would not
           # keep the key or the trust behind.
           Get-ChildItem Cert:\CurrentUser\My, Cert:\LocalMachine\Root -ErrorAction SilentlyContinue |
-            Where-Object { $_.Thumbprint -eq '${{ steps.signing.outputs.thumbprint }}' } |
+            Where-Object { $_.Thumbprint -eq $env:THUMBPRINT } |
             ForEach-Object { Remove-Item $_.PSPath -Force -ErrorAction SilentlyContinue }
           Write-Host 'Signing certificate removed from the runner stores.'
 
       - name: Stage versioned artifact
         shell: pwsh
+        env:
+          VER: ${{ steps.ver.outputs.version }}
         run: |
           $src = 'RunAsHelper.Installer\bin\x64\Release\RunAsHelper-Setup.msi'
           if (-not (Test-Path $src)) { Write-Error "MSI not found at $src"; exit 1 }
-          $dst = "RunAsHelper-Setup-${{ steps.ver.outputs.version }}.msi"
+          $dst = "RunAsHelper-Setup-$env:VER.msi"
           Copy-Item $src $dst
           "asset=$dst" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         id: stage
