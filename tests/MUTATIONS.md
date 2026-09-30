@@ -345,9 +345,9 @@ held one) fails P1. Each mutant: 2 pass / 1 fail. Every release tag is on the re
 
 Dispositions are BACKLOG HS-01 to HS-32. Proofs (session scratchpad `p7\sweep-proofs.ps1`,
 the function under test taken verbatim from each tree), run against the fixed harness and
-against a worktree at d2610ad:
+against a worktree at 0b3e40e:
 
-| Proof | Fixed harness | d2610ad |
+| Proof | Fixed harness | 0b3e40e |
 |---|---|---|
 | S-K2 Invoke-Elevated, TEMP holding a space | exit 7 | exit 64 |
 | S-C13a Invoke-AdminRunner timeout | throws, no folder left | throws, rah-tests-68c642fb left |
@@ -364,14 +364,14 @@ against a worktree at d2610ad:
 | S-W1 old marker form, child prints nothing | PASS on the echo alone (the weakness) | same |
 | S-W2 child-computed marker | expanded in the child line, literal in the echo | same |
 
-Fixed harness 14 pass / 0 fail; d2610ad 2 pass / 9 fail / 3 skip, the nine failures being
+Fixed harness 14 pass / 0 fail; 0b3e40e 2 pass / 9 fail / 3 skip, the nine failures being
 exactly the nine mutation proofs. The first fixed run failed S-K5 on the fix itself: the cmd row
 called its wrapper by bare name, and agent shells set `NoDefaultCurrentDirectoryInExePath=1`,
 which stops cmd searching its working directory. `.\via-cmd.cmd` passed in four folder
 shapes (plain, space, apostrophe, u-umlaut), then S-K5 passed.
 
 T2 on the real box (`p7\t2-proof.ps1`): uninstall, remove the HKCU Run value, install from
-the bare profile. The d2610ad harness: 11 pass / 1 fail, T2 "HKCU Run value expected [] got
+the bare profile. The 0b3e40e harness: 11 pass / 1 fail, T2 "HKCU Run value expected [] got
 ["C:\Program Files\RunAsHelper\RunAsHelper.exe" --tray]". After a second uninstall the fixed
 harness: 12 pass / 0 fail. Both uninstalls ran through the rewritten Invoke-AdminRunner (5
 pass each), and the Run value ended as it started.
@@ -403,7 +403,7 @@ account's SID> (ReadWrite, Synchronize)"; the 2.3.2 dev build PASS.
 
 Other review fixes, proven: MUT17 (a private pipe whose NETWORK deny covers only
 ChangePermissions) fires with "the NETWORK deny covers ChangePermissions, not FullControl";
-S-K5b (TEMP holding U+2019): working tree PASS, bc9c191 FAIL at "pwsh caller selects pwsh
+S-K5b (TEMP holding U+2019): working tree PASS, a150167 FAIL at "pwsh caller selects pwsh
 7"; T2 with the Run value cleared first: the dev install passed 12/12.
 
 The 2.3.2 dev build (unsigned, `-p:ProductVersion=2.3.2`; its published service binary is
@@ -432,3 +432,38 @@ release 12/12 (T2 with the Run value cleared first); smoke 25 pass / 0 fail / 5 
 Then on the same install: service hardening 6 / 0 / 0 (H1 and H2 Process handles 0 before and
 0 after), self-test 17 of 17 mutations fired and 5 of 5 controls passed, no `rah-*` entry left
 in %TEMP%.
+
+## History rewrite (2026-09-30)
+
+The owner asked for the 63 commits that carried the work-domain identity to be rewritten
+(BACKLOG L4-03). Measured first on a mirror clone of the remote: 147 commits reachable from two
+branches and seven tags; 63 with the work domain as both author and committer, under three
+spellings of the name; no commit message, tag message or file content anywhere in history
+contained the employer string (message search, tag messages, content pickaxe: 0 each). 0 forks,
+no branch protection, no rulesets.
+
+Backups before anything changed: a mirror clone at
+`D:\.ai-work\_backups\runas-helper-pre-rewrite-2026-09-30.git` (its GitHub remote removed, so no
+fetch can overwrite it) and a verified bundle beside it.
+
+Rehearsal on a scratch mirror: `git filter-repo --mailmap` mapping the one work-domain address to
+the personal identity already on 37 commits, with the noreply identity left as it is. 147 commits
+before and after; every branch and tag kept its tree and commit count, and each annotated tag
+its tagger and message; 0 work-domain fields left; filter-repo translated the old hashes cited in
+two commit messages. An independent review reproduced the result byte for byte, compared all 147
+commits one by one (trees, mapped parents, dates, other identities: unchanged), and tried the
+push's leases against a local copy of the remote, where every broken variant pushed nothing.
+
+The push: release.yml disabled, then one atomic push straight to the URL, each of the nine refs
+leased on the value the backup recorded; all nine were force-updated in place. The verifier,
+first shown to fail against the backup (126 work-domain fields, every ref off), then passed
+against GitHub: a fresh clone has 0 work-domain fields and 147 commits, all nine refs as pushed
+with unchanged trees, `describe` gives v2.3.2, the three Releases kept their MSI digests and
+updated_at, v2.3.2 is still latest, and release.yml started no run (39 before and after). It was
+then re-enabled.
+
+What the rewrite cannot reach: GitHub keeps serving the old commits by hash, and its
+documentation says Support does not remove data that is not sensitive; 18 old Release runs
+(v1.1.0 to v2.1.5) return the address through the Actions API; and the shipped 2.3.x binaries'
+version strings carry pre-rewrite commit IDs. The commit hashes cited in BACKLOG.md and in this
+file were remapped to the rewritten history (22 replacements).
