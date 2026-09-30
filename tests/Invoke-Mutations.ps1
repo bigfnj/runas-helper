@@ -76,8 +76,8 @@ Invoke-Case -Id 'MUT4-wrong-version' -Name 'wrong expected MSI version fires one
 
 Invoke-Case -Id 'MUT5-bogus-hkcu' -Name 'bogus expected HKCU Run value fires one fail' -Test {
     # Read-only: read the real HKCU Run entry (if any) and assert a bogus expectation.
-    $run = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name RunAsHelper -ErrorAction SilentlyContinue).RunAsHelper
-    $actual = if ($null -eq $run) { '<absent>' } else { $run }
+    $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name RunAsHelper -ErrorAction SilentlyContinue
+    $actual = if ($null -eq $run) { '<absent>' } else { [string]$run.RunAsHelper }
     Assert-Equal 'C:\bogus\path.exe --tray' $actual 'HKCU Run value (deliberately wrong)'
 }
 

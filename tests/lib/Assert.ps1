@@ -107,7 +107,13 @@ function Invoke-Case {
 function Finish-Run {
     param([string]$Title = 'run')
     $r = $global:RahRun
-    Write-Host ("RESULT [{0}]: {1} pass / {2} fail / {3} skip" -f $Title, $r.Pass, $r.Fail, $r.Skip)
+    $line = "RESULT [{0}]: {1} pass / {2} fail / {3} skip" -f $Title, $r.Pass, $r.Fail, $r.Skip
+    Write-Host $line
+    # A relaunched runner (Invoke-Smoke under a redirected stdout) shows its parent only
+    # what it tees into the result file; without this line the parent printed every case
+    # and no total, and the exit code was the only summary.
+    $tee = Get-Variable -Name RahTee -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+    if ($tee) { Add-Content -Path $tee -Value $line }
     $ran = $r.Pass + $r.Fail
     if ($r.Fail -gt 0) { exit 1 }
     if ($ran -eq 0) { Write-Host "RESULT: nothing ran (only skips) -> failing"; exit 1 }

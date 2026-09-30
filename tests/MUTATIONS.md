@@ -261,7 +261,9 @@ because the harness's process reader itself splits on CR and masked the embedded
 reads the launcher's raw stdout bytes through a cmd file redirect, which fails on 2.3.0.
 
 Install cycle with the 2.3.1 dev MSI over 2.3.0: 12/12, tray titled `RunAS Helper - v2.3.1`.
-Smoke `-Integration`: 27 pass / 5 skip after one harness fix: B14 first failed on an event
+Smoke `-Integration`: 24 pass / 5 skip of 29 cases (this line first said 27, a hand count
+made while the relaunched runner's RESULT line was being lost; see the v2.3.1 release
+section) after one harness fix: B14 first failed on an event
 count because `Get-WinEvent`'s StartTime filter truncates to whole seconds and picked up
 B13's 1003 from the same second; the event helper now filters on the exact timestamp and
 B14 matches the malformed token in the event text. B13, B14, B15 rerun: 3 pass. Regression
@@ -273,4 +275,41 @@ handle threshold twice (+3, then +37 over five runs) while H2 showed no growth: 
 TOTAL handle count is not a leak instrument (a type histogram from an elevated `handle.exe`
 showed the growth was Event +17, Thread +7, Mutant +2: thread-pool threads spun up by the
 runs), so H1 and H2 now count Process-type handles, which is what 2.3.0 leaked: 0 before and
-0 after on 2.3.1 for both. Harness self-test `-Integration`: 12 fired, 3 controls.
+0 after on 2.3.1 for both. Harness self-test `-Integration`: 12 fired, 3 controls. The same
+histogram taken a few minutes later had settled from 443 to 438 (Event 152, Thread 39,
+Mutant 2, Process 0): the thread-pool growth unwinding, not a leak.
+
+## Release v2.3.1 (2026-09-30, published from the tag)
+
+`release.yml` run 36685012087 green. `Invoke-ReleaseVerify.ps1 -Tag v2.3.1`: 8 pass / 0 fail
+on its third run. Asset `RunAsHelper-Setup-2.3.1.msi` (2,076,672 bytes, SHA-256
+F7D9165D0AE7F31ED0CEEA94C7435754EA79FFC0FDAB0AC9961EF7B311D84BE5), signature Valid with
+thumbprint 0EEBB64D...BAD5 and a timestamp; MSI content 7/7 at 2.3.1; the three binaries in
+the administrative image Valid and timestamped; install cycle 12/12 with the tray titled
+`RunAS Helper - v2.3.1`; smoke 24 pass / 5 skip (29 cases); regression 15 pass / 1 skip.
+
+The install was a fresh one, not an upgrade: the 2.3.1 dev build had been removed with
+`-UninstallOnly` so its unsigned files could not sit under the release's identical version.
+That exposed a harness assumption. Run 1 died in `Env.ps1` (`Get-InstallDir`): the
+`HKLM\SOFTWARE\RunAsHelper` key survives an uninstall (AllowedCallerSids stays) while
+`InstallFolder` is removed, and `Set-StrictMode -Version Latest` turns the read of a missing
+property into an error. Run 2 died in `Invoke-InstallCycle.ps1` `Get-Snapshot` on
+`(Get-Service ...).Status.ToString()` with no service present. Both reads are guarded now,
+along with the same shape in the I2 service poll, I6, R4's marker poll, R9's HKCU Run read
+and the self-test's HKCU case: in pwsh 7 under that StrictMode a `$null.Property` read
+throws (checked directly, "The property 'Foo' cannot be found on this object"), so a
+`Wait-Until` condition written that way errors out instead of polling again. Run 3 passed
+V6 from `service=absent tray=0`, which is the evidence for the guards.
+
+Second finding from the same log: the smoke suite's RESULT line never reached the release
+verify. With stdout redirected the suite relaunches itself in a hidden console and the parent
+prints only the case lines the child tees into the result file; `Finish-Run` wrote the total
+to the hidden console alone, so the parent showed every case and no total, and the exit code
+was the only summary. `Finish-Run` now tees the RESULT line as well. Proof: `Invoke-Smoke.ps1
+-Phase A -Only A1` with redirected stdout ends in `RESULT [smoke A]: 1 pass / 0 fail / 13
+skip`; the release-verify3 log taken before the fix has no RESULT line between B15 and V7.
+
+Service hardening on the released 2.3.1: 6 pass / 0 fail. H1 and H2 process handles 0 before
+and 0 after (total handles 408, 400, 398 across the two, information only); H3 returned in
+3.4 s; H4 dropped the silent connection at 30.0 s; H5 three CRLF-terminated redraw lines and
+no embedded CR; H6 five pieces totalling 5,242,880 bytes, the longest 1,048,576.

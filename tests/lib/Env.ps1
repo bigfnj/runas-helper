@@ -12,7 +12,11 @@ $script:InstallDir = $null
 function Get-InstallDir {
     if ($null -eq $script:InstallDir) {
         $fromEnv = $env:RAH_INSTALL_DIR
-        $fromReg = (Get-ItemProperty 'HKLM:\SOFTWARE\RunAsHelper' -ErrorAction SilentlyContinue).InstallFolder
+        # The key can exist without the value (AllowedCallerSids survives an uninstall while
+        # InstallFolder is removed), and under StrictMode reading a missing property throws,
+        # which took the whole harness down on a box with nothing installed.
+        $props = Get-ItemProperty 'HKLM:\SOFTWARE\RunAsHelper' -ErrorAction SilentlyContinue
+        $fromReg = if ($props -and ($props.PSObject.Properties.Name -contains 'InstallFolder')) { $props.InstallFolder } else { $null }
         $script:InstallDir = if ($fromEnv) { $fromEnv.TrimEnd('\') }
                              elseif ($fromReg) { ([string]$fromReg).TrimEnd('\') }
                              else { 'C:\Program Files\RunAsHelper' }

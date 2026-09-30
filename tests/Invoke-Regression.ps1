@@ -76,7 +76,10 @@ try {
         $r = Invoke-Console -FilePath $exe -TimeoutSec 30 -Env $comp -ArgumentList @($fx.Reg)
         Assert-ExitCode 0 $r.ExitCode
         $ok = Wait-Until -TimeoutSec 10 -Condition {
-            (Get-ItemProperty 'HKLM:\SOFTWARE\RunAsHelperSmoke' -Name Marker -ErrorAction SilentlyContinue).Marker -eq $fx.Guid
+            # Until regedit has imported the key, Get-ItemProperty returns null, and a
+            # property read on null throws under StrictMode instead of polling again.
+            $m = Get-ItemProperty 'HKLM:\SOFTWARE\RunAsHelperSmoke' -Name Marker -ErrorAction SilentlyContinue
+            $m -and $m.Marker -eq $fx.Guid
         }
         Assert-True $ok 'HKLM marker equals the fixture guid'
         $r2 = Invoke-Console -FilePath $exe -TimeoutSec 30 -Env $comp -ArgumentList @('/capture', '/timeout:20', $fx.Cmd)
@@ -131,7 +134,10 @@ try {
     }
 
     Invoke-Case -Id 'R9' -Name 'HKCU Run entry names the installed exe with --tray' -Tags @('integration-only') -Test {
-        $v = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).RunAsHelper
+        # The Run key always exists; the value does not until a tray has started once, and
+        # StrictMode turns a read of the missing value into an error instead of a null.
+        $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+        $v = if ($run -and ($run.PSObject.Properties.Name -contains 'RunAsHelper')) { $run.RunAsHelper } else { '<absent>' }
         Assert-Equal ('"' + $exe + '" --tray') ([string]$v) 'HKCU Run value'
     }
 

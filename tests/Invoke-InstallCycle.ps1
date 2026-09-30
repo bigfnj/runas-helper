@@ -89,9 +89,14 @@ function Get-Snapshot {
     [pscustomobject]@{
         PathEntries       = @(Get-MachinePathEntries)
         AllowedCallerSids = @(if ($reg -and ($reg.PSObject.Properties.Name -contains 'AllowedCallerSids')) { $reg.AllowedCallerSids } else { @() })
-        HkcuRun           = (Get-ItemProperty $runKey -ErrorAction SilentlyContinue).RunAsHelper
+        HkcuRun           = $(
+            $run = Get-ItemProperty $runKey -ErrorAction SilentlyContinue
+            if ($run -and ($run.PSObject.Properties.Name -contains 'RunAsHelper')) { [string]$run.RunAsHelper } else { $null }
+        )
         SettingsHash      = if (Test-Path $settingsPath) { (Get-FileHash $settingsPath -Algorithm SHA256).Hash } else { $null }
-        ServiceStatus     = (Get-Service RunASHelper -ErrorAction SilentlyContinue).Status
+        # On a box with nothing installed Get-Service returns nothing, and StrictMode refuses
+        # a property read on null; the cycle must be able to start from that state.
+        ServiceStatus     = $( $svc = Get-Service RunASHelper -ErrorAction SilentlyContinue; if ($svc) { $svc.Status.ToString() } else { 'absent' } )
         TrayCount         = @(Get-Process RunAsHelper -ErrorAction SilentlyContinue).Count
     }
 }
@@ -147,7 +152,7 @@ function Test-Installed {
     param([Parameter(Mandatory)][string]$Prefix, [Parameter(Mandatory)]$Before)
 
     Invoke-Case -Id "$($Prefix)2" -Name 'service RunASHelper is Running' -Test {
-        $ok = Wait-Until -TimeoutSec 30 -Condition { (Get-Service RunASHelper -ErrorAction SilentlyContinue).Status -eq 'Running' }
+        $ok = Wait-Until -TimeoutSec 30 -Condition { $s = Get-Service RunASHelper -ErrorAction SilentlyContinue; $s -and $s.Status -eq 'Running' }
         Assert-True $ok 'service reached Running within 30 s'
     }
     Invoke-Case -Id "$($Prefix)3" -Name 'service pipe is present' -Test {
@@ -166,7 +171,8 @@ function Test-Installed {
         Assert-Equal 1 $n 'exactly one PATH entry for the install folder'
     }
     Invoke-Case -Id "$($Prefix)6" -Name 'InstallFolder registry value names the install folder' -Test {
-        $v = (Get-ItemProperty $policyKey -ErrorAction SilentlyContinue).InstallFolder
+        $reg = Get-ItemProperty $policyKey -ErrorAction SilentlyContinue
+        $v = if ($reg -and ($reg.PSObject.Properties.Name -contains 'InstallFolder')) { $reg.InstallFolder } else { $null }
         Assert-True ($null -ne $v) 'InstallFolder value present'
         Assert-Equal $installDir.TrimEnd('\') ([string]$v).TrimEnd('\') 'InstallFolder value'
     }
