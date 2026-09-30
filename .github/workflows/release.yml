@@ -271,3 +271,16 @@ jobs:
           files: ${{ steps.stage.outputs.asset }}
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+      # Cross-repo release policy: the Releases page keeps the three most recent releases
+      # and every git tag stays, so an older build is rebuilt from its tag. Same condition
+      # as the publish step (a dispatch dry run publishes nothing, so it prunes nothing),
+      # and ordered after it so the release just published is one of the three kept. The
+      # script always exits 0, so a prune problem never fails a release that already
+      # published, and it prints on every path, including "nothing to delete".
+      - name: Prune old releases (keep the 3 most recent; tags kept)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: ./.github/scripts/Remove-OldReleases.ps1 -Repo $env:GITHUB_REPOSITORY -Keep 3 -Apply
