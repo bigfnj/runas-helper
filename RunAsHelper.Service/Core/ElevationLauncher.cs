@@ -16,8 +16,10 @@ namespace RunAsHelper.Service.Core;
 ///     client session so the process appears on the user's interactive desktop.
 ///   — SeTcbPrivilege is enabled to allow the session-ID change.
 /// Thread-safety: Initialize() is idempotent and lock-protected. LaunchElevated()
-/// is safe for concurrent calls after init. ValidateToken() resets init state so
-/// it should not run concurrently with LaunchElevated(); callers enforce this.
+/// is safe for concurrent calls after init, and safe against a concurrent
+/// ValidateToken(): both touch the cached token only under _initLock, and
+/// LaunchElevated() duplicates it while still holding the lock, so a validation that
+/// closes and reacquires the token can never hand a launch a closed (or reused) handle.
 /// </summary>
 internal sealed class ElevationLauncher
 {
@@ -82,72 +84,82 @@ internal sealed class ElevationLauncher
     {
         bool asSystem = string.Equals(account, "system", StringComparison.OrdinalIgnoreCase);
 
-        // Pick the source token: the LocalSystem (service) token for account=system
-        // — a pure SYSTEM token with no TrustedInstaller group — or the stolen
-        // TrustedInstaller token (SYSTEM + TI group) otherwise.
-        IntPtr source;
-        bool   closeSource = false;
+        // Pick the source token and take a private primary duplicate of it: the
+        // LocalSystem (service) token for account=system, a pure SYSTEM token with no
+        // TrustedInstaller group, or the stolen TrustedInstaller token (SYSTEM + TI
+        // group) otherwise. Only the duplicate leaves this block.
+        IntPtr hDup;
         if (asSystem)
         {
             EnsurePrivileges(log);
             if (!NativeMethods.OpenProcessToken(
                     NativeMethods.GetCurrentProcess(),
-                    NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_QUERY, out source))
+                    NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_QUERY, out IntPtr source))
             {
                 log?.Invoke($"Failed to open LocalSystem token. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
                 return (0, IntPtr.Zero, null);
             }
-            closeSource = true;
-            log?.Invoke("Account=system - launching with the LocalSystem token (no TrustedInstaller group).");
+            try
+            {
+                log?.Invoke("Account=system - launching with the LocalSystem token (no TrustedInstaller group).");
+                if (!TryDuplicatePrimary(source, out hDup, log)) return (0, IntPtr.Zero, null);
+            }
+            finally
+            {
+                NativeMethods.CloseHandle(source);
+            }
         }
         else
         {
-            Initialize(log);
-            if (_hElevatedToken == IntPtr.Zero)
+            // ValidateToken closes and reacquires _hElevatedToken under _initLock. Reading
+            // the handle and duplicating it must happen under that same lock, or a launch
+            // racing a validation could duplicate a closed handle, or worse, a handle value
+            // the validation has since reused for a different token (the winlogon SYSTEM
+            // token it opens right after the close), and run the child as plain SYSTEM.
+            // The lock is held for microseconds; CreateProcess runs outside it.
+            lock (_initLock)
             {
-                log?.Invoke("Failed to acquire elevated token");
-                return (0, IntPtr.Zero, null);
+                Initialize(log);
+                if (_hElevatedToken == IntPtr.Zero)
+                {
+                    log?.Invoke("Failed to acquire elevated token");
+                    return (0, IntPtr.Zero, null);
+                }
+                log?.Invoke("Account=trustedinstaller - launching with the TrustedInstaller token.");
+                if (!TryDuplicatePrimary(_hElevatedToken, out hDup, log)) return (0, IntPtr.Zero, null);
             }
-            source = _hElevatedToken;
-            log?.Invoke("Account=trustedinstaller - launching with the TrustedInstaller token.");
         }
 
         try
         {
-            log?.Invoke("Duplicating token...");
-            IntPtr hDup;
-            unsafe
-            {
-                var satr = new NativeMethods.SECURITY_ATTRIBUTES
-                {
-                    nLength = (uint)sizeof(NativeMethods.SECURITY_ATTRIBUTES)
-                };
-                // TokenPrimary is required by CreateProcessAsUser.
-                if (!NativeMethods.DuplicateTokenEx(
-                        source, NativeMethods.MAXIMUM_ALLOWED, &satr,
-                        NativeMethods.SecurityImpersonationLevel.SecurityImpersonation,
-                        NativeMethods.TokenType.TokenPrimary,
-                        out hDup))
-                {
-                    log?.Invoke($"LaunchElevated::Failed to duplicate token, " +
-                        $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
-                    return (0, IntPtr.Zero, null);
-                }
-            }
-
-            try
-            {
-                return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow, targetSessionId, captureOutput, log);
-            }
-            finally
-            {
-                NativeMethods.CloseHandle(hDup);
-            }
+            return CreateProcess(hDup, commandLine, priorityClass, workingDirectory, showWindow, targetSessionId, captureOutput, log);
         }
         finally
         {
-            if (closeSource) NativeMethods.CloseHandle(source);
+            NativeMethods.CloseHandle(hDup);
         }
+    }
+
+    // Duplicates source as a primary token (CreateProcessAsUser needs TokenPrimary).
+    private unsafe bool TryDuplicatePrimary(IntPtr source, out IntPtr hDup, Action<string>? log)
+    {
+        log?.Invoke("Duplicating token...");
+        var satr = new NativeMethods.SECURITY_ATTRIBUTES
+        {
+            nLength = (uint)sizeof(NativeMethods.SECURITY_ATTRIBUTES)
+        };
+        if (!NativeMethods.DuplicateTokenEx(
+                source, NativeMethods.MAXIMUM_ALLOWED, &satr,
+                NativeMethods.SecurityImpersonationLevel.SecurityImpersonation,
+                NativeMethods.TokenType.TokenPrimary,
+                out hDup))
+        {
+            log?.Invoke($"LaunchElevated::Failed to duplicate token, " +
+                $"lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())}");
+            hDup = IntPtr.Zero;
+            return false;
+        }
+        return true;
     }
 
     private void EnsurePrivileges(Action<string>? log = null)
@@ -172,7 +184,8 @@ internal sealed class ElevationLauncher
     /// it really belongs to NT SERVICE\TrustedInstaller, and ensures the worker
     /// thread is reverted to its own identity afterwards. Used by the tray app's
     /// post-install validation to prove the elevation chain works end to end.
-    /// Note: resets cached token state — do not call concurrently with LaunchElevated.
+    /// Note: resets the cached token under _initLock; LaunchElevated snapshots and
+    /// duplicates the token under the same lock, so the two may run concurrently.
     /// </summary>
     public unsafe bool ValidateToken(out string account, Action<string>? log = null)
     {
@@ -345,7 +358,7 @@ internal sealed class ElevationLauncher
         }
     }
 
-    private unsafe string LookupSid(IntPtr pSid, Action<string>? log = null)
+    private unsafe string LookupSid(IntPtr pSid)
     {
         char* name = stackalloc char[256];
         char* dom  = stackalloc char[256];
@@ -765,21 +778,36 @@ internal sealed class ElevationLauncher
             if (captureOutput)
             {
                 // Build a PROC_THREAD_ATTRIBUTE_LIST that names only hWritePipe as
-                // the handle to inherit — guards against leaking every other open
-                // service handle into the TrustedInstaller/SYSTEM child process.
+                // the handle to inherit, which guards against leaking every other open
+                // service handle into the TrustedInstaller/SYSTEM child process. The
+                // child is created with bInheritHandles=true, so if either call below
+                // failed and the launch went ahead anyway, the list would restrict
+                // nothing and the child would inherit them all. Fail the launch instead.
                 nuint attrSize = 0;
-                NativeMethods.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, &attrSize);
+                NativeMethods.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, &attrSize); // sizing call: expected to fail
                 IntPtr attrList = Marshal.AllocHGlobal((int)attrSize);
                 try
                 {
-                    NativeMethods.InitializeProcThreadAttributeList(attrList, 1, 0, &attrSize);
+                    if (!NativeMethods.InitializeProcThreadAttributeList(attrList, 1, 0, &attrSize))
+                    {
+                        log?.Invoke($"Capture: InitializeProcThreadAttributeList failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())} - not launching (the child would inherit every service handle).");
+                        NativeMethods.CloseHandle(hWritePipe);
+                        captureServer?.Dispose();
+                        return (0, IntPtr.Zero, null);
+                    }
                     try
                     {
                         IntPtr toInherit = hWritePipe;
-                        NativeMethods.UpdateProcThreadAttribute(
-                            attrList, 0,
-                            NativeMethods.PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                            &toInherit, (nuint)IntPtr.Size, null, null);
+                        if (!NativeMethods.UpdateProcThreadAttribute(
+                                attrList, 0,
+                                NativeMethods.PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                &toInherit, (nuint)IntPtr.Size, null, null))
+                        {
+                            log?.Invoke($"Capture: UpdateProcThreadAttribute(HANDLE_LIST) failed. lastErr={GetErrorName((uint)Marshal.GetLastWin32Error())} - not launching (the child would inherit every service handle).");
+                            NativeMethods.CloseHandle(hWritePipe);
+                            captureServer?.Dispose();
+                            return (0, IntPtr.Zero, null);
+                        }
 
                         var siex = new NativeMethods.STARTUPINFOEXW
                         {
