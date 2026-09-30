@@ -24,7 +24,8 @@ public sealed record LaunchRequest(
 /// Sent by the service back to the client: either a streaming line or the final result.
 /// <c>Type</c> is one of: <c>log</c> (a service log line), <c>stdout</c> (one captured
 /// child output line), <c>pid</c> (the launched process id), <c>result</c> (Success or
-/// Failed, always last), <c>gate</c> (setcli deadline in minutes, 0 = none),
+/// Failed, always last), <c>gate</c> (setcli acknowledgement: the request's own
+/// GateMinutes echoed back, 0 = no expiry; not an absolute deadline),
 /// <c>trustedcaller</c> (one policy SID), <c>job</c> (a JobInfo as JSON), <c>slots</c>
 /// (N/M slot usage), <c>exit</c> (the child's exit code as an unsigned int, capture only),
 /// and <c>timeout</c> (the elapsed TimeoutSeconds, capture only). A client that does not

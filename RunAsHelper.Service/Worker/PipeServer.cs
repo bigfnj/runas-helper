@@ -567,17 +567,18 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     : pipeUserSid ?? client.UserSid;
                 if (identityMismatch)
                 {
+                    // Not a denial: the request goes on, but with no SID it cannot match the
+                    // trusted-caller policy, so it is authorized on the installed-tray identity
+                    // or the open CLI gate alone. The log line and Event 1003 say exactly that.
                     logger.LogWarning(
-                        "Rejected client identity mismatch for pid {Pid}: pipe SID {PipeSid}, process SID {ProcessSid}.",
+                        "Client identity mismatch for pid {Pid}: pipe SID {PipeSid}, process SID {ProcessSid}; the caller's SID is treated as unknown and the request continues.",
                         clientPid, pipeUserSid!.Value, client.UserSid!.Value);
-                    // Surface the mismatch to the event log too. EventLogHelper.cs claims 1003
-                    // covers identity mismatch; before this it only fired on a gate/launch denial.
-                    EventLogHelper.Denied(request.CommandLine, "pipe and process identity differ");
+                    EventLogHelper.IdentityMismatch(clientPid, pipeUserSid.Value, client.UserSid.Value);
                 }
                 bool isTrustedCaller = _trustedCallers.Contains(clientUserSid);
 
                 logger.LogInformation(
-                    "{Verb} request (source={Source} identity={Identity} callerSid={CallerSid} pipeSid={PipeSid} processSid={ProcessSid} trusted={Trusted} signed={Signed} pid={Pid}): '{CommandLine}' priority=0x{Priority:X}",
+                    "{Verb} request (source={Source} identity={Identity} callerSid={CallerSid} pipeSid={PipeSid} processSid={ProcessSid} trusted={Trusted} signed={Signed} pid={Pid} image={Image}): '{CommandLine}' priority=0x{Priority:X}",
                     request.Verb, request.Source,
                     isTrayElevated ? "tray-elevated" : isTray ? "tray-notelev" : "other",
                     clientUserSid?.Value ?? "unknown",
@@ -585,7 +586,9 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     client.UserSid?.Value ?? "unknown",
                     isTrustedCaller,
                     client.IsSigned,
-                    clientPid, request.CommandLine, request.Priority);
+                    clientPid,
+                    client.ExecutablePath ?? "unknown",
+                    request.CommandLine, request.Priority);
 
                 // ── setcli: installed tray + elevated (both required to control the gate) ──
                 if (request.Verb == "setcli")
@@ -601,7 +604,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     if (!isTrayElevated && !isClosingOwnGate)
                     {
                         string reason = !isTray ? "not the installed tray" : "tray is not elevated";
-                        logger.LogWarning("Rejected setcli — {Reason} (pid {Pid}).", reason, clientPid);
+                        logger.LogWarning("Rejected setcli - {Reason} (pid {Pid}).", reason, clientPid);
                         EventLogHelper.Denied("setcli", $"pid {clientPid}: {reason}");
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
                         return;
@@ -623,8 +626,10 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                             ? (_allowCli ? " with no expiry" : "")
                             : $" for {request.GateMinutes} minute(s)");
 
-                    // Report the effective deadline so the tray can mirror the countdown
-                    // rather than assume its own clock matches the enforcer's.
+                    // Acknowledge the expiry the request asked for: the payload is the
+                    // request's own GateMinutes (0 when the gate has no expiry), not an
+                    // absolute deadline. No shipped client reads it; the frame stays so a
+                    // future tray can confirm what the service accepted.
                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("gate",
                         expiresTicks == 0 ? "0" : request.GateMinutes.ToString()), ct);
                     await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Success"), ct);
@@ -641,7 +646,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     {
                         string reason = !isTray ? "not the installed tray" : "tray is not elevated";
                         logger.LogWarning(
-                            "Rejected {Verb} — {Reason} (pid {Pid}).",
+                            "Rejected {Verb} - {Reason} (pid {Pid}).",
                             request.Verb, reason, clientPid);
                         EventLogHelper.Denied(request.Verb, $"pid {clientPid}: {reason}");
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
@@ -709,7 +714,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     if (!isTrayElevated)
                     {
                         string reason = !isTray ? "not the installed tray" : "tray is not elevated";
-                        logger.LogWarning("Rejected {Verb} — {Reason} (pid {Pid}).", request.Verb, reason, clientPid);
+                        logger.LogWarning("Rejected {Verb} - {Reason} (pid {Pid}).", request.Verb, reason, clientPid);
                         EventLogHelper.Denied(request.Verb, $"pid {clientPid}: {reason}");
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("result", "Failed"), ct);
                         return;
@@ -769,7 +774,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     else
                     {
                         await PipeProtocol.WriteAsync(pipe, new PipeMessage("log",
-                            "No such job — it may have finished already."), ct);
+                            "No such job - it may have finished already."), ct);
                     }
 
                     await PipeProtocol.WriteAsync(pipe,
@@ -802,7 +807,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     if (_allowCli && !IsTrayAlive(_allowCliOwnerPid))
                     {
                         logger.LogInformation(
-                            "CLI gate owner (pid {Pid}) is gone — reverting to disabled.",
+                            "CLI gate owner (pid {Pid}) is gone - reverting to disabled.",
                             _allowCliOwnerPid);
                         CloseCliGate();
                     }
@@ -815,7 +820,7 @@ internal sealed class PipeServer(ElevationLauncher launcher, ILogger logger)
                     long expiresTicks = Interlocked.Read(ref _allowCliExpiresUtcTicks);
                     if (_allowCli && expiresTicks != 0 && DateTime.UtcNow.Ticks >= expiresTicks)
                     {
-                        logger.LogInformation("CLI gate expired — reverting to disabled.");
+                        logger.LogInformation("CLI gate expired - reverting to disabled.");
                         closedReason = "CLI gate expired";
                         CloseCliGate();
                     }
