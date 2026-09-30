@@ -13,6 +13,7 @@ What it removes (best-effort, continues past missing pieces):
   3. The Windows service "RunASHelper".
   4. Registry keys HKLM\\Software\\RunAsHelper and HKCU\\Software\\RunAsHelper.
   5. The leftover %ProgramFiles%\\RunAsHelper folder.
+  6. The machine PATH entry (the install dir the MSI added to the system PATH).
 
 Run from an elevated prompt, or just run it normally — it will relaunch itself
 elevated (UAC prompt) when needed.
@@ -231,6 +232,54 @@ def remove_install_folder() -> None:
         warn(f"Could not delete {target}: {exc}")
 
 
+def remove_path_entry() -> None:
+    """Strip the install dir from the machine PATH.
+
+    The MSI adds %ProgramFiles%\\RunAsHelper to the system PATH and removes it on a
+    normal uninstall; this covers the manual-scrub case where the MSI uninstall could
+    not run. The compare is case-insensitive and ignores a trailing backslash, so an
+    entry written either way is matched. After writing PATH back, broadcast
+    WM_SETTINGCHANGE so newly opened shells see the change (already-open shells keep
+    their old PATH).
+    """
+    import winreg
+
+    key_path = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    target = os.path.join(program_files, INSTALL_DIRNAME)
+    target_norm = os.path.normcase(os.path.normpath(target))
+    info(f"Removing {target} from the machine PATH ...")
+    if DRY_RUN:
+        info("DRY-RUN would strip the install dir from the machine PATH.")
+        return
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, key_path, 0,
+            winreg.KEY_READ | winreg.KEY_WRITE,
+        ) as key:
+            value, vtype = winreg.QueryValueEx(key, "Path")
+            entries = value.split(";")
+            # Keep every entry except ours; empty entries (a trailing ';') are kept
+            # as-is so the rest of PATH is left exactly as it was.
+            kept = [
+                e for e in entries
+                if not e or os.path.normcase(os.path.normpath(e)) != target_norm
+            ]
+            if len(kept) == len(entries):
+                info("Install dir was not on the machine PATH.")
+                return
+            winreg.SetValueEx(key, "Path", 0, vtype, ";".join(kept))
+    except FileNotFoundError:
+        info("Machine PATH value not found.")
+        return
+    except OSError as exc:  # noqa: BLE001 - report and continue
+        warn(f"Could not update the machine PATH: {exc}")
+        return
+    # HWND_BROADCAST=0xFFFF, WM_SETTINGCHANGE=0x1A, SMTO_ABORTIFHUNG=2.
+    ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x1A, 0, "Environment", 2, 5000, None)
+    ok(f"Removed {target} from the machine PATH.")
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main() -> int:
     global DRY_RUN
@@ -272,6 +321,7 @@ def main() -> int:
     delete_service()
     delete_registry_keys()
     remove_install_folder()
+    remove_path_entry()
 
     print("-" * 60)
     ok("Done." if not DRY_RUN else "Dry run complete — nothing was changed.")

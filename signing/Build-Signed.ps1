@@ -1,14 +1,16 @@
 <#
 .SYNOPSIS
-  Build a signed RunAS Helper release (both EXEs + the MSI), Authenticode-signed
-  with the Serenity Software code-signing certificate.
+  Build a signed RunAS Helper release (RunAsHelper.exe, RunAsHelper.com,
+  RunAsHelper.Service.exe + the MSI), Authenticode-signed with the Serenity
+  Software code-signing certificate.
 
 .DESCRIPTION
   Resolves signtool.exe (newest Windows SDK), resolves the signing certificate
   thumbprint (creating/reusing it via New-SigningCert.ps1 if not supplied), then
   runs the solution build with the signing MSBuild properties. The installer's
-  sign targets sign the two published EXEs before WiX packs them and sign the MSI
-  after link. A plain 'dotnet build' (without these properties) stays unsigned.
+  sign targets sign the three published binaries (RunAsHelper.exe,
+  RunAsHelper.com, RunAsHelper.Service.exe) before WiX packs them and sign the
+  MSI after link. A plain 'dotnet build' (without these properties) stays unsigned.
 
 .EXAMPLE
   .\signing\Build-Signed.ps1 -Version 1.5.3

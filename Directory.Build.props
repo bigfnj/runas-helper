@@ -18,9 +18,9 @@
   </PropertyGroup>
 
   <!--
-    Product identity stamped into both EXEs' Win32 version info (Properties →
-    Details) and matched by the MSI Manufacturer + the code-signing certificate
-    subject. Publisher/moniker is "Serenity Software"; author is BigFN'j.
+    Product identity stamped into all three binaries' Win32 version info
+    (Properties -> Details) and matched by the MSI Manufacturer + the code-signing
+    certificate subject. Publisher/moniker is "Serenity Software"; author is BigFN'j.
   -->
   <PropertyGroup>
     <Company>Serenity Software</Company>
