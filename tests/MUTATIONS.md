@@ -414,3 +414,21 @@ skips on an unsigned build), regression 15 / 0 / 1 (R12 now also requires three 
 `rah-*` entry left in %TEMP%. That suite run used B4 before the held connection; the held
 version passed on the same build afterwards. The dev build was then removed and the signed
 2.3.1 release reinstalled (install cycle 10/10).
+
+## Release v2.3.2 (2026-09-30, published from the tag)
+
+`release.yml` run 36747013597 green. Its prune step, on its first live run: "prune: 6
+release(s) in bigfnj/runas-helper; keeping the 3 most recent (deleting)", then "deleted
+release ... (tag kept)" for v2.2.0, v2.1.5 and v2.1.4, and "3 of 3 old release(s) deleted".
+The Releases page now holds v2.3.2, v2.3.1 and v2.3.0; all seven tags, v2.1.3 to v2.3.2,
+are still on the remote.
+
+`Invoke-ReleaseVerify.ps1 -Tag v2.3.2`: 8 pass / 0 fail. Asset `RunAsHelper-Setup-2.3.2.msi`
+(2,076,672 bytes, SHA-256 80B321CA6A85708E54CD236983D8DC990F26B7C183DB23E60187831E3FE896E0),
+signature Valid with thumbprint 0EEBB64D...BAD5 and a timestamp; MSI content 7/7 at 2.3.2; the
+three binaries in the administrative image Valid and timestamped; install cycle over the 2.3.1
+release 12/12 (T2 with the Run value cleared first); smoke 25 pass / 0 fail / 5 skip, with B4
+(the held-connection DACL check) and B16 green on the published build; regression 15 / 0 / 1.
+Then on the same install: service hardening 6 / 0 / 0 (H1 and H2 Process handles 0 before and
+0 after), self-test 17 of 17 mutations fired and 5 of 5 controls passed, no `rah-*` entry left
+in %TEMP%.
