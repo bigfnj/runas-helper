@@ -33,18 +33,6 @@ internal sealed class PipeClient
         => SendAsync(new LaunchRequest(commandLine, priority), ct);
 
     /// <summary>
-    /// Launch with an explicit working directory and window state (SW_* value).
-    /// Used by saved applications, which carry those settings.
-    /// </summary>
-    public Task<bool> LaunchElevatedAsync(
-        string commandLine,
-        uint priority,
-        string workingDirectory,
-        int showWindow,
-        CancellationToken ct = default)
-        => SendAsync(new LaunchRequest(commandLine, priority, "launch", workingDirectory, showWindow), ct);
-
-    /// <summary>
     /// Launch with working directory, window state, and account ("ti" for
     /// TrustedInstaller or "system" for LocalSystem).
     /// </summary>
@@ -262,7 +250,7 @@ internal sealed class PipeClient
         }
         catch (TimeoutException)
         {
-            Log("Could not connect to RunAsHelper service — connection timed out.");
+            Log("Could not connect to RunAsHelper service - connection timed out.");
             return false;
         }
         catch (Exception ex) when (ex is IOException or OperationCanceledException)
