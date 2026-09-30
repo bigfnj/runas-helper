@@ -264,9 +264,13 @@ jobs:
           # a release. Seven days is longer than anyone needs a dry-run build.
           retention-days: 7
 
+      # Pinned to a full commit SHA rather than the floating v3 tag. This is the only
+      # third-party action in the job, and its token can write the repository's
+      # contents and Releases: a tag can be moved to other code, a SHA cannot. To
+      # bump it, read the new release's notes and point this line at its commit.
       - name: Publish GitHub Release
         if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: ${{ steps.stage.outputs.asset }}
           generate_release_notes: true
