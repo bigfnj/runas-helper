@@ -79,10 +79,28 @@ build in CI, which is the alarm we want. Keep `PowerShellHost.cs`, `CliLaunchRes
 - Tray saved-entry `.ps1` host rule, the `/validate` dialog, dark mode: GUI, covered by
   the manual screenshot pass in the audit and by unit tests U4/B8 for the shared logic.
 
-## Phase 1 scope
+## Integration and release runs
 
-Slice C in Phase 1 runs only the read-only suites against the installed 2.2.0 build:
-regression (passes), smoke `-Baseline` (fails on the new-feature cases), the mutation
-self-test and the MSI-content check on the 2.2.0 MSI (fails). Install cycle and release
-verify change machine state and run only at integration; in Phase 1 they accept
-`-DryRun` and refuse otherwise.
+The suites have two modes. Against a 2.2.0 install, `Invoke-Regression.ps1` must pass and
+`Invoke-Smoke.ps1 -Baseline` must fail on every new-feature case. Against the new build:
+
+```
+pwsh -File tests\Invoke-InstallCycle.ps1 -MsiPath <msi> -ExpectedVersion X.Y.Z -Cycle -StartTray
+pwsh -File tests\Invoke-Smoke.ps1 -Phase All -ExpectedVersion X.Y.Z -Integration
+pwsh -File tests\Invoke-Regression.ps1 -NewBuild -AllowElevated -AllowMachineWrites -ExpectedVersion X.Y.Z
+pwsh -File tests\Invoke-AuditProbes.ps1
+pwsh -File tests\Invoke-ReleaseVerify.ps1 -Tag vX.Y.Z      # after the release workflow is green
+```
+
+`-Integration` (smoke) and `-NewBuild` (regression) enable the cases tagged
+`integration-only` and `needs-elevated`, including the ones that edit the trusted-caller
+policy, stop and start the service, and start the tray through the launcher. `-Only A1,B8`
+runs a subset. The install cycle, the audit probes and the release verify change machine
+state (the installed product, the service, the machine PATH); `-DryRun` prints their steps.
+
+Two lessons from the first integration run, both now built into the harness: a script
+that starts the tray must wait on its child process with `WaitForExit()` rather than
+`Start-Process -Wait`, because `-Wait` also waits for every descendant and the tray is
+one; and `Get-WinEvent` leaves `Message` empty for the RunAsHelper source (it registers
+no message file), so read the text with `Get-RunAsHelperEventText`, which falls back to
+the event's string properties.

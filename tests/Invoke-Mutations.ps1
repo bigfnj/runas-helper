@@ -9,6 +9,11 @@
   The gate is the reconciliation at the end: the set of cases that failed must equal
   the set of mutations, and every control must pass. Exit 0 when they match.
 #>
+param(
+    # With the new build installed, also run the integration mutations (MUT7-MUT13): each
+    # feeds a wrong expectation to the same operation an integration case performs.
+    [switch]$Integration
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
@@ -16,9 +21,13 @@ $here = $PSScriptRoot
 . (Join-Path $here 'lib\Env.ps1')
 . (Join-Path $here 'lib\Process.ps1')
 . (Join-Path $here 'lib\Msi.ps1')
+. (Join-Path $here 'lib\EventLog.ps1')
 
 $exe = Get-InstalledExe
+$com = Get-InstalledCom
+$svc = Get-InstalledService
 $comp = @{ __COMPAT_LAYER = 'RunAsInvoker' }
+$cn = Get-ComputerNameLocal
 $msi = 'D:\.ai-work\_backups\runas-helper-2.2.0-baseline\RunAsHelper-Setup-2.2.0.msi'
 
 Reset-Run
@@ -84,9 +93,63 @@ Invoke-Case -Id 'CTRL2-version-ok' -Name 'control: correct MSI-row count passes'
     Assert-Equal 1 @($files | Where-Object { $_ -eq 'RunAsHelper.exe' }).Count 'exe file rows'
 }
 
-# --- Reconciliation ---
 $expectedFail = @('MUT1-wrong-text', 'MUT2-wrong-exit', 'MUT3-pathext', 'MUT4-wrong-version', 'MUT5-bogus-hkcu', 'MUT6-wrong-source')
 $expectedPass = @('CTRL1-help-ok', 'CTRL2-version-ok')
+
+if ($Integration) {
+    # The same operations the integration cases perform, each with one wrong expectation.
+
+    Invoke-Case -Id 'MUT7-wrong-installed-version' -Name 'wrong expected installed FileVersion fires one fail (I4 logic)' -Test {
+        Assert-Equal (ConvertTo-FourPartVersion '9.9.9') (ConvertTo-FourPartVersion (Get-FileVersionOf $com)) '.com FileVersion (deliberately wrong)'
+    }
+
+    Invoke-Case -Id 'MUT8-folder-not-on-path' -Name 'a folder that is not on PATH fails the PATH check (A11/I5 logic)' -Test {
+        $entries = @(Get-MachinePathEntries)
+        Assert-True ($entries -contains 'C:\NotOnPath\RunAsHelperMutation') 'machine PATH contains a folder that is not there (deliberately wrong)'
+    }
+
+    Invoke-Case -Id 'MUT9-wrong-tray-title' -Name 'wrong expected tray title fires one fail (R8/T1 logic)' -Test {
+        $titles = @(Get-Process RunAsHelper -ErrorAction SilentlyContinue | ForEach-Object { $_.MainWindowTitle } | Where-Object { $_ })
+        if ($titles.Count -eq 0) { Skip-Case -Reason 'no tray window is open' }
+        Assert-Match 'RunAS Helper - v9\.9\.9' $titles[0] 'tray title (deliberately wrong)'
+    }
+
+    Invoke-Case -Id 'MUT10-wrong-event-source' -Name 'a Medium launch does not log Source: tray (B11 logic)' -Test {
+        $t = Get-Date
+        Invoke-Console -FilePath $com -TimeoutSec 20 -Env $comp -ArgumentList @('/capture', '/timeout:10', 'cmd', '/c', 'echo', "WITNESS-$cn") | Out-Null
+        $ev = @(Get-RunAsHelperEvents -Id 1001 -Since $t)
+        Assert-True ($ev.Count -ge 1) '1001 event present'
+        Assert-Match 'Source: tray' (Get-RunAsHelperEventText $ev[0]) 'event Source (deliberately wrong)'
+    }
+
+    Invoke-Case -Id 'MUT11-guard-exit-zero' -Name 'the service host run from a shell does not exit 0 (A9 logic)' -Test {
+        $r = Invoke-Console -FilePath $svc -ArgumentList @() -TimeoutSec 15
+        Assert-ExitCode 0 $r.ExitCode
+    }
+
+    Invoke-Case -Id 'MUT12-wrong-child-exit' -Name '/capture of exit 3 does not return 4 (B1 logic)' -Test {
+        $r = Invoke-Console -FilePath $com -TimeoutSec 30 -Env $comp -ArgumentList @('/capture', '/timeout:20', 'cmd', '/c', 'exit', '3')
+        Assert-ExitCode 4 $r.ExitCode
+    }
+
+    Invoke-Case -Id 'MUT13-timeout-not-zero' -Name 'a /timeout expiry does not return 0 (B2 logic)' -Test {
+        $r = Invoke-Console -FilePath $com -TimeoutSec 30 -Env $comp -ArgumentList @('/capture', '/timeout:2', 'cmd', '/c', 'ping -n 4 127.0.0.1 >nul')
+        Assert-ExitCode 0 $r.ExitCode
+    }
+
+    Invoke-Case -Id 'CTRL3-installed-version-ok' -Name 'control: the three installed binaries share one FileVersion' -Test {
+        $v = ConvertTo-FourPartVersion (Get-FileVersionOf $com)
+        Assert-Equal $v (ConvertTo-FourPartVersion (Get-FileVersionOf $exe)) 'exe FileVersion'
+        Assert-Equal $v (ConvertTo-FourPartVersion (Get-FileVersionOf $svc)) 'service FileVersion'
+    }
+
+    $expectedFail += @('MUT7-wrong-installed-version', 'MUT8-folder-not-on-path', 'MUT10-wrong-event-source', 'MUT11-guard-exit-zero', 'MUT12-wrong-child-exit', 'MUT13-timeout-not-zero')
+    $trayOpen = @(Get-Process RunAsHelper -ErrorAction SilentlyContinue | ForEach-Object { $_.MainWindowTitle } | Where-Object { $_ }).Count -gt 0
+    if ($trayOpen) { $expectedFail += 'MUT9-wrong-tray-title' }
+    $expectedPass += 'CTRL3-installed-version-ok'
+}
+
+# --- Reconciliation ---
 $rows = $global:RahRun.Rows
 $actualFail = @($rows | Where-Object { $_.Verdict -eq 'FAIL' } | ForEach-Object { $_.Id })
 $actualPass = @($rows | Where-Object { $_.Verdict -eq 'PASS' } | ForEach-Object { $_.Id })
@@ -107,5 +170,5 @@ if (-not $ok) {
     Write-Host 'RESULT: mutation self-test FAILED'
     exit 1
 }
-Write-Host 'RESULT: every mutation fired exactly once and both controls passed'
+Write-Host 'RESULT: every mutation fired exactly once and every control passed'
 exit 0
