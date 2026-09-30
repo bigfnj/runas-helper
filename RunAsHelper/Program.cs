@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Security.Principal;
 using System.Threading;
 using System.Windows.Forms;
 using RunAsHelper.Core;
@@ -67,6 +68,18 @@ namespace RunAsHelper
             {
                 ShowConsole();
                 RunJobsCommand(args[0]);
+                return;
+            }
+
+            // Trusted command-line user management (list / add / remove). The service
+            // limits these verbs to the installed elevated RunAsHelper, the same gate as
+            // /jobs, so they run from an elevated shell without the tray UI.
+            if (args.Length >= 1 &&
+                (args[0].Equals("/trusted", StringComparison.OrdinalIgnoreCase) ||
+                 args[0].StartsWith("/trusted:", StringComparison.OrdinalIgnoreCase)))
+            {
+                ShowConsole();
+                RunTrustedCommand(args);
                 return;
             }
 
@@ -152,8 +165,9 @@ namespace RunAsHelper
             string account       = "ti";
             bool   captureOutput = false;
             int    timeoutSecs   = 0;
+            PowerShellEdition psHost = PowerShellEdition.Unspecified;
 
-            // Consume leading /p:N, /as:ACCOUNT, /capture, /timeout:N flags in any order.
+            // Consume leading /p:N, /as:ACCOUNT, /capture, /timeout:N, /ps:5|7 flags in any order.
             int i = 0;
             for (; i < args.Length; i++)
             {
@@ -167,6 +181,16 @@ namespace RunAsHelper
                 else if (a.StartsWith("/timeout:", StringComparison.OrdinalIgnoreCase) &&
                          int.TryParse(a[9..], out int ts) && ts > 0)
                     timeoutSecs = ts;
+                else if (a.StartsWith("/ps:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!PowerShellSwitch.TryParse(a[4..], out psHost))
+                    {
+                        Console.Error.WriteLine(
+                            $"Unknown PowerShell host '{a[4..]}'. Use /ps:5 (Windows PowerShell 5.1) or /ps:7 (pwsh).");
+                        Environment.Exit(1);
+                        return;
+                    }
+                }
                 else
                     break;
             }
@@ -177,17 +201,20 @@ namespace RunAsHelper
 
             if (string.IsNullOrWhiteSpace(commandLine))
             {
-                Console.Error.WriteLine("Usage: RunAsHelper.exe [/capture] [/timeout:N] [/p:N] [/as:system|ti] <path> [args]");
-                Console.Error.WriteLine("Run  RunAsHelper.exe --help  for details.");
+                Console.Error.WriteLine("Usage: RunAsHelper [/capture] [/timeout:N] [/ps:5|7] [/p:N] [/as:system|ti] <path> [args]");
+                Console.Error.WriteLine("Run  RunAsHelper --help  for details.");
                 Environment.Exit(1);
                 return;
             }
 
             var client = new PipeClient();
             client.LogMessage += msg => Console.WriteLine(msg);
-            bool ok = client.LaunchFromCliAsync(commandLine, priority, account, captureOutput, timeoutSecs)
-                            .GetAwaiter().GetResult();
-            Environment.Exit(ok ? 0 : 1);
+            // CallerShell.Detect is a method group, invoked only for a .ps1 target when
+            // neither /ps: nor #Requires decided the host.
+            CliLaunchResult result = client
+                .LaunchFromCliAsync(commandLine, priority, account, captureOutput, timeoutSecs, psHost, CallerShell.Detect)
+                .GetAwaiter().GetResult();
+            Environment.Exit(result.ToProcessExitCode(captureOutput));
         }
 
         // /jobs        — list the launches currently holding a slot
@@ -201,12 +228,19 @@ namespace RunAsHelper
             {
                 if (!int.TryParse(arg[8..], out int logId))
                 {
-                    Console.Error.WriteLine("Usage: RunAsHelper.exe /joblog:<job id>   (see /jobs)");
+                    Console.Error.WriteLine("Usage: RunAsHelper /joblog:<job id>   (see /jobs)");
                     Environment.Exit(1);
                     return;
                 }
-                var lines = client.JobOutputAsync(logId).GetAwaiter().GetResult();
+                var (logOk, lines) = client.JobOutputAsync(logId).GetAwaiter().GetResult();
                 foreach (string line in lines) Console.WriteLine(line);
+                if (!logOk)
+                {
+                    Console.Error.WriteLine(
+                        $"Job {logId} is not available: it has finished, never existed, or this caller is not the installed RunAsHelper running elevated.");
+                    Environment.Exit(1);
+                    return;
+                }
                 if (lines.Count == 0) Console.WriteLine("(no output captured yet)");
                 Environment.Exit(0);
                 return;
@@ -216,7 +250,7 @@ namespace RunAsHelper
             {
                 if (!int.TryParse(arg[6..], out int id))
                 {
-                    Console.Error.WriteLine("Usage: RunAsHelper.exe /kill:<job id>   (see /jobs)");
+                    Console.Error.WriteLine("Usage: RunAsHelper /kill:<job id>   (see /jobs)");
                     Environment.Exit(1);
                     return;
                 }
@@ -230,7 +264,7 @@ namespace RunAsHelper
             if (!ok)
             {
                 Console.Error.WriteLine(
-                    "Could not read active jobs. This needs the installed RunAsHelper.exe running elevated.");
+                    "Could not read active jobs. This needs the installed RunAsHelper running elevated.");
                 Environment.Exit(1);
                 return;
             }
@@ -255,6 +289,145 @@ namespace RunAsHelper
                     $"{account,-16} {job.Source,-5} {pid,-7} {job.CommandLine}");
             }
             Environment.Exit(0);
+        }
+
+        // /trusted              — list the trusted command-line user SIDs and accounts
+        // /trusted:add <acct>    — trust a user (SID or DOMAIN\user; groups are refused)
+        // /trusted:remove <acct> — stop trusting a user (a SID need not still resolve)
+        private static void RunTrustedCommand(string[] args)
+        {
+            var client = new PipeClient();
+            client.LogMessage += msg => Console.WriteLine(msg);
+
+            string verb = args[0];
+
+            if (verb.Equals("/trusted", StringComparison.OrdinalIgnoreCase))
+            {
+                var (ok, sids) = client.ListTrustedCallersAsync().GetAwaiter().GetResult();
+                if (!ok)
+                {
+                    Console.Error.WriteLine(
+                        "Could not read trusted command-line users. This needs the installed RunAsHelper run from an elevated shell (or the elevated tray).");
+                    Environment.Exit(1);
+                    return;
+                }
+                if (sids.Count == 0)
+                {
+                    Console.WriteLine("No trusted command-line users.");
+                    Environment.Exit(0);
+                    return;
+                }
+                // One SID<TAB>account per line, no header, so an agent can parse it.
+                foreach (string sid in sids)
+                {
+                    string display = WindowsAccountResolver.TryResolveSid(sid, out var account, out string error)
+                        ? account!.AccountName
+                        : $"(unresolved: {error})";
+                    Console.WriteLine($"{sid}\t{display}");
+                }
+                Environment.Exit(0);
+                return;
+            }
+
+            if (verb.Equals("/trusted:add", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length < 2)
+                {
+                    Console.Error.WriteLine("Usage: RunAsHelper /trusted:add <SID | DOMAIN\\user>");
+                    Environment.Exit(1);
+                    return;
+                }
+                if (!TryCanonicalSid(args[1], out string sid, out string display, out string err))
+                {
+                    Console.Error.WriteLine(err);
+                    Environment.Exit(1);
+                    return;
+                }
+                // The service still refuses a group principal and reports it as a log line,
+                // which the LogMessage hook prints; the SID that resolved may already be present.
+                bool ok = client.AddTrustedCallerAsync(sid).GetAwaiter().GetResult();
+                if (ok)
+                {
+                    Console.WriteLine($"Trusted: {display} ({sid})");
+                    Environment.Exit(0);
+                }
+                else
+                {
+                    Console.Error.WriteLine(
+                        $"Could not add {display}. This needs the installed RunAsHelper run from an elevated shell, and the account must be a user.");
+                    Environment.Exit(1);
+                }
+                return;
+            }
+
+            if (verb.Equals("/trusted:remove", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length < 2)
+                {
+                    Console.Error.WriteLine("Usage: RunAsHelper /trusted:remove <SID | DOMAIN\\user>");
+                    Environment.Exit(1);
+                    return;
+                }
+                if (!TryCanonicalSid(args[1], out string sid, out string display, out string err))
+                {
+                    Console.Error.WriteLine(err);
+                    Environment.Exit(1);
+                    return;
+                }
+                bool ok = client.RemoveTrustedCallerAsync(sid).GetAwaiter().GetResult();
+                if (ok)
+                {
+                    Console.WriteLine($"Removed: {sid}");
+                    Environment.Exit(0);
+                }
+                else
+                {
+                    Console.Error.WriteLine(
+                        $"Could not remove {display}. This needs the installed RunAsHelper run from an elevated shell.");
+                    Environment.Exit(1);
+                }
+                return;
+            }
+
+            Console.Error.WriteLine(
+                "Usage: RunAsHelper /trusted | /trusted:add <SID|DOMAIN\\user> | /trusted:remove <SID>");
+            Environment.Exit(1);
+        }
+
+        // Turns a SID string or an account name into a canonical SID. A SID is accepted on
+        // valid syntax alone (the service validates it is a user, and a deleted account must
+        // stay removable); a name must resolve through LSA to a user SID.
+        private static bool TryCanonicalSid(string input, out string sid, out string display, out string error)
+        {
+            sid = string.Empty;
+            display = input;
+            error = string.Empty;
+            input = input.Trim();
+
+            if (input.StartsWith("S-1-", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    sid = new SecurityIdentifier(input).Value;
+                }
+                catch (ArgumentException)
+                {
+                    error = $"\"{input}\" is not a valid Windows SID.";
+                    return false;
+                }
+                display = WindowsAccountResolver.TryResolveSid(sid, out var account, out _)
+                    ? account!.AccountName
+                    : sid;
+                return true;
+            }
+
+            if (WindowsAccountResolver.TryResolveUser(input, out var resolved, out error))
+            {
+                sid = resolved!.Sid;
+                display = resolved.AccountName;
+                return true;
+            }
+            return false;
         }
 
         private static uint PriorityFromCode(char code) => code switch
