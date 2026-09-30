@@ -395,8 +395,11 @@ try {
             Assert-ExitCode 1 $r2.ExitCode
             Assert-Match 'Usage: RunAsHelper' $r2.Stderr '/p: usage line on stderr'
             Assert-NotMatch 'Args detected' ($r1.Stdout + $r2.Stdout) 'no service log line (the pipe was never used)'
-            $ev = @(Get-RunAsHelperEvents -Id @(1001, 1003) -Since $t)
-            Assert-Equal 0 $ev.Count 'RunAsHelper 1001/1003 events since the case started'
+            # On 2.3.0 the malformed token became the launch target, so the service logged a
+            # 1001 or 1003 whose text carries it. Match on the text: an event count alone can
+            # pick up the previous case's event when both fall in the same second.
+            $ev = @(Get-RunAsHelperEvents -Id @(1001, 1003) -Since $t | Where-Object { (Get-RunAsHelperEventText $_) -match '/timeout:abc|/p:' })
+            Assert-Equal 0 $ev.Count 'RunAsHelper events naming the malformed switch since the case started'
         }
 
         Invoke-Case -Id 'B15' -Name '/timeout without /capture prints the ignored line and exits 0' -Test {

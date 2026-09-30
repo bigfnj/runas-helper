@@ -230,3 +230,47 @@ a read-only replay of its matching rule against the live machine PATH (43 entrie
 REG_EXPAND_SZ) would remove exactly one entry, `C:\Program Files\RunAsHelper\`, and keep
 the other 42; `HKLM\SOFTWARE\RunAsHelper\InstallFolder` names the same folder. Not run
 for real (the MSI is installed and the box is in use).
+
+## v2.3.1 audit fixes (service slice, unit level)
+
+`RunAsHelper.Service/Core/CaptureDecoder.cs` gained two pure types, `LineSplitter` and
+`CaptureRelay`, with 16 new tests (LineSplitterTests, CaptureRelayTests). Each mutation was
+applied to the source once and restored:
+
+| Mutation | Observed |
+|---|---|
+| LF-only split (`else if (b == '\r')` disabled) | 6 of 11 LineSplitterTests failed, first BareCr_EndsALine |
+| a CR ends the line at once (run not absorbed) | 5 failed, first CrCrLf_IsOneTerminator |
+| line cap check disabled | LineAboveTheCap_IsEmittedInPieces, SmallCap_IsHonoured failed |
+| a failed send classified ReadFailed instead of ClientGone | ClientDisconnects_MidStream_EndsTheSessionAndDisposesTheReadEnd failed at its 10 s guard |
+| `CancelAfter(drainGrace)` removed | ChildExits_ButDescendantHoldsThePipe_DrainIsCutShortAfterTheGrace failed at its 10 s guard |
+| `output.DisposeAsync()` removed from the relay finally | 3 CaptureRelayTests failed |
+| final `splitter.Flush()` at EOF skipped | ChildExits_AndThePipeReachesEof_DrainCompletes failed |
+
+## v2.3.1 integration (2026-09-30)
+
+Merged tree = slices S + D on `integrate/v2.3.1`; Release build green; 105 unit tests pass
+(the SourceHygieneTests case that was red on the v2.3.0 PipeServer text is green once the
+service slice's ASCII fix is in). MSI content 7/7 at 2.3.1.
+
+`tests/Invoke-ServiceHardening.ps1` (H1 to H6) against the installed 2.3.0, before the
+upgrade, as the suite's mutation evidence: 1 pass / 5 fail. H1 left jobs listed until /kill,
+H2 grew the handle count by 28 over five runs, H3 waited the full 20 s ping, H4's silent
+connection was never closed (60 s guard), H6 exited 1 with nothing printed. H5 passed on 2.3.0
+because the harness's process reader itself splits on CR and masked the embedded CRs; it now
+reads the launcher's raw stdout bytes through a cmd file redirect, which fails on 2.3.0.
+
+Install cycle with the 2.3.1 dev MSI over 2.3.0: 12/12, tray titled `RunAS Helper - v2.3.1`.
+Smoke `-Integration`: 27 pass / 5 skip after one harness fix: B14 first failed on an event
+count because `Get-WinEvent`'s StartTime filter truncates to whole seconds and picked up
+B13's 1003 from the same second; the event helper now filters on the exact timestamp and
+B14 matches the malformed token in the event text. B13, B14, B15 rerun: 3 pass. Regression
+`-NewBuild`: 15 pass / 1 skip.
+
+Hardening on 2.3.1: H2 to H6 pass on the first run (H3 returned in 3.8 s, H4 closed at
+30.0 s, H5 three CRLF lines, H6 five 1 MiB pieces). H1 cleared its jobs but failed its
+handle threshold twice (+3, then +37 over five runs) while H2 showed no growth: the service's
+TOTAL handle count is not a leak instrument (a type histogram from an elevated `handle.exe`
+showed the growth was Event +17, Thread +7, Mutant +2: thread-pool threads spun up by the
+runs), so H1 and H2 now count Process-type handles, which is what 2.3.0 leaked: 0 before and
+0 after on 2.3.1 for both. Harness self-test `-Integration`: 12 fired, 3 controls.

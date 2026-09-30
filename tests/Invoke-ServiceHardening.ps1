@@ -6,14 +6,20 @@
   keeps the output pipe open, a silent connection, bare-CR redraws and a very long line.
 .DESCRIPTION
   Each case fails on an installed 2.3.0 service and passes on 2.3.1, so a run against 2.3.0
-  is the mutation evidence for the suite (-ExpectVersion 2.3.0 records that expectation in
-  the title). Runs from a non-elevated shell whose SID is a trusted caller; the elevated
-  /jobs and /kill calls go through Invoke-Elevated. Leaves no launch slot held: leftover
-  jobs are ended through /kill in the finally block.
+  is the mutation evidence for the suite (-ExpectedVersion records which build ran in the
+  title). Runs from a non-elevated shell whose SID is a trusted caller; the elevated /jobs,
+  /kill and handle.exe calls go through Invoke-Elevated. Leaves no launch slot held:
+  leftover jobs are ended through /kill in the finally block.
+
+  Handle leaks are measured on PROCESS-type handles of the service (Sysinternals handle.exe,
+  elevated), not on the total handle count: the total moves by tens either way with
+  thread-pool and finalizer timing, while the 2.3.0 defect leaked exactly one process
+  handle per run.
 #>
 param(
     [string]$ExpectedVersion,
-    [switch]$AllowElevated
+    [switch]$AllowElevated,
+    [string[]]$Only
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -29,13 +35,25 @@ if (-not (Test-Path $com)) { throw "installed RunAsHelper.com not found at $com"
 
 $skipTags = @()
 if (-not $AllowElevated) { $skipTags += 'needs-elevated' }
-Reset-Run -Filter @{ SkipTags = $skipTags; Integration = $true }
+$filter = @{ SkipTags = $skipTags; Integration = $true }
+if ($Only) { $filter.Only = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+Reset-Run -Filter $filter
 
 function Get-ServiceHandleCount {
     $p = Get-Process RunAsHelper.Service -ErrorAction SilentlyContinue
     if ($null -eq $p) { throw 'service process not found' }
     $p.Refresh()
     $p.HandleCount
+}
+
+function Get-ServiceProcessHandleCount {
+    # Counts the service's handles of type Process with Sysinternals handle.exe (needs
+    # administrator rights for a SYSTEM process). Returns -1 when handle.exe is unavailable.
+    $svc = Get-Process RunAsHelper.Service -ErrorAction SilentlyContinue
+    if ($null -eq $svc) { throw 'service process not found' }
+    if (-not (Get-Command handle.exe -ErrorAction SilentlyContinue)) { return -1 }
+    $r = Invoke-Elevated -FilePath 'handle.exe' -ArgumentList @('-accepteula', '-nobanner', '-a', '-p', "$($svc.Id)") -TimeoutSec 120
+    @($r.Output | Where-Object { $_ -match ':\s+Process\s' }).Count
 }
 
 function Start-CaptureAndDropClient {
@@ -65,11 +83,19 @@ function Get-ActiveJobIds {
     @($r.Output | Where-Object { $_ -match '^\s*(\d+)\s+\d+:\d\d' } | ForEach-Object { [int]$Matches[1] })
 }
 
+function Assert-NoProcessHandleLeak {
+    param([int]$Before, [int]$After, [int]$TotalBefore, [int]$TotalAfter, [int]$Runs, [string]$Label)
+    Write-Host ("  process handles: before {0} after {1}; total handles: before {2} after {3} (information only)" -f $Before, $After, $TotalBefore, $TotalAfter)
+    if ($Before -lt 0) { Skip-Case -Reason 'handle.exe (Sysinternals) is not on PATH, so process handles cannot be counted' }
+    Assert-True (($After - $Before) -lt $Runs) "${Label}: process-handle growth $($After - $Before) stays below one per run (2.3.0 leaked one per run)"
+}
+
 $W = New-WorkDir
 try {
-    Invoke-Case -Id 'H1' -Name 'client dropped mid-stream: no job left, slot released, no handle growth (L3-14, L3-01)' -Tags @('needs-elevated') -Test {
+    Invoke-Case -Id 'H1' -Name 'client dropped mid-stream: no job left, slot released, no process-handle leak (L3-14, L3-01)' -Tags @('needs-elevated') -Test {
         Wait-Until -TimeoutSec 60 -Condition { @(Get-ServiceChildren).Count -eq 0 } | Out-Null
-        $h0 = Get-ServiceHandleCount
+        $t0 = Get-ServiceHandleCount
+        $p0 = Get-ServiceProcessHandleCount
         $ended = 0
         foreach ($i in 1..5) {
             $r = Start-CaptureAndDropClient -Arguments @('/capture', '/as:system', 'cmd', '/c', 'for /l %i in (1,1,100000) do @echo line %i') -KillAfterMs 1000
@@ -80,23 +106,20 @@ try {
         Assert-True $none 'no job is still listed 15 s after the clients dropped (2.3.0 keeps them until /kill)'
         Wait-Until -TimeoutSec 60 -Condition { @(Get-ServiceChildren).Count -eq 0 } | Out-Null
         Start-Sleep -Seconds 3
-        $h1 = Get-ServiceHandleCount
-        Write-Host "  handles: before $h0 after $h1"
-        Assert-True (($h1 - $h0) -le 2) "service handle growth $($h1 - $h0) is at most 2 (2.3.0 grows by at least one per run)"
+        Assert-NoProcessHandleLeak -Before $p0 -After (Get-ServiceProcessHandleCount) -TotalBefore $t0 -TotalAfter (Get-ServiceHandleCount) -Runs 5 -Label 'dropped clients'
     }
 
-    Invoke-Case -Id 'H2' -Name 'timeout fires with the client gone: no handle growth (L3-02)' -Tags @('needs-elevated') -Test {
+    Invoke-Case -Id 'H2' -Name 'timeout fires with the client gone: no process-handle leak (L3-02)' -Tags @('needs-elevated') -Test {
         Wait-Until -TimeoutSec 60 -Condition { @(Get-ServiceChildren).Count -eq 0 } | Out-Null
-        $h0 = Get-ServiceHandleCount
+        $t0 = Get-ServiceHandleCount
+        $p0 = Get-ServiceProcessHandleCount
         foreach ($i in 1..5) {
             Start-CaptureAndDropClient -Arguments @('/capture', '/timeout:5', '/as:system', 'cmd', '/c', 'ping -n 12 127.0.0.1 >nul') -KillAfterMs 2000 | Out-Null
             Start-Sleep -Seconds 7
         }
         Wait-Until -TimeoutSec 60 -Condition { @(Get-ServiceChildren).Count -eq 0 } | Out-Null
         Start-Sleep -Seconds 3
-        $h1 = Get-ServiceHandleCount
-        Write-Host "  handles: before $h0 after $h1"
-        Assert-True (($h1 - $h0) -le 2) "service handle growth $($h1 - $h0) is at most 2 (2.3.0 leaks one process handle per run)"
+        Assert-NoProcessHandleLeak -Before $p0 -After (Get-ServiceProcessHandleCount) -TotalBefore $t0 -TotalAfter (Get-ServiceHandleCount) -Runs 5 -Label 'timeouts with the client gone'
     }
 
     Invoke-Case -Id 'H3' -Name 'a descendant holding the output pipe does not defeat /timeout (L3-03)' -Test {
@@ -128,12 +151,18 @@ try {
     }
 
     Invoke-Case -Id 'H5' -Name 'bare-CR redraws arrive as separate lines and no line ends in CR (L1-03)' -Test {
-        $r = Invoke-Console -FilePath $com -TimeoutSec 30 -Env $comp -ArgumentList @('/capture', '/timeout:15', '/as:system', 'powershell', '-NoProfile', '-Command',
-            "[Console]::Out.Write('10%' + [char]13 + '20%' + [char]13 + '30%' + [char]13 + [char]10)")
-        $lines = @($r.Stdout -split "`r?`n" | Where-Object { $_ -match '^\d\d%$' })
-        Assert-Equal 3 $lines.Count "three redraw lines (got: $($lines -join ','))"
-        $r2 = Invoke-Console -FilePath $com -TimeoutSec 30 -Env $comp -ArgumentList @('/capture', '/timeout:15', '/as:system', 'cmd', '/c', 'echo abc')
-        Assert-NotMatch "abc`r`r" $r2.Stdout 'no doubled CR after a cmd echo line'
+        # Invoke-Console's process reader splits on CR itself and would mask the defect, so
+        # capture the launcher's raw stdout bytes through a cmd file redirect instead.
+        $out = Join-Path $W 'h5-redraw.bin'
+        $cmdLine = '"' + $com + '" /capture /timeout:15 /as:system powershell -NoProfile -Command "[Console]::Out.Write(''10%'' + [char]13 + ''20%'' + [char]13 + ''30%'' + [char]13 + [char]10)" > "' + $out + '" 2>&1'
+        $env:__COMPAT_LAYER = 'RunAsInvoker'
+        & cmd.exe /d /c $cmdLine | Out-Null
+        $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($out))
+        $lineWithCr = [regex]::Matches($text, '\d\d%\r\n').Count
+        Write-Host ("  redraw lines terminated by CRLF: {0}; embedded CR between redraws: {1}" -f $lineWithCr, ($text -match '%\r\d\d%'))
+        Assert-Equal 3 $lineWithCr 'three redraws each on its own CRLF-terminated line (2.3.0 delivers one line with embedded CRs)'
+        Assert-True (-not ($text -match '%\r\d\d%')) 'no bare CR left between redraws'
+        Assert-True (-not ($text -match '\r\r\n')) 'no line ends in a doubled CR'
     }
 
     Invoke-Case -Id 'H6' -Name 'a 5 MiB line is delivered in 1 MiB pieces instead of dropping the client (L3-04)' -Test {

@@ -15,7 +15,11 @@ function Get-RunAsHelperEvents {
     if ($Id) { $filter.Id = $Id }
     if ($Since) { $filter.StartTime = $Since }
     try {
+        # The hashtable StartTime filter truncates to whole seconds, so a case that starts
+        # in the same second as the previous case's last event would see that event too.
+        # Filter again on the exact timestamp.
         @(Get-WinEvent -FilterHashtable $filter -MaxEvents $Max -ErrorAction Stop |
+            Where-Object { -not $Since -or $_.TimeCreated -ge $Since } |
             Sort-Object TimeCreated -Descending)
     } catch {
         # No matching events is not an error for our purposes.
