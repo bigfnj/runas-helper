@@ -7,6 +7,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RunAsHelper", "RunAsHelper\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RunAsHelper.Service", "RunAsHelper.Service\RunAsHelper.Service.csproj", "{C3D4E5F6-A7B8-9012-CDEF-3D4E5F607182}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RunAsHelper.Launcher", "RunAsHelper.Launcher\RunAsHelper.Launcher.csproj", "{7B1C2D3E-4F50-4A61-9B72-83C4D5E6F701}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RunAsHelper.Tests", "RunAsHelper.Tests\RunAsHelper.Tests.csproj", "{A1B2C3D4-E5F6-4708-9A1B-2C3D4E5F6071}"
+EndProject
 Project("{930C7802-8A8C-48F9-8165-68863BCCD9DD}") = "RunAsHelper.Installer", "RunAsHelper.Installer\RunAsHelper.Installer.wixproj", "{D4E5F607-B8C9-0123-DEF0-4E5F60718293}"
 EndProject
 Global
@@ -23,6 +27,14 @@ Global
 		{C3D4E5F6-A7B8-9012-CDEF-3D4E5F607182}.Debug|x64.Build.0 = Debug|AnyCPU
 		{C3D4E5F6-A7B8-9012-CDEF-3D4E5F607182}.Release|x64.ActiveCfg = Release|AnyCPU
 		{C3D4E5F6-A7B8-9012-CDEF-3D4E5F607182}.Release|x64.Build.0 = Release|AnyCPU
+		{7B1C2D3E-4F50-4A61-9B72-83C4D5E6F701}.Debug|x64.ActiveCfg = Debug|AnyCPU
+		{7B1C2D3E-4F50-4A61-9B72-83C4D5E6F701}.Debug|x64.Build.0 = Debug|AnyCPU
+		{7B1C2D3E-4F50-4A61-9B72-83C4D5E6F701}.Release|x64.ActiveCfg = Release|AnyCPU
+		{7B1C2D3E-4F50-4A61-9B72-83C4D5E6F701}.Release|x64.Build.0 = Release|AnyCPU
+		{A1B2C3D4-E5F6-4708-9A1B-2C3D4E5F6071}.Debug|x64.ActiveCfg = Debug|AnyCPU
+		{A1B2C3D4-E5F6-4708-9A1B-2C3D4E5F6071}.Debug|x64.Build.0 = Debug|AnyCPU
+		{A1B2C3D4-E5F6-4708-9A1B-2C3D4E5F6071}.Release|x64.ActiveCfg = Release|AnyCPU
+		{A1B2C3D4-E5F6-4708-9A1B-2C3D4E5F6071}.Release|x64.Build.0 = Release|AnyCPU
 		{D4E5F607-B8C9-0123-DEF0-4E5F60718293}.Debug|x64.ActiveCfg = Debug|x64
 		{D4E5F607-B8C9-0123-DEF0-4E5F60718293}.Release|x64.ActiveCfg = Release|x64
 		{D4E5F607-B8C9-0123-DEF0-4E5F60718293}.Release|x64.Build.0 = Release|x64
@@ -30,6 +42,7 @@ Global
 	GlobalSection(ProjectDependencies) = postSolution
 		{D4E5F607-B8C9-0123-DEF0-4E5F60718293}.0 = {A3F9C841-B78E-4E3C-9A5D-1B2C3D4E5F60}
 		{D4E5F607-B8C9-0123-DEF0-4E5F60718293}.1 = {C3D4E5F6-A7B8-9012-CDEF-3D4E5F607182}
+		{D4E5F607-B8C9-0123-DEF0-4E5F60718293}.2 = {7B1C2D3E-4F50-4A61-9B72-83C4D5E6F701}
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
