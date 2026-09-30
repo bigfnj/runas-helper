@@ -124,29 +124,33 @@ ships, update them to the bare `RunAsHelper` form.
 
 ## Decisions taken (v2.3.0)
 
-Condensed from the approved plan. Where a decision reversed a note above, it wins.
+Condensed from the approved plan. Where a decision reversed a note above, it wins. The
+numbers are how BACKLOG.md, tests/CLAIMS.md and tests/MUTATIONS.md refer to these
+decisions ("plan decision 6").
 
-- **The `.com` is a C# framework-dependent single-file console app**, renamed to
-  `RunAsHelper.com` in its own project after publish (an apphost cannot be renamed by
-  `TargetExt`), so every publish path, dev, CI and installer, produces the exact file
-  that ships and is signed. NativeAOT stays in the backlog unless startup exceeds about
-  150 ms; the probe measured it well under that.
-- **The launcher runs the child with inherited handles** (not a pipe pump), decided by
-  the Phase 0 probe below.
-- **The launcher sets `__COMPAT_LAYER=RunAsInvoker`** so the child runs at the caller's
-  level. From an elevated shell the child is the installed exe running elevated, so it
-  keeps the tray-level identity; from a normal shell it runs non-elevated and needs a
-  trusted SID or the session gate.
-- **Ctrl+C is handled by the launcher, not ignored.** The GUI child never sees console
-  control events, so the launcher terminates its exe child and exits `0xC000013A`,
-  printing one line that the elevated target may still be running and to check
-  `RunAsHelper /jobs`. This supersedes the "ignore Ctrl+C and keep waiting" note above.
-- **`/ps:` overrides `#Requires`.** For a `.ps1` target the host is chosen by `/ps:`,
-  then `#Requires`, then the caller's shell, then Windows PowerShell 5.1, and one log
-  line names the host and the reason.
-- **With `/capture` the exit code is the child's own**, a timeout exits 124, and
-  RunAsHelper's own failures exit 1.
-- **The service exe refuses to start from a shell** once the install folder is on PATH.
+1. **The `.com` is a C# framework-dependent single-file console app**, renamed to
+   `RunAsHelper.com` in its own project after publish (an apphost cannot be renamed by
+   `TargetExt`), so every publish path, dev, CI and installer, produces the exact file
+   that ships and is signed. NativeAOT stays in the backlog unless startup exceeds about
+   150 ms; the probe measured it well under that.
+2. **The launcher runs the child with inherited handles** (not a pipe pump), decided by
+   the Phase 0 probe below.
+3. **The launcher sets `__COMPAT_LAYER=RunAsInvoker`** so the child runs at the caller's
+   level. From an elevated shell the child is the installed exe running elevated, so it
+   keeps the tray-level identity; from a normal shell it runs non-elevated and needs a
+   trusted SID or the session gate.
+4. **Ctrl+C is handled by the launcher, not ignored.** The GUI child never sees console
+   control events, so the launcher terminates its exe child and exits `0xC000013A`,
+   printing one line that the elevated target may still be running. (2.3.1 corrected
+   that line: ending the exe breaks the pipe and the service releases the job, so the
+   target is no longer listed by `/jobs`.) This supersedes the "ignore Ctrl+C and keep
+   waiting" note above.
+5. **`/ps:` overrides `#Requires`.** For a `.ps1` target the host is chosen by `/ps:`,
+   then `#Requires`, then the caller's shell, then Windows PowerShell 5.1, and one log
+   line names the host and the reason.
+6. **With `/capture` the exit code is the child's own**, a timeout exits 124, and
+   RunAsHelper's own failures exit 1.
+7. **The service exe refuses to start from a shell** once the install folder is on PATH.
 
 ## Phase 0 probe result (2026-09-29, this box)
 
