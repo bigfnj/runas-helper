@@ -1128,8 +1128,11 @@ key: a local `dotnet build`, a fork, or a CI run with no access to the secret. T
 identifies the tray by install path for exactly that reason.
 
 The full item list, each with a disposition and evidence, is in
-[BACKLOG.md](BACKLOG.md); its Open section is empty. The three long-standing items this
-section has tracked are:
+[BACKLOG.md](BACKLOG.md). Its Open section holds the items found by the 2026-09-30 wrap-up
+audit and not yet shipped (BL-49 to BL-52: a clipped How to Use dialog, an event source
+without a message file, a capture frame cap that JSON escaping can still exceed, and a slot
+held by a silent child after its client closes). The three long-standing items this section
+has tracked are:
 
 - **A publicly trusted certificate.** Releases are signed by a self-signed certificate, so
   Windows reports an unknown publisher and SmartScreen warns on first download. The intended
