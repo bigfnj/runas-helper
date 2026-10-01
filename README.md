@@ -1126,9 +1126,12 @@ the docs now describe what the tool actually does. Everything delivered along th
 
 ## Project status
 
-**The broad feature backlog was closed at v2.1.5.** A focused addition since then
-provides persistent, exact-user CLI authorization without changing the existing
-session-wide gate. Publisher pinning remains blocked on a purchased certificate
+**The broad feature backlog was closed at v2.1.5.** Two focused additions followed.
+2.2.0 added persistent, exact-user CLI authorization without changing the existing
+session-wide gate, and 2.3.0 added the `RunAsHelper.com` console launcher, real exit
+codes, the `.ps1` host rule and the `/trusted` verbs. 2.3.1 to 2.3.3 add no features:
+they ship fixes from the post-release audit of 2.3.0, a review of the test harness and
+the wrap-up audit of 2.3.2. Publisher pinning remains blocked on a purchased certificate
 (pinning the self-signed one would break unsigned official builds), AD-group
 authorization is deliberately not part of the trusted-user feature, and a
 per-launch justification field earns its keep only when someone *other* than the

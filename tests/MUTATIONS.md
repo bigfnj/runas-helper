@@ -328,13 +328,13 @@ on $null threw first; when rc.txt was never written it did run, and returned the
 own code as the target's (S-K2 later measured 64 for a target that exits 7). The helper now
 removes its folder on every path and throws "recorded no exit code" instead of returning a number.
 
-Proof (session scratchpad `p7\elevated-proof.ps1`): E1, a console target running `exit 7`,
+Proof (`p7\elevated-proof.ps1`; it and every other `p7\` proof in this file are kept, as records, in `D:\.ai-work\ops\scripts\runas-helper\proofs\p7\`, outside the repo): E1, a console target running `exit 7`,
 returns 7; E2, the installed exe, and E3, a missing path, both throw the named error and
 report runner exit 0; no case leaves a folder. The same proof against the HEAD copy of the
 helper: E1 PASS, E2 and E3 FAIL on "work folders left behind" with the old error "You cannot
 call a method on a null-valued expression".
 
-BL-46, the release prune. `.github/scripts/Remove-OldReleases.ps1` (session scratchpad
+BL-46, the release prune. `.github/scripts/Remove-OldReleases.ps1` (proof
 `p7\prune-proof.ps1`, never with `-Apply`): P1 a dry run on the real repo lists v2.1.5 and
 v2.1.4 and deletes nothing; P2 `-Keep 10` prints "nothing to delete"; P3 a release whose tag
 is not on the remote is skipped. 3 pass. Mutant M1 without the tag guard fails P3; mutant M2
@@ -343,7 +343,7 @@ held one) fails P1. Each mutant: 2 pass / 1 fail. Every release tag is on the re
 
 ### Harness sweep
 
-Dispositions are BACKLOG HS-01 to HS-32. Proofs (session scratchpad `p7\sweep-proofs.ps1`,
+Dispositions are BACKLOG HS-01 to HS-32. Proofs (`p7\sweep-proofs.ps1`,
 the function under test taken verbatim from each tree), run against the fixed harness and
 against a worktree at 0b3e40e:
 
@@ -386,7 +386,7 @@ hardening 6 / 0 / 0, self-test 16 mutations fired of 16 expected and 5 controls 
 A second read-only workflow reviewed the sweep's own diff: 23 findings, 22 confirmed and 1
 refuted (BACKLOG HR-01 to HR-23). One was a product defect, BL-48.
 
-BL-48, the pipe DACL after a trust change. On 2.3.1 (session scratchpad
+BL-48, the pipe DACL after a trust change. On 2.3.1 (proof
 `p7\v4-verify.ps1`: the change B4 makes, plus one restart): after `/trusted:remove` the live
 DACL already lacked the SID's ACE, but after `/trusted:add`, following a restart, the SID had
 no ACE of its own until the next restart. Private pipes, current user only
@@ -508,8 +508,10 @@ which used the old pins, report 9 misses (the five log lines, the artifact, and 
 outcomes). The checker is kept at `D:\.ai-work\ops\scripts\runas-helper\release-dryrun.ps1`
 (`-RunId` validates an existing run instead of dispatching one).
 
-The publish step has not run on v3 yet. The next tag push is its first live run: its log must
-show "Release ready at", and its Node 20 annotation must name no action.
+The publish step had not run on v3 yet when this was written; the next tag push was to be its
+first live run, with "Release ready at" in its log and no action named in a Node 20
+annotation. It ran at the v2.3.3 tag push (release run 36821234383), clean on both counts; see
+Release v2.3.3 below.
 
 ## How to Use on the installed 2.3.2 (2026-09-30)
 

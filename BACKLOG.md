@@ -73,7 +73,9 @@ docs/console-launcher-plan.md; "decision N" means the numbered list in the same 
 Finder lanes L1 (regressions, non-operable), L2 (dead code, calls that go nowhere), L3
 (handle lifetime, optimization), L4 (security, docs truth, CI and repo hygiene) and C0 (the
 completeness critic). Every row was checked by an adversarial verifier; 56 CONFIRMED, 1
-PLAUSIBLE (L3-08), 10 critic additions. Evidence for FIXED rows: the unit test or harness case,
+PLAUSIBLE (L3-08), 10 critic additions. Four rows carry two ids, one per lane that reported the
+same defect (L1-02 / L4-02, L1-04 / L4-12, L1-05 / L4-10, L4-06 / C0-03), so the 67 findings
+fill 63 rows. Evidence for FIXED rows: the unit test or harness case,
 with the mutation in tests/MUTATIONS.md (v2.3.1 section); H1 to H6 fail on the installed
 2.3.0 and pass on 2.3.1 (tests/Invoke-ServiceHardening.ps1).
 

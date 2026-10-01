@@ -68,6 +68,16 @@ GEMINI.md
 .aider*
 .mcp.json
 SESSION_*
+# .github/copilot-instructions.md was committed once as well (e509c4d, removed in 09a61df).
+HANDOFF*.md
+.github/copilot-instructions.md
+.gemini/
+.clinerules
+.roo/
+.continue/
+.windsurf/
+.kiro/
+.specstory/
 
 # Maintainer's working journal. Deliberately untracked: it is a dev log of
 # machine-specific state and dead ends, not documentation. Keep your own copy
