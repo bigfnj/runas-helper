@@ -563,3 +563,29 @@ The installed dev build's ProductVersion read 2.3.3+f8cdb0b..., the checkout's H
 release build will name the tagged commit. Both witness scripts and the release-run checker
 live in `D:\.ai-work\ops\scripts\runas-helper\`. The box was left on the published 2.3.2 for the
 release verify to upgrade.
+
+Published from the tag: release run 36821234383 on 00d486b, after CI run 36820998877 (which ran
+M8 against its own build: 8 / 0 / 0). `release-run-verify.ps1 -Tag v2.3.3 -PrunedTag v2.3.0`
+reported 0 problems: the publish step header names the pinned action-gh-release commit (its
+first live run), the log shows "Creating new GitHub release", "Uploading", "Uploaded",
+"Finalizing release", "Getting assets list" and "Release ready at", then "prune: deleted release
+v2.3.0 (tag kept)" and "1 of 1", with none of the draft-reuse or retry lines and no Node 20
+annotation; three Releases (v2.3.3 latest, v2.3.2, v2.3.1), eight tags on the remote, one asset
+of 2,076,672 bytes whose SHA-256 (E250F924...151C) equals the downloaded file's, signature Valid
+and timestamped. Checked against the v2.3.2 run as the negative control, the same script reports
+the old action header and no prune of v2.3.0.
+
+`Invoke-ReleaseVerify.ps1 -Tag v2.3.3 -WorkDir D:\.ai-work\_backups\runas-helper-release-verify\v2.3.3`:
+8 pass / 0 fail / 0 skip (V1 to V8: run green, one asset downloaded, MSI signature Valid with the
+expected thumbprint and a timestamp, MSI content at 2.3.3, the three binaries in the admin image
+signed and timestamped, install cycle over the published 2.3.2, smoke and regression on the
+released build). The suites' own totals were not captured separately this time; the same
+suites on the 2.3.3 dev build the same evening gave 25 / 0 / 5 and 15 / 0 / 1. The durable
+-WorkDir is what Windows Installer recorded as the product's source, so a repair no longer
+depends on a temp folder. On the installed published build: all three binaries read
+2.3.3+00d486b326c94001673a81f2a20dae675362d491 (`git tag --contains` gives v2.3.3), signatures
+Valid; `howto-check.ps1 -ExpectHorizontalScrollbar yes` PASS and `eventlog-check.ps1 -Expect yes`
+PASS (the newest event, 1002 "Launch succeeded", renders as text). The tray that the release
+verify starts (-StartTray) was still running afterwards and was closed by hand, as the box was
+found; no `rah-*` folder left in %TEMP% (the three from the direct install-cycle runs held only
+msiexec logs and were removed); service Running.
