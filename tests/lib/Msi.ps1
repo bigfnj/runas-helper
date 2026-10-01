@@ -74,6 +74,33 @@ function ConvertTo-FourPartVersion {
     [Version]::new($parts[0], $parts[1], $parts[2], $parts[3])
 }
 
+function Test-MsiHasTable {
+    param([Parameter(Mandatory)]$Database, [Parameter(Mandatory)][string]$Table)
+    @(Get-MsiRows -Database $Database -Sql 'SELECT `Name` FROM `_Tables`') -contains $Table
+}
+
+function Get-MsiEventSourceValues {
+    # Returns the Registry rows under the RunAsHelper event-source key as
+    # [pscustomobject]@{ Name; Value }, or an empty array when the MSI has no Registry
+    # table at all. Column names are backquoted because `Key` and `Value` are reserved
+    # words in MSI SQL: unquoted, OpenView throws. That throw used to be swallowed by a
+    # try/catch here, which made an absent row and a malformed query look identical, so
+    # the absence check below asks _Tables and any other failure propagates.
+    param([Parameter(Mandatory)]$Database)
+    if (-not (Test-MsiHasTable -Database $Database -Table 'Registry')) { return @() }
+    $sql = 'SELECT `Registry`, `Key`, `Name`, `Value` FROM `Registry`'
+    $keys = @(Get-MsiRows -Database $Database -Sql $sql -Column 2)
+    $names = @(Get-MsiRows -Database $Database -Sql $sql -Column 3)
+    $values = @(Get-MsiRows -Database $Database -Sql $sql -Column 4)
+    $out = @()
+    for ($i = 0; $i -lt $keys.Count; $i++) {
+        if ($keys[$i] -match 'EventLog\\Application\\RunAsHelper$') {
+            $out += [pscustomobject]@{ Name = $names[$i]; Value = $values[$i] }
+        }
+    }
+    $out
+}
+
 function Test-MsiEnvironmentPath {
     # Returns the matching Environment rows (Name, Value) that set a PATH entry to the
     # install folder, or an empty array. An absent Environment table throws inside the

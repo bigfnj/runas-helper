@@ -20,7 +20,9 @@ internal sealed class HelpForm : Form
             Dock       = DockStyle.Fill,
             Multiline  = true,
             ReadOnly   = true,
-            ScrollBars = ScrollBars.Vertical,
+            // Both: the longest COMMAND LINE syntax lines are wider than the default pane,
+            // and with no word wrap a vertical bar alone clips them (BL-49).
+            ScrollBars = ScrollBars.Both,
             WordWrap   = false,
             BackColor  = SystemColors.Window,
             Font       = new Font("Consolas", 9f),

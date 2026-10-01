@@ -191,13 +191,20 @@
 
         <!-- Registers the event source so EventLogHelper can write structured
              entries (IDs 1001-1006) to the Application log without requiring
-             CreateEventSource at runtime. ForceDeleteOnUninstall removes the
-             key (and its log entries) when the product is uninstalled. -->
+             CreateEventSource at runtime. EventMessageFile is the generic .NET
+             message DLL (the one CreateEventSource itself registers, and the
+             RunAsHelper.Service source already uses); without it Event Viewer
+             prefixes every entry with "The description for Event ID ... cannot
+             be found" and a reader of the rendered message gets no text (BL-50).
+             ForceDeleteOnUninstall removes the key when the product is
+             uninstalled; entries already written stay in the log. -->
         <Component Id="EventSourceComponent" Guid="2B3C4D5E-6F70-8192-A3B4-C5D6E7F80912">
           <RegistryKey Root="HKLM"
                        Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\RunAsHelper"
                        ForceDeleteOnUninstall="yes">
             <RegistryValue Name="TypesSupported" Type="integer" Value="7" KeyPath="yes" />
+            <RegistryValue Name="EventMessageFile" Type="expandable"
+                           Value="[WindowsFolder]Microsoft.NET\Framework64\v4.0.30319\EventLogMessages.dll" />
           </RegistryKey>
         </Component>
 

@@ -523,3 +523,43 @@ longest COMMAND LINE lines are cut off at the right edge, because the text box s
 vertically only (BL-49). Afterwards the tray was stopped, no RunAsHelper.exe was left running,
 and the HKCU Run entry and settings.json were unchanged. The script and the screenshot are kept
 at `D:\.ai-work\ops\scripts\runas-helper\howto-check.ps1` and `...\evidence\`.
+
+## Release v2.3.3 (2026-09-30, dev build verified before the tag)
+
+Scope, by owner decision: BL-49 and BL-50 only; BL-51 and BL-52 are ACCEPTED-RECORDED with
+their triggers. No service or protocol source changed: `git diff v2.3.2 -- RunAsHelper.Service
+RunAsHelper.Shared` is empty, and the product diff is one property in HelpForm.cs and one
+registry value in Package.wxs.
+
+BL-50 test: Invoke-MsiContent M8 requires an EventMessageFile row under the RunAsHelper
+event-source key. Mutation: against the shipped 2.3.2 MSI it FAILS, "EventMessageFile rows
+expected [1] got [0]" (5 pass / 1 fail / 2 skip, exit 1); against the 2.3.3 build it passes
+(8 / 0 / 0). The first version of M8 failed on 2.3.2 for the wrong reason: `Key` and `Value`
+are reserved words in MSI SQL, the unquoted query threw, and a try/catch read the throw as zero
+rows, so a malformed query and an absent row looked the same. Found by dumping the Registry
+table before trusting the result (the 2.3.2 MSI has two rows under that key, TypesSupported
+and the uninstall marker). The helper now backquotes the columns, asks `_Tables` whether the
+table exists, and lets any other failure propagate.
+
+Dev build 2.3.3 (local, unsigned, `-p:ProductVersion=2.3.3`): install cycle 24 / 0 / 0 (install,
+uninstall, reinstall); smoke 25 pass / 0 fail / 5 skip; regression 15 / 0 / 1; 105 unit tests.
+The same totals as the published 2.3.2.
+
+Live witnesses, each run on the installed 2.3.3 dev build and then on the published 2.3.2 after
+it was reinstalled from the archive:
+
+- BL-49, `howto-check.ps1 -ExpectHorizontalScrollbar yes` (elevated; opens Tools > How to Use on
+  a tray it starts and stops, and reads the Edit child's window styles): on 2.3.3 WS_HSCROLL
+  True, WS_VSCROLL True, RESULT PASS, and the capture shows the horizontal bar; on 2.3.2
+  WS_HSCROLL False, RESULT FAIL, exit 9. The dialog text (11,026 characters through WM_GETTEXT)
+  names RunAsHelper.com. The HKCU Run entry and settings.json were unchanged on both runs, and no
+  tray was left running.
+- BL-50, `eventlog-check.ps1`: on 2.3.3 the key holds EventMessageFile (REG_EXPAND_SZ, the file
+  exists) and the newest event, 1005 "RunAsHelper service started.", renders as text
+  (`-Expect yes` PASS); on 2.3.2 the key holds TypesSupported only and the same event id renders
+  as the lookup-failure preface, with Get-WinEvent's Message null (`-Expect no` PASS).
+
+The installed dev build's ProductVersion read 2.3.3+f8cdb0b..., the checkout's HEAD, so the
+release build will name the tagged commit. Both witness scripts and the release-run checker
+live in `D:\.ai-work\ops\scripts\runas-helper\`. The box was left on the published 2.3.2 for the
+release verify to upgrade.

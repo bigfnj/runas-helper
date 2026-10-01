@@ -73,4 +73,16 @@ Invoke-Case -Id 'M7' -Name 'ProductVersion property matches ExpectedVersion' -Ta
     Assert-Equal (ConvertTo-FourPartVersion $ExpectedVersion) (ConvertTo-FourPartVersion $got) 'ProductVersion'
 }
 
+Invoke-Case -Id 'M8' -Name 'event source registers a message file' -Test {
+    # Without EventMessageFile, Event Viewer prefixes every 1001-1006 entry with "The
+    # description for Event ID ... cannot be found" and a reader of the rendered message
+    # gets no text (BL-50). The 2.3.2 and earlier MSIs have only TypesSupported here, so
+    # this case is what makes that difference visible.
+    $rows = @(Get-MsiEventSourceValues -Database $db)
+    Assert-True ($rows.Count -ge 1) "event-source registry rows (got $($rows.Count))"
+    $msg = @($rows | Where-Object { $_.Name -eq 'EventMessageFile' })
+    Assert-Equal 1 $msg.Count 'EventMessageFile rows'
+    Assert-Match 'EventLogMessages\.dll$' $msg[0].Value 'EventMessageFile points at a message DLL'
+}
+
 Finish-Run -Title 'msi-content'

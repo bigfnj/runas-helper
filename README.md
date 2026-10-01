@@ -593,6 +593,26 @@ Use increasing versions for successive releases. `MajorUpgrade` detects and
 replaces a prior install; `AllowSameVersionUpgrades` lets an equal version
 reinstall in place (handy during development).
 
+## What's new in 2.3.3
+
+Two small fixes from the wrap-up audit of 2.3.2. No new features; the service and the wire
+format are unchanged. This is also the first release built from the rewritten history, so the
+binaries' version strings name commits that exist, and the first published by the release
+pipeline after its actions moved off Node 20.
+
+- **Tools > How to Use shows its longest lines.** The text pane had a vertical scrollbar
+  only and no word wrap, so the two longest COMMAND LINE syntax lines were cut off at the
+  right edge of the default window. It now has a horizontal scrollbar too (BL-49).
+- **Event Viewer renders RunAS Helper's events.** The installer registered the RunAsHelper
+  event source without a message file, so every entry 1001-1006 was shown behind "The
+  description for Event ID ... cannot be found", and anything reading the rendered message
+  got no text. The source now names the generic .NET message DLL, the one the
+  RunAsHelper.Service source already used, and the installer check verifies the row (BL-50).
+
+Recorded, not fixed, with their triggers in BACKLOG.md: a captured line made mostly of
+JSON-escaped characters can still exceed the frame cap (BL-51), and after a client closes
+mid-capture a silent child keeps its launch slot until it prints, exits or times out (BL-52).
+
 ## What's new in 2.3.2
 
 One service fix, found by reviewing the test harness. No new features; the wire format is
@@ -1128,11 +1148,10 @@ key: a local `dotnet build`, a fork, or a CI run with no access to the secret. T
 identifies the tray by install path for exactly that reason.
 
 The full item list, each with a disposition and evidence, is in
-[BACKLOG.md](BACKLOG.md). Its Open section holds the items found by the 2026-09-30 wrap-up
-audit and not yet shipped (BL-49 to BL-52: a clipped How to Use dialog, an event source
-without a message file, a capture frame cap that JSON escaping can still exceed, and a slot
-held by a silent child after its client closes). The three long-standing items this section
-has tracked are:
+[BACKLOG.md](BACKLOG.md); its Open section is empty. Of the four items the 2026-09-30 wrap-up
+audit found, 2.3.3 shipped two (BL-49, BL-50) and the other two are recorded with the
+triggers that reopen them (BL-51, BL-52). The three long-standing items this section has
+tracked are:
 
 - **A publicly trusted certificate.** Releases are signed by a self-signed certificate, so
   Windows reports an unknown publisher and SmartScreen warns on first download. The intended
