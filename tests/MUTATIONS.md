@@ -463,7 +463,63 @@ updated_at, v2.3.2 is still latest, and release.yml started no run (39 before an
 then re-enabled.
 
 What the rewrite cannot reach: GitHub keeps serving the old commits by hash, and its
-documentation says Support does not remove data that is not sensitive; 18 old Release runs
-(v1.1.0 to v2.1.5) return the address through the Actions API; and the shipped 2.3.x binaries'
-version strings carry pre-rewrite commit IDs. The commit hashes cited in BACKLOG.md and in this
-file were remapped to the rewritten history (22 replacements).
+documentation says Support does not remove data that is not sensitive. The shipped 2.3.x
+binaries' version strings carry pre-rewrite commit IDs. The commit hashes cited in BACKLOG.md and
+in this file were remapped to the rewritten history (22 replacements). 18 old Release runs
+(v1.1.0 to v2.1.5) returned the address through the Actions API; the owner approved deleting
+them, and they were deleted the same day (each id now answers 404, and no remaining run's head
+commit carries the work domain).
+
+Measured after the push, from a fresh mirror and anonymous requests: the old commits are not
+merely reachable by someone who already holds a hash. The repo's public activity feed names 110
+pre-rewrite SHAs, including the before-SHAs of all three force pushes, and 31 of the 39
+remaining Actions runs sit on pre-rewrite heads. Fetching the SHAs those records name brings
+back 220 old commits, and 105 of them carry the work domain as author and committer: 63 from
+this rewrite and 42 left by the 2026-09-03 one (a floor, since older objects that no record
+names cannot be counted from outside). PLAN.md, AGENTS.md and CLAUDE.md, removed on 2026-09-03,
+are fetchable by hash too; no version of them contains the employer name or the work domain.
+
+The re-sync advice first given for other clones (fetch --force --tags, reset --hard
+origin/main, re-point the docs branch) is not enough. In a sandbox clone that held the 13
+retired release tags and a deleted branch, all three commands succeeded, and a dry-run push of
+the tags would still have published 98 old commits, and of the branches 125, without force.
+The corrected advice: re-clone, or run git fetch --prune --prune-tags --force origin, git reset
+--hard origin/main, delete every local branch origin lacks, and re-point the docs branch. After
+that, both dry-run pushes report everything up to date.
+
+## Actions off Node 20 (BL-47, 2026-09-30)
+
+One commit per action, each read against its changelog first and each with its own green CI
+run: actions/checkout v4 to v7 (e0ef11a, CI 36762479003), actions/setup-dotnet v4 to v6
+(9fc3daf, CI 36762739300), actions/upload-artifact v4 to v7 (7115bed, CI 36763042042; v5 still
+declares Node 20, so it was skipped), and softprops/action-gh-release v2 to v3.0.3, pinned to
+commit efb35369e0ad2afab669f228072c1b0d510eae64 (6dd09d8, CI 36764701678). From 7115bed on,
+CI's Node 20 annotation names no action.
+
+CI reaches neither release.yml step that changed: the upload runs only on a manual dispatch and
+the publish only on a tag push. Dispatch dry run 36764740582, at 6dd09d8, was checked by a
+script that requires the four new pins' download lines in "Set up job" (which lists every
+action in the job, skipped steps included), the upload's "Artifact RunAsHelper-Setup has been
+successfully uploaded" line and the artifact itself, the publish and prune steps skipped and
+the upload step successful, as many Releases after the run as before, and no Node 20
+annotation. It passed with 0 problems, and the signature step printed Valid for the MSI and
+the three binaries. Mutation: the same checks run against the v2.3.2 tag run 36747013597,
+which used the old pins, report 9 misses (the five log lines, the artifact, and the three step
+outcomes). The checker is kept at `D:\.ai-work\ops\scripts\runas-helper\release-dryrun.ps1`
+(`-RunId` validates an existing run instead of dispatching one).
+
+The publish step has not run on v3 yet. The next tag push is its first live run: its log must
+show "Release ready at", and its Node 20 annotation must name no action.
+
+## How to Use on the installed 2.3.2 (2026-09-30)
+
+The plan's real-app check asked for the How to Use window to show the new text, and the
+integration record covered only the tray title. Run elevated against the installed 2.3.2 with
+no tray running: the tray was started, its window title read "RunAS Helper - v2.3.2", Tools >
+How to Use was opened through UI Automation scoped to the tray's own window, and the dialog was
+captured with PrintWindow. It shows the 2.3.x text in the dark theme: RunAsHelper.com named as
+the command-line launcher, and the /capture, /timeout, /ps:5|7 and /trusted syntax. The two
+longest COMMAND LINE lines are cut off at the right edge, because the text box scrolls
+vertically only (BL-49). Afterwards the tray was stopped, no RunAsHelper.exe was left running,
+and the HKCU Run entry and settings.json were unchanged. The script and the screenshot are kept
+at `D:\.ai-work\ops\scripts\runas-helper\howto-check.ps1` and `...\evidence\`.

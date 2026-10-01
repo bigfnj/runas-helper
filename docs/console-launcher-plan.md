@@ -1,6 +1,6 @@
 # Plan: console launcher so CLI callers don't need `| Out-String`
 
-Status: **shipped in 2.3.0 (pending release)**. The notes below are the original
+Status: **shipped in 2.3.0, released 2026-09-30** (2.3.1 and 2.3.2 followed the same day). The notes below are the original
 2026-09-29 write-up; the "Decisions taken" and "Phase 0 probe result" sections at the
 end record what was actually built and what superseded these notes.
 

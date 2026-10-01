@@ -116,10 +116,11 @@ build in CI, which is the alarm we want. Keep `PowerShellHost.cs`, `CliLaunchRes
   pwsh); no harness case simulates it.
 - UAC-prompting machines and AppCompat disabled by policy: this box auto-consents.
 - Windows Terminal: not installed; conhost is the only terminal backstop.
-- Tray saved-entry `.ps1` host rule, the `/validate` dialog, dark mode: GUI, covered by
-  the manual screenshot pass in the audit; the shared host logic is covered by the
-  PowerShellHostTests unit tests and by smoke B8 (the rewrite is shared with the CLI
-  path, PipeClient.SendAsync).
+- Tray saved-entry `.ps1` host rule, the `/validate` dialog, dark mode: GUI. The GUI
+  records are a screenshot of the running tray taken at integration (dark theme, version
+  title; BACKLOG NT-07) and the How to Use dialog on the installed 2.3.2
+  (tests/MUTATIONS.md); the `/validate` dialog and display scaling were not exercised. The shared host logic is covered by the PowerShellHostTests unit tests and
+  by smoke B8 (the rewrite is shared with the CLI path, PipeClient.SendAsync).
   The GUI placeholders B9 and R16 always record SKIP (their body is `Skip-Case`), never a
   vacuous PASS.
 

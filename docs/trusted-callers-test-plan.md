@@ -172,7 +172,7 @@ account, a domain, or token crafting. Case IDs are from `tests/Invoke-Smoke.ps1`
 | Remote NETWORK deny ACE | B16 (locally) | Single machine; B16 checks on the live pipe that the first ACE denies NETWORK full control, not from a second host |
 
 Rows not automatable on this box, recorded rather than run (see `tests/README.md` and
-BACKLOG NT-01..NT-06):
+BACKLOG NT-01..NT-09):
 
 - `AllowedUser` / `DeniedUser` as distinct accounts: no second account, and creating one
   is a machine change. The SID-removed window (a `/trusted:remove` then re-add on this
@@ -182,5 +182,7 @@ BACKLOG NT-01..NT-06):
 - Remote pipe connection from another machine.
 - `Interactive caller, gate open` as a distinct row: there is no headless gate verb, so
   the broad-gate path is GUI-only to toggle (BL-26).
-- Policy UI, the confirmation warning, and light/dark theme at each scaling: GUI, covered
-  by the manual screenshot pass in the audit.
+- Policy UI, the confirmation warning, and light/dark theme at each scaling: GUI, not
+  exercised. The GUI records are a screenshot of the running tray taken at integration
+  (dark theme, version title; BACKLOG NT-07) and the How to Use dialog on the installed
+  2.3.2 (tests/MUTATIONS.md); neither covers these.

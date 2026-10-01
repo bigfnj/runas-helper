@@ -286,7 +286,7 @@ RunAsHelper /kill:<id>            :: terminate one of them
 RunAsHelper /joblog:<id>          :: show what one of them has printed
 RunAsHelper /trusted              :: list trusted command-line users
 RunAsHelper /trusted:add <SID|DOMAIN\user>
-RunAsHelper /trusted:remove <SID|name>
+RunAsHelper /trusted:remove <SID|DOMAIN\user>
 RunAsHelper -h | --help | /?      :: show full help
 ```
 
@@ -312,7 +312,7 @@ the GUI binary and is silent from a shell (see below).
 | `/joblog:<id>`| Show the output an in-flight capture job has produced so far                   |
 | `/trusted`    | List trusted command-line users (needs an elevated shell)                      |
 | `/trusted:add`| Add a user by SID or `DOMAIN\user` (needs an elevated shell)                    |
-| `/trusted:remove`| Remove a user by SID or name (needs an elevated shell)                       |
+| `/trusted:remove`| Remove a user by SID or `DOMAIN\user` (needs an elevated shell)              |
 
 Non-executable targets are launched via their host automatically (`.msc`→`mmc`,
 `.cpl`→`control`, `.bat`/`.cmd`→`cmd /c`, `.ps1`→PowerShell (see the host rule below), `.reg`→`regedit /s`, and any
@@ -586,7 +586,7 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
   git tag v1.2.3
   git push origin v1.2.3
   ```
-  The workflow builds `RunAsHelper-Setup-1.2.3.msi` (with `ProductVersion=1.2.3`) and attaches it to a new GitHub Release with auto-generated notes.
+  The workflow builds `RunAsHelper-Setup-1.2.3.msi` (with `ProductVersion=1.2.3`) and attaches it to a new GitHub Release with auto-generated notes. The same run then trims the Releases page to the three newest releases. Tags are never deleted, so an older build can still be rebuilt from its tag.
 - **Dry run:** *Actions → Release → Run workflow*, supply a version. This builds and uploads a downloadable artifact but does **not** create a Release.
 
 Use increasing versions for successive releases. `MajorUpgrade` detects and
@@ -638,12 +638,16 @@ unchanged and a 2.2.0 client still works against this service.
   use a bare carriage return arrive as separate lines and no line carries a trailing CR.
   A single line longer than 1 MiB is delivered in 1 MiB pieces instead of dropping the
   client (2.3.0 exited 1 with nothing printed once a line passed the 4 MiB frame cap).
+  The 1 MiB cap counts raw bytes, so a piece made mostly of characters that JSON escapes
+  (`<`, `+`, accented text) can still pass the frame cap and end the capture (BL-51).
 - **`/timeout` is a ceiling even when a process the child started keeps the output open.**
   The service drains for 3 s after the child exits, then detaches and reports the child's
   own exit code with a `[timeout]` note. 2.3.0 waited for the last writer to close.
 - **Closing the client mid-capture no longer strands the launch.** When the client's pipe
   closes (Ctrl+C, a closed terminal), the service detaches its output pipe and releases
-  the launch slot at once; the elevated child keeps running, as after a `/timeout`. 2.3.0
+  the launch slot as soon as its next send to the client fails, so a child that prints
+  nothing keeps the slot until its next line, its exit or its `/timeout` (BL-52). The
+  elevated child keeps running, as after a `/timeout`. 2.3.0
   kept the slot and, when the timeout then fired with no client, leaked a process handle
   per run. A connection that sends no request within 30 s is dropped.
 - **Event 1003 for a client identity mismatch says what happened**: the pipe and process
@@ -651,7 +655,9 @@ unchanged and a 2.2.0 client still works against this service.
   on the installed-tray identity or the open gate only. It used to say "Launch denied".
 - **One more ASCII log line.** The last service log frame with an em dash (`/kill` on a
   missing job) and the client's connection-timeout line are ASCII, and a unit test now
-  keeps every string that reaches the pipe or the console ASCII.
+  keeps ASCII the strings that four files pass to a pipe frame or a console write: the
+  service's PipeServer.cs and ElevationLauncher.cs, and the client's PipeClient.cs and
+  Program.cs.
 - **CI checks the version it builds.** `ci.yml` passes the tag version to the MSI-content
   check (the two version cases used to skip on every run) and `release.yml` runs that
   check on the MSI it publishes.
@@ -1129,7 +1135,7 @@ section has tracked are:
   Windows reports an unknown publisher and SmartScreen warns on first download. The intended
   fix is a real CA-issued certificate, after which the CI signing step and the
   `SIGNING_PFX_BASE64` secret both get replaced, and publisher pinning becomes possible for
-  the first time. This is the only open item with work attached.
+  the first time. It is kept as a future feature (BL-01 in BACKLOG.md), not an open item.
 - A single unexplained `0xe0434352` crash from before v1.6.1, which has not recurred. Every
   build since ships a crash logger that writes the full stack to
   `%AppData%\RunAsHelper\crash.log` (and Event ID 1099), so it will identify itself if it
